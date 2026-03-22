@@ -51,6 +51,9 @@ The gateway resides on both the external host-exposed network and the internal p
 | `context-broker-postgres` | Relational and vector storage (messages, windows, summaries). | `pgvector/pgvector:pg16` |
 | `context-broker-neo4j` | Entity and relationship knowledge graph (via Mem0). | `neo4j:5` |
 | `context-broker-redis` | Async job queues, locks, and ephemeral state. | `redis:7-alpine` |
+| `context-broker-ollama` (optional) | Local inference — LLM and embeddings via OpenAI-compatible API. No API keys needed. | `ollama/ollama` |
+
+The Ollama container is optional. When present, it provides fully local inference on the internal network — the LangGraph container calls it the same way it calls any cloud provider. When not present, inference routes to configured cloud providers. The same `config.yml` controls the routing.
 
 **Volume Management:**
 - Host `./data` is mounted into the containers to persist databases (`/data/postgres`, `/data/neo4j`, `/data/redis`) and the `imperator_state.json` file.
