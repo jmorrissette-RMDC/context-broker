@@ -111,13 +111,15 @@ async def _migration_008(conn) -> None:
     this is a no-op (the index will be created on next startup after
     Mem0 has initialized).
     """
+    # Use a savepoint so UndefinedTableError doesn't abort the outer transaction
     try:
-        await conn.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_mem0_memories_dedup
-            ON mem0_memories(memory, user_id)
-            """
-        )
+        async with conn.transaction():
+            await conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_mem0_memories_dedup
+                ON mem0_memories(memory, user_id)
+                """
+            )
         _log.info("Mem0 dedup index created or already exists")
     except asyncpg.UndefinedTableError:
         _log.info("Mem0 table not yet created — dedup index deferred to next startup")
