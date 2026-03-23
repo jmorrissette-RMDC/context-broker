@@ -283,10 +283,10 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
     config = state["config"]
     build_type_config = state.get("build_type_config") or {}
 
-    # F-06: Use build-type-specific LLM config if available
+    # F-06: Use build-type-specific LLM config if available, else summarization role
     effective_config = _resolve_llm_config(config, build_type_config)
-    llm_config = effective_config.get("llm", {})
-    llm = get_chat_model(effective_config)
+    llm_config = effective_config.get("llm", config.get("inference", {}).get("summarization", {}))
+    llm = get_chat_model(effective_config, role="summarization")
 
     pool = get_pg_pool()
 
@@ -480,7 +480,7 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
         _log.error("Failed to load archival_consolidation prompt: %s", exc)
         return {"tier1_summary": None, "error": f"Prompt loading failed: {exc}"}
 
-    llm = get_chat_model(effective_config)
+    llm = get_chat_model(effective_config, role="summarization")
 
     messages = [
         SystemMessage(content=archival_prompt),

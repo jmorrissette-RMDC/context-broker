@@ -1,7 +1,9 @@
-# Context Broker — Configuration Reference
+# Context Broker — AE Configuration (Infrastructure)
 # Copy this file to config/config.yml and customize for your deployment.
-# All inference provider settings are hot-reloadable (no restart needed).
-# Infrastructure settings (database) require a container restart.
+# Infrastructure settings require a container restart to change.
+#
+# Cognitive settings (Imperator, inference providers, build types, tuning)
+# are in imperator.yml (the TE configuration).
 
 # ============================================================
 # Logging
@@ -10,117 +12,6 @@
 # Log level: DEBUG, INFO, WARN, ERROR
 # Default: INFO
 log_level: INFO
-
-# ============================================================
-# Inference Providers
-# ============================================================
-# Each provider slot accepts any OpenAI-compatible endpoint.
-# api_key_env names the environment variable holding the API key.
-# Set api_key_env to "" for providers that don't require a key (e.g., local Ollama).
-
-llm:
-  # Local Ollama (default — no API key needed):
-  base_url: http://context-broker-ollama:11434/v1
-  model: qwen2.5:7b
-  # Cloud provider example (uncomment, remove base_url above):
-  # base_url: https://api.openai.com/v1
-  # model: gpt-4o-mini
-  # API keys: set OPENAI_API_KEY (or provider equivalent) as a container
-  # environment variable. LangChain reads it automatically. No config needed.
-
-embeddings:
-  # Local Infinity (default — no API key needed):
-  # Note: no /v1 suffix — Infinity serves at /embeddings, not /v1/embeddings.
-  base_url: http://context-broker-infinity:7997
-  model: nomic-ai/nomic-embed-text-v1.5
-  # Send raw text instead of token arrays. Required for Infinity, Ollama,
-  # and most non-OpenAI providers. OpenAI accepts both formats. Set to true
-  # only if using OpenAI directly and you want token-level context length checks.
-  tiktoken_enabled: false
-  check_embedding_ctx_length: false
-  # Cloud provider example:
-  # base_url: https://api.openai.com/v1
-  # model: text-embedding-3-small
-  # API keys: set OPENAI_API_KEY as a container environment variable.
-  # Number of prior messages to include as context prefix when embedding
-  context_window_size: 3
-
-reranker:
-  # Options: "api", "none"
-  # "api" hits a /v1/rerank endpoint — works with Infinity (local),
-  #   Together, Cohere, Jina, Voyage, or any compatible provider
-  # "none" disables reranking (raw RRF scores used)
-  provider: api
-  base_url: http://context-broker-infinity:7997
-  model: mixedbread-ai/mxbai-rerank-xsmall-v1
-  top_n: 10
-
-# ============================================================
-# Build Types
-# ============================================================
-# Build types define context assembly strategies.
-# Percentages must sum to <= 1.0 for each build type.
-# max_context_tokens: "auto" queries the LLM provider, or set an explicit integer.
-# fallback_tokens: used when auto-resolution fails.
-
-build_types:
-
-  # Passthrough: no summarization, no LLM calls.
-  # Loads recent messages as-is. Useful for testing or simple integrations.
-  passthrough:
-    # No LLM needed — assembly is a no-op
-    max_context_tokens: auto
-    fallback_tokens: 8192
-
-  # Standard tiered: episodic memory only, three-tier progressive compression.
-  # Lower inference cost. Suitable as the default for most use cases.
-  # F-05: Tier percentages are starting points; dynamic scaling adjusts them
-  # based on conversation length (short conversations boost tier3, long
-  # conversations shift budget toward tier1/tier2).
-  # F-06: Per-build-type LLM config overrides the global default.
-  standard-tiered:
-    tier1_pct: 0.08          # archival summary (oldest, most compressed)
-    tier2_pct: 0.20          # chunk summaries (middle layer)
-    tier3_pct: 0.72          # recent verbatim messages (newest, full fidelity)
-    max_context_tokens: auto
-    fallback_tokens: 8192
-    # Per-build-type LLM override (optional — falls back to global llm):
-    # llm:
-    #   base_url: http://context-broker-ollama:11434/v1
-    #   model: qwen2.5:7b
-    #   api_key_env: ""
-
-  # Knowledge enriched: full retrieval pipeline.
-  # Episodic tiers + semantic vector search + knowledge graph traversal.
-  # F-06: Per-build-type LLM config overrides the global default.
-  knowledge-enriched:
-    tier1_pct: 0.05          # archival summary
-    tier2_pct: 0.15          # chunk summaries
-    tier3_pct: 0.50          # recent verbatim messages
-    knowledge_graph_pct: 0.15   # facts from Neo4j knowledge graph
-    semantic_retrieval_pct: 0.15 # semantically similar messages via pgvector
-    max_context_tokens: auto
-    fallback_tokens: 16000
-    # Per-build-type LLM override (optional — falls back to global llm):
-    # llm:
-    #   base_url: https://api.openai.com/v1
-    #   model: gpt-4o-mini
-    #   api_key_env: LLM_API_KEY
-
-# ============================================================
-# Imperator Configuration
-# ============================================================
-
-imperator:
-  # Build type for the Imperator's own context window
-  build_type: standard-tiered
-  max_context_tokens: auto
-  # Participant ID used when creating the Imperator's context window
-  participant_id: imperator
-  # admin_tools: false = read-only access to system state
-  # admin_tools: true = can read/write config and run DB queries
-  # NOTE: Requires container restart to take effect (Imperator graph compiled once).
-  admin_tools: false
 
 # ============================================================
 # Package Source
@@ -136,57 +27,23 @@ packages:
   devpi_url: null   # e.g., http://devpi-host:3141/root/internal/+simple/
 
 # ============================================================
-# Tuning Parameters
+# Workers (infrastructure — queue processing)
 # ============================================================
-# These values control internal behavior. All are hot-reloadable.
 
-tuning:
-  # Verbose pipeline logging (REQ-001 §4.8)
-  # When true, logs node entry/exit with timing in all pipeline flows
-  verbose_logging: false
-
-  # Context assembly
-  assembly_lock_ttl_seconds: 300
-  chunk_size: 20
-  consolidation_threshold: 3     # tier 2 count before consolidating to tier 1
-  consolidation_keep_recent: 2   # tier 2 summaries to keep after consolidation
-  summarization_temperature: 0.1
-  trigger_threshold_percent: 0.1 # F-08: min % of token budget before re-assembly
-
-  # Memory extraction
-  extraction_lock_ttl_seconds: 180
-  extraction_max_chars: 90000
-
-  # M-22: Memory confidence scoring — half-life decay by category (days).
-  # Memories older than several half-lives are filtered out at retrieval time.
-  memory_half_lives:
-    ephemeral: 3       # Short-lived facts (moods, preferences, temp state)
-    contextual: 14     # Session/project context
-    factual: 60        # Learned facts about entities
-    historical: 365    # Historical events, permanent-ish
-    default: 30        # Fallback when category is unknown
-
-  # Retrieval
-  assembly_wait_timeout_seconds: 50
-  assembly_poll_interval_seconds: 2
-  tokens_per_message_estimate: 150
-  content_truncation_chars: 500
-  query_truncation_chars: 200
-
-  # Search
-  rrf_constant: 60
-  search_candidate_limit: 100
-  recency_decay_days: 90         # F-10: messages older than this get penalized
-  recency_max_penalty: 0.2       # F-10: max score penalty (20%)
-
-  # Imperator
-  imperator_max_iterations: 5
-  imperator_temperature: 0.3
-
-  # Workers
-  worker_poll_interval_seconds: 2
+workers:
+  poll_interval_seconds: 2
   max_retries: 3
   dead_letter_sweep_interval_seconds: 60
+
+# ============================================================
+# Locks (infrastructure — distributed coordination)
+# ============================================================
+
+locks:
+  assembly_lock_ttl_seconds: 300
+  extraction_lock_ttl_seconds: 180
+  assembly_wait_timeout_seconds: 50
+  assembly_poll_interval_seconds: 2
 
 # ============================================================
 # Database (infrastructure — requires restart to change)

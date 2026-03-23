@@ -346,12 +346,13 @@ async def agent_node(state: ImperatorState) -> dict:
     if imperator_config.get("admin_tools", False):
         active_tools.extend(_admin_tools)
 
-    llm = get_chat_model(config)
+    llm = get_chat_model(config, role="imperator")
     llm_with_tools = llm.bind_tools(active_tools)
 
     messages = list(state["messages"])
 
     # First call: prepend system prompt with DB history context
+    # PG-13: Identity and Purpose from TE config (REQ-001 §11.2)
     has_system = any(isinstance(m, SystemMessage) for m in messages)
     if not has_system:
         try:
@@ -363,6 +364,18 @@ async def agent_node(state: ImperatorState) -> dict:
                 "response_text": "I encountered a configuration error.",
                 "error": f"Prompt loading failed: {exc}",
             }
+
+        # Inject Identity and Purpose from TE config if available
+        imperator_cfg = config.get("imperator", {})
+        identity = imperator_cfg.get("identity", "")
+        purpose = imperator_cfg.get("purpose", "")
+        if identity or purpose:
+            id_block = ""
+            if identity:
+                id_block += f"\n\nIdentity: {identity.strip()}"
+            if purpose:
+                id_block += f"\nPurpose: {purpose.strip()}"
+            system_content = id_block.strip() + "\n\n" + system_content
 
         context_window_id = state.get("context_window_id")
         if context_window_id:

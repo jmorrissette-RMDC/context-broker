@@ -1,12 +1,12 @@
 """
 Configuration management for the Context Broker.
 
-Reads /config/config.yml on each call to load_config() so that
-hot-reloadable settings (inference providers, build types) take
-effect immediately without restart.
+Two config files per REQ-002 §7 (TE Configuration Separation):
+- AE config (/config/config.yml): infrastructure settings (database, workers, locks)
+- TE config (/config/imperator.yml): cognitive settings (inference, build types, tuning)
 
-Infrastructure settings (database connections) are read once at
-startup and cached.
+AE config is read once at startup (cached, restart required for changes).
+TE config is read on each operation (hot-reloadable, no restart needed).
 """
 
 import asyncio
@@ -22,6 +22,7 @@ import yaml
 _log = logging.getLogger("context_broker.config")
 
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/config/config.yml")
+TE_CONFIG_PATH = os.environ.get("TE_CONFIG_PATH", "/config/imperator.yml")
 
 # Cached config with mtime check to avoid repeated file reads (M-11).
 # os.stat() is near-instant and avoids synchronous file I/O on every call.
@@ -86,18 +87,11 @@ def _apply_config(
 
 
 def load_config() -> dict[str, Any]:
-    """Load and return the full configuration from /config/config.yml.
+    """Load and return the AE configuration from /config/config.yml.
 
-    Uses mtime-based caching: only re-reads the file when it changes.
-    On config change, clears the LLM and embeddings caches (M-03)
-    so hot-reloaded provider settings take effect immediately.
-
-    G5-06: This function performs blocking file I/O (os.stat + open/read).
-    The mtime cache means the file is only re-read when it actually changes
-    on disk, which is rare in production. The os.stat() fast-path check is
-    near-instant for local files. Async callers (route handlers, flow nodes)
-    should use async_load_config() instead, which offloads the file read to
-    run_in_executor when a re-read is triggered.
+    Uses mtime-based caching with content hash invalidation.
+    Infrastructure settings only — for cognitive/TE settings use
+    load_te_config() or load_merged_config().
 
     Raises RuntimeError if the file cannot be read or parsed.
     """
@@ -111,10 +105,6 @@ def load_config() -> dict[str, Any]:
             "Mount /config/config.yml into the container."
         ) from exc
 
-    # CB-R3-09: Float equality on mtime is a fast-path optimisation only.
-    # If mtime changes we fall through and re-read, but actual cache
-    # invalidation is gated on the SHA-256 content hash below, so
-    # platform-level mtime precision differences are harmless.
     if _config_cache is not None and current_mtime == _config_mtime:
         return _config_cache
 
@@ -122,41 +112,154 @@ def load_config() -> dict[str, Any]:
     return _apply_config(config, raw, current_mtime)
 
 
-async def async_load_config() -> dict[str, Any]:
-    """Async wrapper for load_config().
+def load_merged_config() -> dict[str, Any]:
+    """Load and return merged AE + TE configuration.
 
-    Uses the same mtime-based cache as load_config(). The os.stat()
-    fast-path check is synchronous (near-instant for local files).
-    Only when a re-read is actually needed does it offload the file
-    read + YAML parse to run_in_executor to avoid blocking the event loop.
+    Reads both config.yml (AE) and imperator.yml (TE), merging into a
+    single dict. TE keys take precedence. This provides backward
+    compatibility — callers get a single config dict containing both
+    infrastructure and cognitive settings.
 
-    Route handlers and flow nodes should prefer this over load_config().
+    If imperator.yml does not exist, returns AE config only (graceful
+    fallback for legacy single-file deployments).
     """
-    global _config_cache, _config_mtime, _config_content_hash
-
+    ae_config = load_config()
     try:
-        current_mtime = os.stat(CONFIG_PATH).st_mtime
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            f"Configuration file not found at {CONFIG_PATH}. "
-            "Mount /config/config.yml into the container."
-        ) from exc
+        te_config = load_te_config()
+    except RuntimeError:
+        # TE config not found — legacy deployment with single config.yml
+        _log.info("No TE config found at %s — using AE config only", TE_CONFIG_PATH)
+        return ae_config
+    # Merge: AE is base, TE overlays
+    merged = {**ae_config, **te_config}
+    return merged
 
-    if _config_cache is not None and current_mtime == _config_mtime:
-        return _config_cache
+
+async def async_load_config() -> dict[str, Any]:
+    """Async wrapper that returns merged AE + TE configuration.
+
+    This is the primary config function for route handlers and flow nodes.
+    Returns the merged config so callers get both infrastructure and
+    cognitive settings in one dict.
+    """
+    ae_config = load_config()
+
+    # Fast-path: check TE config mtime without async overhead
+    try:
+        te_mtime = os.stat(TE_CONFIG_PATH).st_mtime
+    except FileNotFoundError:
+        return ae_config
+
+    if _te_config_cache is not None and te_mtime == _te_config_mtime:
+        return {**ae_config, **_te_config_cache}
 
     loop = asyncio.get_running_loop()
-    config, raw = await loop.run_in_executor(None, _read_and_parse_config)
-    return _apply_config(config, raw, current_mtime)
+    te_config, raw = await loop.run_in_executor(None, _read_and_parse_te_config)
+    te = _apply_te_config(te_config, raw, te_mtime)
+    return {**ae_config, **te}
 
 
 @lru_cache(maxsize=1)
 def load_startup_config() -> dict[str, Any]:
-    """Load configuration once at startup for infrastructure settings.
+    """Load AE configuration once at startup for infrastructure settings.
 
     Cached — changes require container restart.
     """
     return load_config()
+
+
+# ============================================================
+# TE Configuration (imperator.yml) — hot-reloadable
+# ============================================================
+
+_te_config_cache: dict[str, Any] | None = None
+_te_config_mtime: float = 0.0
+_te_config_content_hash: str = ""
+
+
+def _read_and_parse_te_config() -> tuple[dict[str, Any], str]:
+    """Read imperator.yml from disk and return (parsed_dict, raw_text)."""
+    try:
+        with open(TE_CONFIG_PATH, encoding="utf-8") as f:
+            raw = f.read()
+        config = yaml.safe_load(raw)
+        if not isinstance(config, dict):
+            raise ValueError("imperator.yml must be a YAML mapping at the top level")
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"TE configuration file not found at {TE_CONFIG_PATH}. "
+            "Mount /config/imperator.yml into the container."
+        ) from exc
+    except yaml.YAMLError as exc:
+        raise RuntimeError(f"Failed to parse {TE_CONFIG_PATH}: {exc}") from exc
+    return config, raw
+
+
+def _apply_te_config(
+    config: dict[str, Any], raw: str, current_mtime: float
+) -> dict[str, Any]:
+    """Update TE config cache after a successful read."""
+    global _te_config_cache, _te_config_mtime, _te_config_content_hash
+
+    new_hash = hashlib.sha256(raw.encode()).hexdigest()
+    with _cache_lock:
+        if new_hash != _te_config_content_hash and _te_config_content_hash != "":
+            _log.info(
+                "TE config file content changed — clearing LLM and embeddings caches"
+            )
+            _llm_cache.clear()
+            _embeddings_cache.clear()
+
+        _te_config_cache = config
+        _te_config_mtime = current_mtime
+        _te_config_content_hash = new_hash
+    return config
+
+
+def load_te_config() -> dict[str, Any]:
+    """Load and return the TE configuration from /config/imperator.yml.
+
+    Uses mtime-based caching with content hash invalidation.
+    Hot-reloadable — changes take effect without restart.
+    """
+    global _te_config_cache, _te_config_mtime
+
+    try:
+        current_mtime = os.stat(TE_CONFIG_PATH).st_mtime
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"TE configuration file not found at {TE_CONFIG_PATH}. "
+            "Mount /config/imperator.yml into the container."
+        ) from exc
+
+    if _te_config_cache is not None and current_mtime == _te_config_mtime:
+        return _te_config_cache
+
+    config, raw = _read_and_parse_te_config()
+    return _apply_te_config(config, raw, current_mtime)
+
+
+async def async_load_te_config() -> dict[str, Any]:
+    """Async wrapper for load_te_config().
+
+    Route handlers and flow nodes should prefer this over load_te_config().
+    """
+    global _te_config_cache, _te_config_mtime
+
+    try:
+        current_mtime = os.stat(TE_CONFIG_PATH).st_mtime
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"TE configuration file not found at {TE_CONFIG_PATH}. "
+            "Mount /config/imperator.yml into the container."
+        ) from exc
+
+    if _te_config_cache is not None and current_mtime == _te_config_mtime:
+        return _te_config_cache
+
+    loop = asyncio.get_running_loop()
+    config, raw = await loop.run_in_executor(None, _read_and_parse_te_config)
+    return _apply_te_config(config, raw, current_mtime)
 
 
 def get_api_key(provider_config: dict[str, Any]) -> str:
@@ -180,6 +283,8 @@ def get_build_type_config(
 ) -> dict[str, Any]:
     """Return the configuration for a named build type.
 
+    Reads from TE config (imperator.yml). The config parameter may be
+    either the full TE config or a legacy combined config — checks both.
     Raises ValueError if the build type is not defined.
     """
     build_types = config.get("build_types", {})
@@ -209,8 +314,23 @@ def get_build_type_config(
 
 
 def get_tuning(config: dict, key: str, default: Any) -> Any:
-    """Return a tuning parameter from config, with fallback to default."""
-    return config.get("tuning", {}).get(key, default)
+    """Return a tuning parameter from config, with fallback to default.
+
+    Checks TE config tuning first, then AE config (for worker/lock settings
+    that moved to AE). Accepts either the TE config or a legacy combined config.
+    """
+    # Check tuning section in the provided config
+    val = config.get("tuning", {}).get(key, None)
+    if val is not None:
+        return val
+    # Check workers and locks sections (AE config keys)
+    val = config.get("workers", {}).get(key, None)
+    if val is not None:
+        return val
+    val = config.get("locks", {}).get(key, None)
+    if val is not None:
+        return val
+    return default
 
 
 def get_log_level(config: dict[str, Any]) -> str:
@@ -259,37 +379,75 @@ _embeddings_cache: dict[str, Any] = {}
 _MAX_CACHE_ENTRIES = 10
 
 
-def get_chat_model(config: dict) -> Any:
-    """Return a cached ChatOpenAI instance keyed by (base_url, model).
+_ChatAnthropic = None
 
-    Avoids re-creating the client on every request.
-    R5-M12: Uses _cache_lock around the full check-and-set to prevent
-    two concurrent calls from both missing the cache and creating
-    duplicate clients.
+
+def _get_anthropic_class():
+    """Lazy import for ChatAnthropic — only loaded if needed."""
+    global _ChatAnthropic
+    if _ChatAnthropic is None:
+        from langchain_anthropic import ChatAnthropic
+        _ChatAnthropic = ChatAnthropic
+    return _ChatAnthropic
+
+
+def get_chat_model(config: dict, role: str = "imperator") -> Any:
+    """Return a cached LLM instance for the given cognitive role.
+
+    Reads from the TE config's inference section. Each role (imperator,
+    summarization, extraction) has its own provider/model configuration.
+
+    Supports two provider types:
+    - "openai" (default): Creates ChatOpenAI for OpenAI-compatible APIs
+    - "anthropic": Creates ChatAnthropic for Anthropic's native API
+
+    Falls back to a top-level "llm" key for backward compatibility with
+    legacy single-config deployments.
+
+    R5-M12: Uses _cache_lock around the full check-and-set.
     """
     from langchain_openai import ChatOpenAI
 
-    llm_config = config.get("llm", {})
+    # Resolve the LLM config for this role:
+    # 1. TE config: inference.<role> (new pattern)
+    # 2. Legacy: top-level "llm" key (backward compat)
+    inference = config.get("inference", {})
+    llm_config = inference.get(role, {})
+    if not llm_config:
+        llm_config = config.get("llm", {})
+
+    provider = llm_config.get("provider", "openai")
     api_key = get_api_key(llm_config)
-    cache_key = f"{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256((api_key or 'default').encode()).hexdigest()[:16]}"
+    cache_key = f"{role}:{provider}:{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256((api_key or 'default').encode()).hexdigest()[:16]}"
+
     with _cache_lock:
         if cache_key not in _llm_cache:
             if len(_llm_cache) >= _MAX_CACHE_ENTRIES:
                 oldest_key = next(iter(_llm_cache))
                 del _llm_cache[oldest_key]
-            kwargs = {
-                "base_url": llm_config.get("base_url"),
-                "model": llm_config.get("model", "gpt-4o-mini"),
-                "timeout": 1800,
-            }
-            # Only pass api_key if explicitly configured — otherwise let
-            # LangChain read its default env var (OPENAI_API_KEY)
-            if api_key:
-                kwargs["api_key"] = api_key
-            elif llm_config.get("base_url", "").startswith("http://"):
-                # Local provider (Ollama) — no key needed
-                kwargs["api_key"] = "not-needed"
-            _llm_cache[cache_key] = ChatOpenAI(**kwargs)
+
+            if provider == "anthropic":
+                ChatAnthropicCls = _get_anthropic_class()
+                kwargs = {
+                    "model": llm_config.get("model", "claude-haiku-4-5-20251001"),
+                    "timeout": 1800.0,
+                    "max_retries": 1,
+                }
+                if api_key:
+                    kwargs["anthropic_api_key"] = api_key
+                # Otherwise ChatAnthropic reads ANTHROPIC_API_KEY from env
+                _llm_cache[cache_key] = ChatAnthropicCls(**kwargs)
+            else:
+                kwargs = {
+                    "base_url": llm_config.get("base_url"),
+                    "model": llm_config.get("model", "gpt-4o-mini"),
+                    "timeout": 1800,
+                }
+                if api_key:
+                    kwargs["api_key"] = api_key
+                elif llm_config.get("base_url", "").startswith("http://"):
+                    kwargs["api_key"] = "not-needed"
+                _llm_cache[cache_key] = ChatOpenAI(**kwargs)
         return _llm_cache[cache_key]
 
 
