@@ -122,8 +122,32 @@ services:
       start_period: 10s
       retries: 3
 
+  # Infinity: serves embeddings and reranking via OpenAI-compatible APIs.
+  # Loads models at startup; first boot downloads weights to ./data/infinity.
+  context-broker-infinity:
+    image: michaelf34/infinity:latest-cpu
+    container_name: context-broker-infinity
+    hostname: context-broker-infinity
+    restart: unless-stopped
+    command: >
+      v2
+      --model-id nomic-ai/nomic-embed-text-v1.5
+      --model-id BAAI/bge-reranker-v2-m3
+      --port 7997
+    networks:
+      - context-broker-net
+    volumes:
+      - ./data/infinity:/app/.cache
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:7997/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
   # Optional: local inference via Ollama (no API keys needed)
-  # Provides LLM and embeddings on the internal network.
+  # Provides LLM on the internal network. Embeddings and reranking are
+  # handled by the Infinity container above.
   # Remove or comment out if using cloud providers exclusively.
   context-broker-ollama:
     image: ollama/ollama:0.6.2

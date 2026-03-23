@@ -29,12 +29,12 @@ llm:
   # environment variable. LangChain reads it automatically. No config needed.
 
 embeddings:
-  # Local Ollama (default — no API key needed):
-  base_url: http://context-broker-ollama:11434/v1
-  model: nomic-embed-text
-  # Send raw text instead of token arrays. Required for Ollama and most
-  # non-OpenAI providers. OpenAI accepts both formats. Set to true only
-  # if using OpenAI directly and you want token-level context length checks.
+  # Local Infinity (default — no API key needed):
+  base_url: http://context-broker-infinity:7997/v1
+  model: nomic-ai/nomic-embed-text-v1.5
+  # Send raw text instead of token arrays. Required for Infinity, Ollama,
+  # and most non-OpenAI providers. OpenAI accepts both formats. Set to true
+  # only if using OpenAI directly and you want token-level context length checks.
   tiktoken_enabled: false
   check_embedding_ctx_length: false
   # Cloud provider example:
@@ -45,11 +45,14 @@ embeddings:
   context_window_size: 3
 
 reranker:
-  # Options: "cross-encoder", "cohere", "none"
-  # "cross-encoder" runs locally on CPU inside the container (no API key needed)
+  # Options: "api", "none"
+  # "api" hits a /v1/rerank endpoint — works with Infinity (local),
+  #   Together, Cohere, Jina, Voyage, or any compatible provider
   # "none" disables reranking (raw RRF scores used)
-  provider: cross-encoder
+  provider: api
+  base_url: http://context-broker-infinity:7997
   model: BAAI/bge-reranker-v2-m3
+  top_n: 10
 
 # ============================================================
 # Build Types

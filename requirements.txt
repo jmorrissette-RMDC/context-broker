@@ -19,7 +19,6 @@ redis==5.2.1
 # Memory / Knowledge graph
 mem0ai==0.1.29
 neo4j==5.27.0
-sentence-transformers==3.3.1
 
 # Observability
 prometheus-client==0.21.1

@@ -49,6 +49,7 @@ The Context Broker runs as a group of containers managed by Docker Compose:
 | `context-broker-postgres`  | Conversation storage, vector embeddings (pgvector), build types             | PostgreSQL + pgvector (OTS) |
 | `context-broker-neo4j`     | Knowledge graph storage (Mem0)                                              | Neo4j (OTS)                 |
 | `context-broker-redis`     | Job queues, assembly locks, ephemeral state                                 | Redis (OTS)                 |
+| `context-broker-infinity`  | Embeddings and reranking via OpenAI-compatible APIs                         | Infinity (OTS)              |
 
 Only the LangGraph container is custom. All backing services use official images unmodified.
 
@@ -332,11 +333,14 @@ embeddings:
   api_key_env: EMBEDDINGS_API_KEY
 
 reranker:
-  provider: cross-encoder      # "cross-encoder", "cohere", or "none"
+  provider: api                # "api" or "none"
+  base_url: http://context-broker-infinity:7997
   model: BAAI/bge-reranker-v2-m3
+  top_n: 10
 ```
 
--   The reranker defaults to a local cross-encoder model running on CPU inside the container. No API key required.
+-   The reranker defaults to the local Infinity container, which serves the `/v1/rerank` endpoint on the internal network. No API key required.
+-   `provider: api` hits a `/v1/rerank` endpoint — works with Infinity (local), Together, Cohere, Jina, Voyage, or any compatible provider.
 -   Setting `provider: none` disables reranking (raw RRF scores used).
 
 **5.3 Build Type Configuration**

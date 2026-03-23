@@ -13,7 +13,7 @@ Architecturally, the system is a **State 4 MAD (Multipurpose Agentic Duo)**. Thi
 
 ## 2. Container Architecture
 
-The system is deployed as a Docker Compose group of 5 containers, communicating securely over an internal bridge network.
+The system is deployed as a Docker Compose group of 6 containers, communicating securely over an internal bridge network.
 
 ```text
                     ┌─────────────────────────────────────────────┐
@@ -51,12 +51,15 @@ The gateway resides on both the external host-exposed network and the internal `
 | `context-broker-postgres` | Relational and vector storage (messages, windows, summaries). | `pgvector/pgvector:pg16` |
 | `context-broker-neo4j` | Entity and relationship knowledge graph (via Mem0). | `neo4j:5` |
 | `context-broker-redis` | Async job queues, locks, and ephemeral state. | `redis:7-alpine` |
-| `context-broker-ollama` (optional) | Local inference — LLM and embeddings via OpenAI-compatible API. No API keys needed. | `ollama/ollama` |
+| `context-broker-infinity` | Local embeddings and reranking via OpenAI-compatible `/v1/embeddings` and `/v1/rerank` APIs. No API keys needed. | `michaelf34/infinity` |
+| `context-broker-ollama` (optional) | Local LLM inference via OpenAI-compatible API. No API keys needed. | `ollama/ollama` |
 
-The Ollama container is optional. When present, it provides fully local inference on the internal network — the LangGraph container calls it the same way it calls any cloud provider. When not present, inference routes to configured cloud providers. The same `config.yml` controls the routing.
+The Infinity container serves embeddings and reranking on the internal network using the Infinity inference engine. It loads configured models at startup (first boot downloads weights) and exposes standard OpenAI-compatible endpoints. The LangGraph container calls it the same way it calls any cloud embedding or reranking provider.
+
+The Ollama container is optional. When present, it provides fully local LLM inference on the internal network — the LangGraph container calls it the same way it calls any cloud provider. When not present, LLM inference routes to configured cloud providers. The same `config.yml` controls the routing.
 
 **Volume Management:**
-- Host `./data` is mounted into the containers to persist databases (`/data/postgres`, `/data/neo4j`, `/data/redis`) and the `imperator_state.json` file.
+- Host `./data` is mounted into the containers to persist databases (`/data/postgres`, `/data/neo4j`, `/data/redis`), Infinity model weights (`/data/infinity`), and the `imperator_state.json` file.
 - Host `./config` is mounted to provide `/config/config.yml` and `/config/credentials/.env`.
 
 **Deployment Customization:**
@@ -86,7 +89,7 @@ The following flows constitute the infrastructure-focused **Action Engine (AE)**
 - **Context Assembly (Background):** Executes the build-type-specific assembly graph. Each build type registers its own assembly StateGraph (e.g., passthrough simply selects recent messages; standard-tiered runs progressive compression; knowledge-enriched adds semantic and graph layers).
 - **Retrieval:** Executes the build-type-specific retrieval graph. Produces a structured messages array using pre-computed episodic summaries and dynamically injected semantic/knowledge graph queries.
 - **Memory Extraction (Background):** Leverages Mem0 to extract structured facts into Neo4j.
-- **Hybrid Search and Query:** Combines vector search (pgvector) and full-text search (`ts_rank`, PostgreSQL's implementation of BM25-style ranking) via Reciprocal Rank Fusion (RRF), with optional cross-encoder reranking. This pipeline handles `conv_search` (conversation metadata) and `conv_search_messages` (individual verbatim messages).
+- **Hybrid Search and Query:** Combines vector search (pgvector) and full-text search (`ts_rank`, PostgreSQL's implementation of BM25-style ranking) via Reciprocal Rank Fusion (RRF), with optional API-based reranking (via the Infinity container or any `/v1/rerank`-compatible provider). This pipeline handles `conv_search` (conversation metadata) and `conv_search_messages` (individual verbatim messages).
 - **Database Queries:** Dedicated flows for straightforward structured filtering and retrieval operations, such as handling `conv_search_context_windows`.
 - **Memory Search:** Dedicated flow for querying the knowledge graph and semantic memory via Mem0 APIs (`mem_search`, `mem_get_context`).
 - **Metrics:** Exposes Prometheus metrics collected from graph executions.

@@ -5,11 +5,10 @@ Implements hybrid search (vector + BM25 + reranking) via Reciprocal Rank Fusion.
 Handles conv_search and conv_search_messages tools.
 """
 
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 import openai
@@ -19,35 +18,50 @@ from typing_extensions import TypedDict
 from app.config import get_embeddings_model, get_tuning
 from app.database import get_pg_pool
 
-# M-05: Cache CrossEncoder model instances to avoid reloading per request
-_reranker_cache: dict[str, Any] = {}
-_reranker_lock = asyncio.Lock()
-
-
-async def _get_reranker(model_name: str):
-    """Return a cached CrossEncoder instance.
-
-    M-10: The initial model load is synchronous and CPU-bound (downloads +
-    initializes weights). Run it in the default executor to avoid blocking
-    the async event loop. Subsequent calls return the cached instance.
-
-    G5-24: An asyncio.Lock prevents concurrent cold-start callers from
-    loading the same model multiple times.
-    """
-    async with _reranker_lock:
-        if model_name not in _reranker_cache:
-            loop = asyncio.get_running_loop()
-
-            def _load():
-                from sentence_transformers import CrossEncoder
-
-                return CrossEncoder(model_name)
-
-            _reranker_cache[model_name] = await loop.run_in_executor(None, _load)
-    return _reranker_cache[model_name]
-
-
 _log = logging.getLogger("context_broker.flows.search")
+
+
+async def _rerank_via_api(
+    query: str, candidates: list[dict], config: dict
+) -> list[dict]:
+    """Rerank candidates by calling a /v1/rerank endpoint.
+
+    Works with Infinity (local), Together, Cohere, Jina, Voyage, or any
+    provider exposing the emerging /v1/rerank standard.
+    """
+    reranker_config = config.get("reranker", {})
+    base_url = reranker_config.get("base_url", "")
+    model = reranker_config.get("model", "")
+    top_n = reranker_config.get("top_n", 10)
+
+    documents = [c.get("content") or "" for c in candidates]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{base_url}/v1/rerank",
+            json={
+                "model": model,
+                "query": query,
+                "documents": documents,
+                "top_n": top_n,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    # Normalize response — different providers use different keys
+    results = data.get("results") or data.get("choices") or data.get("data") or []
+
+    for item in results:
+        idx = item.get("index", 0)
+        score = item.get("relevance_score", 0)
+        if idx < len(candidates):
+            candidates[idx]["rerank_score"] = score
+
+    reranked = sorted(
+        candidates, key=lambda x: x.get("rerank_score", 0), reverse=True
+    )
+    return reranked[:top_n]
 
 
 # ============================================================
@@ -456,10 +470,10 @@ async def hybrid_search_messages(state: MessageSearchState) -> dict:
 
 
 async def rerank_results(state: MessageSearchState) -> dict:
-    """Apply cross-encoder reranking to the hybrid search candidates.
+    """Apply reranking to the hybrid search candidates.
 
-    Uses the configured reranker. Falls back to RRF scores if reranker
-    is unavailable (graceful degradation).
+    Uses the configured reranker provider. Falls back to RRF scores if
+    reranker is unavailable (graceful degradation).
     """
     candidates = state["candidates"]
     query = state["query"]
@@ -472,31 +486,16 @@ async def rerank_results(state: MessageSearchState) -> dict:
     if reranker_provider == "none" or not candidates:
         return {"reranked_results": candidates[:limit]}
 
-    if reranker_provider == "cross-encoder":
+    if reranker_provider == "api":
         try:
-            model_name = reranker_config.get("model", "BAAI/bge-reranker-v2-m3")
-            reranker = await _get_reranker(model_name)
-
-            pairs = [(query, c.get("content") or "") for c in candidates]
-
-            loop = asyncio.get_running_loop()
-            scores = await loop.run_in_executor(None, lambda: reranker.predict(pairs))
-
-            for i, candidate in enumerate(candidates):
-                candidate["rerank_score"] = float(scores[i])
-
-            reranked = sorted(
-                candidates, key=lambda x: x.get("rerank_score", 0), reverse=True
-            )
+            reranked = await _rerank_via_api(query, candidates, config)
             return {"reranked_results": reranked[:limit]}
-
-        except (OSError, RuntimeError, ValueError, ImportError) as exc:
-            # R6-M19: ImportError catches model-loading failures (missing
-            # sentence_transformers or incompatible versions)
-            _log.warning("Cross-encoder reranking failed (degraded mode): %s", exc)
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            _log.warning("API reranking failed (degraded mode): %s", exc)
             return {"reranked_results": candidates[:limit]}
 
     # Unknown provider — return top candidates by RRF score
+    _log.warning("Unknown reranker provider %r, skipping reranking", reranker_provider)
     return {"reranked_results": candidates[:limit]}
 
 

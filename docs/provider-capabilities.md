@@ -12,7 +12,8 @@
 | **Google Gemini** | Yes | Yes | No | Native: `/v1beta/models/...:embedContent` with task types. OpenAI compat layer available but loses task type support |
 | **xAI (Grok)** | Yes | No | No | Focused on LLM/Vision |
 | **Together AI** | Yes | Yes (`/v1/embeddings`) | Yes (`/v1/rerank`) | Full stack |
-| **Ollama** | Yes | Yes (`/v1/embeddings`) | No | Local inference. Requires `tiktoken_enabled: false` for embeddings |
+| **Ollama** | Yes | Yes (`/v1/embeddings`) | No | Local LLM inference. Requires `tiktoken_enabled: false` for embeddings |
+| **Infinity** | No | Yes (`/v1/embeddings`) | Yes (`/v1/rerank`) | Local embeddings and reranking. CPU or GPU. Serves any HuggingFace model |
 | **Cohere** | Yes | Yes (own format) | Yes (`/v2/rerank`) | Gold standard for reranking |
 | **Jina** | No | Yes | Yes (`/v1/rerank`) | 8K token context for embeddings/reranking — best for long chunks |
 | **Voyage AI** | No | Yes (`/v1/embeddings`) | Yes | Anthropic's recommended partner. Competitive rerank models |
@@ -37,8 +38,8 @@
 - **Request format:** Identical across Together, Jina, Voyage. Cohere uses `/v2/rerank` but same body.
 - **Response format:** Results with `index` and `relevance_score`. Key name varies: `results[]` (Cohere), `choices[]` (Together), `data[]` (others).
 - **Document format variation:** Simple (`documents: ["text1", "text2"]`) vs complex (`documents: [{"text": "...", "metadata": "..."}]`). Jina supports both.
-- **Providers:** Together, Cohere, Jina, Voyage AI
-- **Local option:** `sentence-transformers` `CrossEncoder` (runs in container on CPU, no API)
+- **Providers:** Infinity (local), Together, Cohere, Jina, Voyage AI
+- **Local option:** Infinity container serving any HuggingFace reranker model (e.g., `BAAI/bge-reranker-v2-m3`) via `/v1/rerank`
 - **Not available from:** OpenAI, Anthropic, Google, xAI, Ollama
 
 ## Configuration Implications
@@ -49,18 +50,17 @@
 
 2. **Embeddings:** Choose from OpenAI, Together, Ollama (local), Google, or Voyage. Anthropic and xAI users need a separate embedding provider. Config specifies `base_url`, `model`, and `tiktoken_enabled`.
 
-3. **Reranking:** Three options:
-   - `provider: local` — sentence-transformers CrossEncoder, runs in container, no API key
-   - `provider: api` — hits any `/v1/rerank` endpoint (Together, Jina, Voyage, Cohere)
+3. **Reranking:** Two options:
+   - `provider: api` — hits any `/v1/rerank` endpoint. Default: local Infinity container. Also works with Together, Jina, Voyage, Cohere.
    - `provider: none` — skip reranking, use raw RRF scores
 
-4. **Minimum viable deployment:** Ollama only (LLM + embeddings, no reranking). Free, local, no API keys.
+4. **Minimum viable deployment:** Ollama (LLM) + Infinity (embeddings + reranking). Free, local, no API keys.
 
-5. **Full-featured deployment:** Cloud LLM (OpenAI/Anthropic) + cloud embeddings (OpenAI/Voyage) + cloud reranking (Together/Cohere/Jina).
+5. **Full-featured deployment:** Cloud LLM (OpenAI/Anthropic) + cloud embeddings (OpenAI/Voyage) + cloud reranking (Together/Cohere/Jina). Or keep Infinity local for embeddings/reranking to avoid per-call costs.
 
 ## Testing Requirements
 
 Cross-provider tests must verify:
 - LLM: One cheap model per provider (6 tests)
 - Embeddings: One model per embedding-capable provider (5 tests: OpenAI, Google, Together, Ollama, Voyage)
-- Reranking: One model per reranking-capable provider (4 tests: Together, Cohere, Jina, local CrossEncoder)
+- Reranking: One model per reranking-capable provider (4 tests: Infinity, Together, Cohere, Jina)
