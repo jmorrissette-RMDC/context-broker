@@ -93,7 +93,7 @@ async def _query_provider_context_length(config: dict, fallback: int) -> int:
             response.raise_for_status()
             data = response.json()
 
-        models = data.get("data", [])
+        models = data.get("data") or []
         for model_info in models:
             if model_info.get("id") == model:
                 context_length = model_info.get("context_length")

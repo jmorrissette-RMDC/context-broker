@@ -22,7 +22,7 @@ import uuid
 from typing import Any
 
 import redis.asyncio as aioredis
-import redis.exceptions
+import redis.exceptions as redis_exc
 
 from app.config import async_load_config, get_tuning
 from app.database import get_redis
@@ -353,9 +353,9 @@ async def _consume_queue(
                 raw_job = await redis.blmove(
                     queue_name,
                     processing_queue,
-                    timeout=poll_timeout,
-                    wherefrom="RIGHT",
-                    whereto="LEFT",
+                    poll_timeout,
+                    "RIGHT",
+                    "LEFT",
                 )
 
             if not raw_job:
@@ -379,10 +379,10 @@ async def _consume_queue(
             raise
         # M-24: Broadened exception handler to cover flow-level errors
         # (ValueError, KeyError, TypeError) that shouldn't kill the consumer.
-        # CB-R3-05: Added redis.exceptions.RedisError for Redis-level failures.
+        # CB-R3-05: Added redis_exc.RedisError for Redis-level failures.
         except (RuntimeError, ConnectionError, json.JSONDecodeError, OSError,
                 ValueError, KeyError, TypeError,
-                redis.exceptions.RedisError) as exc:
+                redis_exc.RedisError) as exc:
             _log.error(
                 "Job processing error in queue %s: %s", queue_name, exc, exc_info=True
             )
@@ -396,12 +396,12 @@ async def _consume_queue(
                     await _handle_job_failure(
                         err_redis, queue_name, job, raw_job, exc, config
                     )
-            except (ConnectionError, OSError, redis.exceptions.RedisError) as redis_exc:
+            except (ConnectionError, OSError, redis_exc.RedisError) as redis_err:
                 # R5-M26: Log the job payload to stderr so it's not completely lost
                 _log.error(
                     "Redis failure during error handling for queue %s: %s",
                     queue_name,
-                    redis_exc,
+                    redis_err,
                 )
                 print(
                     f"LOST_JOB queue={queue_name} payload={raw_job}",
@@ -521,7 +521,7 @@ async def _sweep_delayed_queues(config: dict) -> None:
                 else:
                     await redis.lpush(queue_name, raw)
                 promoted += 1
-        except (ConnectionError, OSError, redis.exceptions.RedisError) as exc:
+        except (ConnectionError, OSError, redis_exc.RedisError) as exc:
             _log.error("Delayed queue sweep error: %s", exc)
 
     if promoted > 0:
@@ -584,7 +584,7 @@ async def _sweep_stranded_processing_jobs() -> None:
                 else:
                     await redis.lpush(queue_name, raw)
                 total_recovered += 1
-        except (ConnectionError, OSError, redis.exceptions.RedisError) as exc:
+        except (ConnectionError, OSError, redis_exc.RedisError) as exc:
             _log.error(
                 "Failed to sweep stranded jobs from %s: %s",
                 processing_queue,
