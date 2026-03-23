@@ -187,3 +187,47 @@ The test environment is fully defined and provisioned by Docker and Docker Compo
 - **Infrastructure:** The environment is defined by the project's `docker-compose.yml` and the associated Dockerfiles.
 - **Components:** The environment consists of the five specified containers (`context-broker`, `context-broker-langgraph`, `context-broker-postgres`, `context-broker-neo4j`, `context-broker-redis`), using the exact image versions pinned in the project configuration.
 - **Execution:** Tests are executed by a Python test runner (`pytest`) from a host or CI environment that has access to the Docker daemon.
+
+## 8. Traceability Matrix
+
+| ID | Scenario | Section | Type | Test File | Status | Last Run | Result | Notes |
+|----|----------|---------|------|-----------|--------|----------|--------|-------|
+| T-1.1 | Version pinning (requirements.txt ==) | 4.1 | Static | test_static_checks.py::TestVersionPinning | Written | 2026-03-23 | Pass | |
+| T-1.2 | Version pinning (Dockerfile FROM tags) | 4.1 | Static | test_static_checks.py::TestVersionPinning | Written | 2026-03-23 | Pass | |
+| T-1.3 | Credential files present | 4.1 | Static | test_static_checks.py::TestCredentialFiles | Written | 2026-03-23 | Pass | |
+| T-1.4 | OTS backing services (no build context) | 4.1 | Static | test_static_checks.py::TestOTSBackingServices | Written | 2026-03-23 | Pass | |
+| T-1.5 | USER directive placement | 4.1 | Static | test_static_checks.py::TestDockerfileUserDirective | Written | 2026-03-23 | Pass | |
+| T-1.6 | Local package source build | 4.1 | Integration | | Not started | | Not run | Requires Docker build with local mode |
+| T-1.7 | Pypi/devpi package source | 4.1 | Integration | | Not started | | Not run | Requires Docker build |
+| T-2.1 | Non-root user execution | 4.2 | Integration | | Not started | | Not run | Requires running container inspection |
+| T-2.2 | Two-network topology | 4.2 | Static | test_static_checks.py::TestTwoNetworkTopology | Written | 2026-03-23 | Pass | |
+| T-2.3 | File ownership (COPY --chown) | 4.2 | Integration | | Not started | | Not run | Requires running container |
+| T-2.4 | HEALTHCHECK directive | 4.2 | Static | test_static_checks.py::TestDockerfileHealthcheck | Written | 2026-03-23 | Pass | |
+| T-2.5 | Thin gateway (nginx) | 4.2 | Static | test_static_checks.py::TestThinGateway | Written | 2026-03-23 | Pass | |
+| T-2.6 | Service name DNS | 4.2 | Static | test_static_checks.py::TestServiceNameDNS | Written | 2026-03-23 | Pass | |
+| T-3.1 | Fail-fast on invalid config | 4.3 | Integration | | Not started | | Not run | Requires container start with bad config |
+| T-3.2 | Hot-reload inference provider | 4.3 | Integration | | Not started | | Not run | Requires running system + config file change |
+| T-3.3 | Token budget resolution | 4.3 | Unit | test_token_budget.py | Written | 2026-03-23 | Pass | Mocked — needs integration test too |
+| T-3.4 | Imperator admin_tools toggle | 4.3 | Integration | | Not started | | Not run | Requires running Imperator |
+| T-4.1 | Two-volume pattern | 4.4 | Integration | | Not started | | Not run | Requires running container mount inspection |
+| T-4.2 | Idempotency of message storage | 4.4 | E2E | | Not started | | Not run | Store same message twice via MCP |
+| T-4.3 | Schema migration on startup | 4.4 | Integration | | Not started | | Not run | Start against old schema |
+| T-4.4 | Credential loading from .env | 4.4 | Integration | | Not started | | Not run | Requires container env inspection |
+| T-4.5 | No anonymous volumes | 4.4 | Integration | | Not started | | Not run | Docker volume inspection |
+| T-5.1 | End-to-end pipeline execution | 4.5 | E2E | | Not started | | Not run | Store message, verify embedding + assembly + extraction |
+| T-5.2 | Pipeline intermediate outputs | 4.5 | E2E | | Not started | | Not run | Verify DB state after each pipeline stage |
+| T-5.3 | Redis lock prevents concurrent assembly | 4.5 | Integration | | Not started | | Not run | Race condition test |
+| T-6.1 | All MCP tools (valid/invalid/boundary) | 4.6 | E2E | | Not started | | Not run | Full parameter variation per tool |
+| T-6.2 | OpenAI-compatible endpoint (stream/non-stream) | 4.6 | E2E | | Not started | | Not run | Requires Ollama running |
+| T-6.3 | Health endpoint (healthy/degraded) | 4.6 | E2E | | Not started | | Not run | Stop Neo4j, verify degraded |
+| T-6.4 | Metrics endpoint | 4.6 | E2E | | Not started | | Not run | Verify Prometheus format |
+| T-6.5 | External API response validation | 4.6 | Unit | | Not started | | Not run | Mock malformed LLM response |
+| T-7.1 | Imperator state persistence across restarts | 4.7 | E2E | | Not started | | Not run | Stop/start, verify conversation resumes |
+| T-7.2 | Context retrieval with different build types | 4.7 | E2E | | Not started | | Not run | Requires Ollama for LLM calls |
+| T-8.1 | Graceful degradation (Neo4j down) | 4.8 | E2E | | Not started | | Not run | Stop Neo4j, verify operation continues |
+| T-8.2 | Independent container startup | 4.8 | Integration | | Not started | | Not run | Random startup order |
+| T-9.1 | Structured JSON logging | 4.9 | Integration | | Not started | | Not run | Capture docker logs, parse JSON |
+| T-9.2 | Pipeline verbose mode | 4.9 | Integration | | Not started | | Not run | Toggle verbose, compare logs |
+| T-10.1 | No blocking I/O in async functions | 4.10 | Unit | | Not started | | Not run | Static analysis or runtime detection |
+| T-11.1 | LangGraph mandate (routes are thin) | 4.11 | Static | test_static_checks.py::TestStateGraphMandate | Written | 2026-03-23 | Pass | |
+| T-11.2 | StateGraph node immutability | 4.11 | Unit | test_state_immutability.py | Written | 2026-03-23 | Pass | Tests scoring/scaling functions only |
