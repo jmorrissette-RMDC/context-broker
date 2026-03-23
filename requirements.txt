@@ -1,0 +1,45 @@
+# ASGI server and framework
+uvicorn==0.27.0
+fastapi==0.109.2
+sse-starlette==1.8.2
+
+# LangGraph and LangChain
+langgraph==0.1.4
+langchain==0.1.9
+langchain-core==0.1.27
+langchain-openai==0.0.8
+langchain-community==0.0.24
+langchain-postgres==0.0.3
+
+# Database
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+redis==5.0.1
+
+# Memory / Knowledge graph
+mem0ai==0.1.29
+neo4j==5.17.0
+sentence-transformers==2.3.1
+
+# Observability
+prometheus-client==0.20.0
+
+# Validation
+pydantic==2.6.1
+pydantic-settings==2.2.1
+
+# Utilities
+httpx==0.26.0
+python-dotenv==1.0.1
+pyyaml==6.0.1
+tiktoken==0.6.0
+tenacity==8.2.3
+
+# Testing
+pytest==8.0.2
+pytest-asyncio==0.23.5
+pytest-mock==3.12.0
+
+# Code quality
+black==24.2.0
+ruff==0.2.2

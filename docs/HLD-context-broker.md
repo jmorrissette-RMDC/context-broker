@@ -68,12 +68,12 @@ The Context Broker optimizes for fast ingestion and rapid retrieval by shifting 
 
 **End-to-End Message Flow:**
 1. **Context Window Initialization:** A client calls `conv_create_context_window` to establish a context window for a participant, automatically resolving its token budget via the configured provider.
-2. **Ingestion:** A client calls `conv_store_message`. The system deduplicates the message (using a client-supplied idempotency key) and persists it to PostgreSQL. It enqueues independent background jobs for embedding and memory extraction to Redis, then returns success immediately.
+2. **Ingestion:** A client calls `conv_store_message` (accepting `context_window_id` or `conversation_id`, at least one required). The system persists the message to PostgreSQL, computing `token_count` and `priority` internally. It enqueues independent background jobs for embedding and memory extraction to Redis, then returns success immediately.
 3. **Embedding:** An async worker generates a contextual embedding for the message (using the configured LangChain embedding model) and updates the database row.
 4. **Assembly Trigger:** The embedding worker identifies all participant context windows attached to the conversation and proactively enqueues an independent context assembly job for each.
 5. **Context Assembly:** An async worker builds a new episodic context snapshot (e.g., tier 1 archival summary, tier 2 chunk summaries) via the configured LLM and stores the updated snapshot.
 6. **Memory Extraction:** Operating concurrently with the embedding and assembly pipeline, an async worker passes the new verbatim messages to Mem0, extracting facts, entities, and relationships into the Neo4j knowledge graph.
-7. **Retrieval:** An agent calls `conv_retrieve_context`. The system serves the pre-assembled episodic snapshot from the database, dynamically querying and injecting the semantic and knowledge graph layers at request time based on the recent context.
+7. **Retrieval:** An agent calls `conv_retrieve_context`. The system serves the pre-assembled episodic snapshot from the database, dynamically querying and injecting the semantic and knowledge graph layers at request time based on the recent context. The result is a structured **messages array** (list of OpenAI-format message dicts with `role`, `content`, and optionally `tool_calls` / `tool_call_id`), not a concatenated text string.
 
 ## 4. StateGraph Architecture
 
@@ -81,10 +81,10 @@ All programmatic and cognitive logic is encapsulated in **LangGraph StateGraphs*
 
 ### Core Flows
 The following flows constitute the infrastructure-focused **Action Engine (AE)**:
-- **Message Pipeline:** Synchronous ingestion, deduplication, and database insertion.
+- **Message Pipeline:** Synchronous ingestion and database insertion. Computes `token_count` and `priority` internally.
 - **Embed Pipeline (Background):** Generates `pgvector` embeddings for search and retrieval.
-- **Context Assembly (Background):** Executes the progressive compression strategy defined by the build type (Archival → Chunks → Verbatim).
-- **Retrieval:** Assembles the final string using pre-computed episodic summaries and dynamically injected semantic/knowledge graph queries.
+- **Context Assembly (Background):** Executes the build-type-specific assembly graph. Each build type registers its own assembly StateGraph (e.g., passthrough simply selects recent messages; standard-tiered runs progressive compression; knowledge-enriched adds semantic and graph layers).
+- **Retrieval:** Executes the build-type-specific retrieval graph. Produces a structured messages array using pre-computed episodic summaries and dynamically injected semantic/knowledge graph queries.
 - **Memory Extraction (Background):** Leverages Mem0 to extract structured facts into Neo4j.
 - **Hybrid Search and Query:** Combines vector search (pgvector) and full-text search (`ts_rank`, PostgreSQL's implementation of BM25-style ranking) via Reciprocal Rank Fusion (RRF), with optional cross-encoder reranking. This pipeline handles `conv_search` (conversation metadata) and `conv_search_messages` (individual verbatim messages).
 - **Database Queries:** Dedicated flows for straightforward structured filtering and retrieval operations, such as handling `conv_search_context_windows`.
@@ -92,7 +92,7 @@ The following flows constitute the infrastructure-focused **Action Engine (AE)**
 - **Metrics:** Exposes Prometheus metrics collected from graph executions.
 
 The following flow constitutes the cognitive **Thought Engine (TE)**:
-- **Imperator:** A ReAct-style agent loop acting as the system's conversational interface. Utilizes **LangGraph checkpointing** for continuous state persistence across turns.
+- **Imperator:** A graph-based ReAct agent (agent node → tool node → conditional edges) acting as the system's conversational interface. Does **not** use LangGraph checkpointing (`MemorySaver`). Persistence is provided by the standard `conversation_messages` table with full OpenAI fields; `context_window_id` serves as the conceptual thread_id. The Imperator uses the same context assembly pipeline as any other consumer.
 
 ## 5. Storage Design
 
@@ -100,7 +100,7 @@ The system relies on eventual consistency across three distinct datastores. Post
 
 - **PostgreSQL (`context-broker-postgres`):**
   - Uses the `pgvector` extension.
-  - **Tables:** `conversations`, `conversation_messages` (includes `vector` and `tsvector` columns for hybrid search), `context_windows` (scoped to participant-conversation pairs), `conversation_summaries`. Embeddings dimensions are configuration-dependent.
+  - **Tables:** `conversations`, `conversation_messages` (OpenAI-format fields: `role`, `content` (nullable), `sender`, `recipient`, `tool_calls` (JSONB), `tool_call_id`, `token_count`, `priority`; includes `vector` and `tsvector` columns for hybrid search), `context_windows` (scoped to participant-conversation pairs; includes `last_accessed_at` for dormant window detection), `conversation_summaries`. Embeddings dimensions are configuration-dependent.
   - Maintains schema versioning for automated migrations on boot. Schema migrations are strictly forward-only and non-destructive. The application will refuse to start if a migration cannot be safely applied without data loss.
 - **Neo4j (`context-broker-neo4j`):**
   - Accessed exclusively via Mem0 APIs.
@@ -117,11 +117,11 @@ The Nginx gateway (`context-broker`) routes external traffic to the LangGraph co
 
 ### 6.1 MCP Interface (HTTP/SSE)
 Programmatic access for agents, running on `/mcp`. Exposes core capabilities as tools:
-- `conv_create_conversation`, `conv_store_message`, `conv_retrieve_context`
+- `conv_create_conversation`, `conv_store_message` (accepts `context_window_id` or `conversation_id`), `conv_retrieve_context`
 - `conv_create_context_window`, `conv_get_history`
 - `conv_search`, `conv_search_messages`, `conv_search_context_windows`
-- `mem_search`, `mem_get_context`
-- `broker_chat`
+- `mem_search`, `mem_get_context`, `mem_add`, `mem_list`, `mem_delete`
+- `imperator_chat`
 - `metrics_get`
 
 ### 6.2 OpenAI-Compatible Chat
@@ -149,19 +149,26 @@ All external dependencies and tuning parameters are governed by a single file: `
 
 ## 8. Build Types and Retrieval
 
-A **build type** defines the strategy for assembling a context window. Build types are open-ended and configured in `config.yml`. The system ships with two primary strategies:
+A **build type** is a registered pair of StateGraphs (assembly + retrieval) that share a standard contract (input/output state schemas, config interface). Deployers add new build types by writing two graphs and registering them in `config.yml`. Each build type may specify its own LLM configuration for summarization and extraction, allowing cost/quality trade-offs per strategy. The system ships with three build types:
 
-### 8.1 `standard-tiered` (Episodic Only)
+### 8.1 `passthrough` (No Summarization)
+Returns recent verbatim messages up to the token budget with no summarization or compression. Zero inference cost. Useful for short conversations, testing, or scenarios where full fidelity of recent messages is preferred over historical depth.
+
+### 8.2 `standard-tiered` (Episodic Only)
 Focuses entirely on chronological history with a three-tier progressive compression model. It avoids vector search and knowledge graph queries to minimize inference cost.
 - **Tier 1 (8% budget):** Deep archival summary.
 - **Tier 2 (20% budget):** Rolling chunk summaries.
 - **Tier 3 (72% budget):** Recent verbatim messages.
 
-### 8.2 `knowledge-enriched` (Full Pipeline)
+### 8.3 `knowledge-enriched` (Full Pipeline)
 Combines episodic layers with semantically retrieved messages and knowledge graph facts.
 - **Episodic Layers (70%):** Tier 1 (5%), Tier 2 (15%), Tier 3 (50%).
 - **Semantic Retrieval (15%):** Uses `langchain_postgres.PGVector` to dynamically find past messages similar to the most recent verbatim messages, but outside the Tier 3 window.
 - **Knowledge Graph (15%):** Dynamically traverses Mem0/Neo4j to extract structural facts and relationships pertinent to the entities identified in the recent context. At retrieval time, entities are extracted from the recent verbatim messages to serve as graph traversal seeds. Knowledge graph retrieval uses Mem0's native APIs for proper edge-following traversal — this is a justified deviation from the LangChain-first constraint (REQ §4.5) because graph traversal (following entity relationships) is architecturally distinct from vector similarity search, and no standard LangChain retriever supports it.
+
+**Dynamic Tier Scaling:** Tier percentages define target allocations, but actual content may not fill a tier (e.g., a new conversation has no archival summary). Unused budget from under-filled tiers is redistributed to lower tiers (Tier 3 absorbs unused Tier 1/2 budget), ensuring the full token budget is utilized.
+
+**Memory Confidence Scoring:** Extracted memories carry a confidence score that decays over time via a configurable half-life. Memories re-confirmed by new conversation evidence have their confidence refreshed. Low-confidence memories are deprioritized during knowledge graph retrieval.
 
 ## 9. Async Processing Model
 
@@ -174,11 +181,13 @@ The system uses ARQ (Async Redis Queue) — a standard, lightweight Python libra
 
 ## 10. Imperator Design
 
-The Imperator is the Context Broker's built-in conversational agent. It demonstrates and consumes the service's own capabilities via a ReAct-style loop.
+The Imperator is the Context Broker's built-in conversational agent. It demonstrates and consumes the service's own capabilities via a graph-based ReAct loop (agent node → tool node → conditional edges back to agent).
 
-- **Self-Consumption:** The Imperator uses LangChain's `ChatOpenAI.bind_tools()` to grant the LLM access to the exact same MCP tool functions (`conv_search`, `mem_search`) exposed to external callers.
+- **Graph-Based ReAct:** Implemented as a LangGraph StateGraph with an agent node (LLM call with `bind_tools()`) and a tool node. Conditional edges route back to the agent when tool calls are present, or to the end node when the response is complete. This is a proper graph-based ReAct pattern, not an imperative loop.
+- **No MemorySaver:** The Imperator does **not** use LangGraph checkpointing. The `conversation_messages` table is the persistence layer. The Imperator's `context_window_id` serves as the conceptual thread_id. Before each turn, it calls `conv_retrieve_context` to load its assembled context, and after each turn, messages (including tool calls and tool results) are stored via `conv_store_message`.
+- **Self-Consumption:** The Imperator uses the same internal functions that back the MCP tools (`conv_search`, `mem_search`, etc.), consuming the Context Broker's own context assembly pipeline.
 - **Configurable Context:** The Imperator has its own configurable `build_type` and token budget, allowing operators to tune its cognitive strategy independently.
-- **Persistent Continuity:** It stores its current `conversation_id` in `/data/imperator_state.json`. Upon reboot, it resumes the exact same continuous context window, ensuring long-term memory across restarts. If the state file is missing, or the referenced conversation no longer exists, it automatically creates a new conversation and persists the new ID.
+- **Persistent Continuity:** It stores its current `conversation_id` and `context_window_id` in `/data/imperator_state.json`. Upon reboot, it resumes the exact same continuous context window, ensuring long-term memory across restarts. If the state file is missing, or the referenced conversation no longer exists, it automatically creates a new conversation and context window and persists the new IDs.
 - **Admin Capabilities:** Governed by `config.yml`, setting `admin_tools: true` grants the Imperator additional read/write tools to modify configuration files and execute read-only database queries.
 
 ## 11. Resilience and Observability

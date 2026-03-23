@@ -1,0 +1,10 @@
+# Credentials (loaded via env_file in docker-compose)
+config/credentials/.env
+.env
+
+# Persistent data volumes (managed by Docker)
+data/
+
+# Python bytecode
+*.pyc
+__pycache__/

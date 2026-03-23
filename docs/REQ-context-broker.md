@@ -155,7 +155,7 @@ packages:
 └── imperator_state.json   # Imperator persistent state
 ```
 
--   `imperator_state.json` contains `{"conversation_id": "<uuid>"}`. On first boot, the Imperator creates its conversation via `conv_create_conversation` and writes the returned ID to this file. On subsequent boots, it reads the file and resumes that conversation. If the file is missing or the referenced conversation no longer exists, a new conversation is created.
+-   `imperator_state.json` contains `{"conversation_id": "<uuid>", "context_window_id": "<uuid>"}`. On first boot, the Imperator creates its conversation and context window via `conv_create_conversation` and `conv_create_context_window`, and writes the returned IDs to this file. On subsequent boots, it reads the file and resumes. If the file is missing or the referenced conversation no longer exists, a new conversation and context window are created.
 
 **3.3 Config Directory Organization**
 
@@ -179,6 +179,30 @@ packages:
 -   All database data files stored under `/data/`.
 -   Each technology gets its own subdirectory (`/data/postgres/`, `/data/neo4j/`, `/data/redis/`).
 -   Backing service containers use bind mounts at their declared VOLUME paths to prevent Docker from creating anonymous volumes.
+
+**3.5.1 Message Schema**
+
+-   The `conversation_messages` table stores messages in OpenAI-compatible format. Key fields:
+    -   `role` (string, required): `system`, `user`, `assistant`, or `tool`.
+    -   `content` (text, **nullable**): Message content. Null when an assistant message contains only tool calls.
+    -   `sender` / `recipient` (string): Identifies who sent and who receives the message. `recipient` is always populated — defaults from `role` if not explicitly provided (e.g., role `user` defaults recipient to `assistant`).
+    -   `tool_calls` (JSONB, nullable): For assistant messages that invoke tools. Stores the OpenAI-format tool call array.
+    -   `tool_call_id` (string, nullable): For `tool` role messages, references the tool call this result belongs to.
+    -   `token_count` (integer): Computed internally by the system on ingestion, not caller-provided.
+    -   `priority` (float): Computed internally based on recency, role, and build type rules. Not caller-provided.
+-   Fields **not** present: `content_type`, `idempotency_key`.
+
+**3.5.2 Context Window Fields**
+
+-   Context windows include a `last_accessed_at` timestamp, updated on each retrieval. Used for dormant window detection and cleanup policies.
+
+**3.5.3 Context Retrieval Format**
+
+-   `conv_retrieve_context` returns a structured **messages array** — a list of OpenAI-format message dicts (each with `role`, `content`, and optionally `tool_calls` / `tool_call_id`). It does **not** return a concatenated text string.
+
+**3.5.4 Memory Confidence Scoring**
+
+-   Extracted memories carry a confidence score that decays over time using a configurable half-life. Memories that are re-confirmed by new conversation evidence have their confidence refreshed. Low-confidence memories are deprioritized during retrieval.
 
 **3.6 Backup and Recovery**
 
@@ -234,7 +258,7 @@ The Context Broker exposes the following tools via MCP. Full input/output schema
 | Tool                          | Description                                                                        |
 |-------------------------------|------------------------------------------------------------------------------------|
 | `conv_create_conversation`    | Create a new conversation                                                          |
-| `conv_store_message`          | Store a message in a conversation (triggers async embedding, assembly, extraction) |
+| `conv_store_message`          | Store a message in a conversation (accepts `context_window_id` or `conversation_id`, at least one required; triggers async embedding, assembly, extraction) |
 | `conv_retrieve_context`       | Retrieve the assembled context window for a participant                            |
 | `conv_create_context_window`  | Create a context window instance with a build type and token budget                |
 | `conv_search`                 | Semantic and structured search across conversations                                |
@@ -243,7 +267,10 @@ The Context Broker exposes the following tools via MCP. Full input/output schema
 | `conv_search_context_windows` | Search and list context windows                                                    |
 | `mem_search`                  | Semantic and graph search across extracted knowledge                               |
 | `mem_get_context`             | Retrieve relevant memories formatted for prompt injection                          |
-| `broker_chat`                 | Conversational interface to the Imperator                                          |
+| `mem_add`                     | Explicitly add a memory to the knowledge graph                                     |
+| `mem_list`                    | List stored memories, optionally filtered                                          |
+| `mem_delete`                  | Delete a specific memory by ID                                                     |
+| `imperator_chat`              | Conversational interface to the Imperator                                          |
 | `metrics_get`                 | Retrieve Prometheus metrics                                                        |
 
 **4.5 LangGraph Mandate**
@@ -254,8 +281,8 @@ The Context Broker exposes the following tools via MCP. Full input/output schema
     -   LangChain retrievers and vector stores for semantic search.
     -   LangChain embedding models via config.
     -   LangChain chat models for summarization and extraction via config.
-    -   LangGraph checkpointing for state persistence where applicable.
     -   Where a standard LangChain component does not fit the retrieval mechanism (e.g., knowledge graph traversal requires edge-following, not vector similarity), the architecture may use native APIs for that technology. The constraint is to prefer standard components and justify deviations.
+-   The Context Broker does **not** use LangGraph checkpointing (`MemorySaver` or equivalent). The `conversation_messages` table with full OpenAI-format fields (role, content, tool_calls, tool_call_id) **is** the persistence layer. `context_window_id` serves as the conceptual equivalent of a LangGraph `thread_id`.
 
 **4.6 LangGraph State Immutability**
 
@@ -314,8 +341,11 @@ reranker:
 
 **5.3 Build Type Configuration**
 
--   Build types define context assembly strategies: tier percentages, token budgets, and which retrieval layers are active.
--   The Context Broker ships with at least two build types:
+-   A build type is a registered pair of StateGraphs — one for assembly and one for retrieval — that share a standard contract (input state schema, output state schema, config interface). The assembly graph builds the episodic snapshot; the retrieval graph produces the final context window.
+-   Deployers add new build types by writing two graphs that satisfy the contract and registering them in `config.yml`. No core code changes required.
+-   The Context Broker ships with three build types:
+
+`passthrough` — No summarization. Returns recent verbatim messages up to the token budget. Zero inference cost. Useful for short conversations or testing.
 
 `standard-tiered` — Episodic memory only. Uses the three-tier progressive compression model described in c1. No vector search, no knowledge graph queries. Lower inference cost, suitable as the default.
 
@@ -323,6 +353,11 @@ reranker:
 
 ```yaml
 build_types:
+  passthrough:
+    # No summarization — recent verbatim messages only
+    max_context_tokens: auto
+    fallback_tokens: 4096
+
   standard-tiered:
     # Episodic only — three-tier progressive compression
     tier1_pct: 0.08             # archival summary (oldest, most compressed)
@@ -533,6 +568,7 @@ networks:
 **Version History:**
 
 -   v1.0 (2026-03-20): Initial draft
+-   v1.1 (2026-03-22): Align with implementation — build type registry (graph pairs), passthrough type, message schema (sender/recipient, tool_calls, tool_call_id, nullable content, remove content_type/idempotency_key), structured messages array retrieval, no LangGraph checkpointing, conv_store_message accepts context_window_id, broker_chat→imperator_chat, add mem_add/mem_list/mem_delete, last_accessed_at on context windows, internal token_count/priority, memory confidence half-life decay
 
 **Related Documents:**
 

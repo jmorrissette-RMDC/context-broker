@@ -1,0 +1,329 @@
+Here is the compliance audit report for the Context Broker implementation against the provided requirements documents. 
+
+---
+
+### REQ-001: MAD Engineering Requirements
+
+- **REQ-001 §1.1 Code Clarity**
+  - **Status:** PASS
+  - **Evidence:** Codebase generally uses descriptive naming, small functions, and clear docstrings explaining the "why" (e.g., `app/flows/context_assembly.py`).
+- **REQ-001 §1.2 Code Formatting**
+  - **Status:** PASS
+  - **Evidence:** `requirements.txt` includes `black==24.2.0`.
+- **REQ-001 §1.3 Code Linting**
+  - **Status:** PASS
+  - **Evidence:** `requirements.txt` includes `ruff==0.2.2`.
+- **REQ-001 §1.4 Unit Testing**
+  - **Status:** FAIL
+  - **Evidence:** Entire codebase
+  - **Notes:** No test files (e.g., `tests/` directory or `pytest` files) were provided in the source code.
+- **REQ-001 §1.5 Version Pinning**
+  - **Status:** PASS
+  - **Evidence:** `requirements.txt` uses strict `==` versioning for all dependencies.
+- **REQ-001 §2.1 StateGraph Mandate**
+  - **Status:** PASS
+  - **Evidence:** `app/flows/` directory contains StateGraphs for all programmatic and cognitive logic. Standard LangChain components are used where applicable.
+- **REQ-001 §2.2 State Immutability**
+  - **Status:** PASS
+  - **Evidence:** Node functions (e.g., `app/flows/message_pipeline.py`) return new dictionaries with updated state rather than modifying the input state in-place.
+- **REQ-001 §2.3 Checkpointing**
+  - **Status:** PASS
+  - **Evidence:** `app/flows/imperator_flow.py` uses `MemorySaver()` for within-session multi-turn state.
+- **REQ-001 §3.1 No Hardcoded Secrets**
+  - **Status:** PASS
+  - **Evidence:** `app/config.py` uses `os.environ.get()` to load API keys dynamically.
+- **REQ-001 §3.2 Input Validation**
+  - **Status:** PASS
+  - **Evidence:** `app/models.py` defines Pydantic models used to validate inputs in `app/routes/mcp.py` and `app/routes/chat.py`.
+- **REQ-001 §3.3 Null/None Checking**
+  - **Status:** PASS
+  - **Evidence:** Explicit `None` checks are present throughout (e.g., `if row is None:` in database queries).
+- **REQ-001 §4.1 Logging to stdout/stderr**
+  - **Status:** PASS
+  - **Evidence:** `app/logging_setup.py` configures `logging.StreamHandler(sys.stdout)`.
+- **REQ-001 §4.2 Structured Logging**
+  - **Status:** PASS
+  - **Evidence:** `app/logging_setup.py` implements `JsonFormatter` to output single-line JSON objects.
+- **REQ-001 §4.3 Log Levels**
+  - **Status:** PASS
+  - **Evidence:** `app/logging_setup.py` implements `update_log_level()` to set levels dynamically based on config.
+- **REQ-001 §4.4 Log Content**
+  - **Status:** PASS
+  - **Evidence:** Logs capture lifecycle events and errors without leaking secrets or full request bodies.
+- **REQ-001 §4.5 Specific Exception Handling**
+  - **Status:** FAIL
+  - **Evidence:** `app/main.py`
+  - **Notes:** The `_postgres_retry_loop` and `lifespan` functions use blanket `except (..., Exception) as exc:` blocks, which violates the rule against catching the base `Exception` class in application logic.
+- **REQ-001 §4.6 Resource Management**
+  - **Status:** PASS
+  - **Evidence:** Context managers (`async with pool.acquire()`, `with open()`) are used consistently for database connections and file handles.
+- **REQ-001 §4.7 Error Context**
+  - **Status:** PASS
+  - **Evidence:** Log statements include relevant identifiers (e.g., `window=%s`, `message_id=%s`).
+- **REQ-001 §4.8 Pipeline Observability**
+  - **Status:** PASS
+  - **Evidence:** `app/config.py` implements `verbose_log` and `verbose_log_auto`, which are toggled via the `verbose_logging` tuning parameter and used in pipeline flows.
+- **REQ-001 §5.1 No Blocking I/O**
+  - **Status:** FAIL
+  - **Evidence:** `app/config.py`, `app/prompt_loader.py`, `app/imperator/state_manager.py`, `app/flows/imperator_flow.py`
+  - **Notes:** Synchronous file I/O (`open()`, `read_text()`, `json.load()`) is executed directly inside `async` functions (e.g., `chat_completions` route, `_summarize_chunk` async node, `initialize` async method). This blocks the asyncio event loop. These should use `aiofiles` or be offloaded to an executor.
+- **REQ-001 §6.1 MCP Transport**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/mcp.py` implements HTTP/SSE transport.
+- **REQ-001 §6.2 Tool Naming**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/mcp.py` registers tools with domain prefixes (e.g., `conv_store_message`, `mem_search`).
+- **REQ-001 §6.3 Health Endpoint**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/health.py` exposes `GET /health` returning 200/503 with per-dependency status.
+- **REQ-001 §6.4 Prometheus Metrics**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/metrics.py` exposes `GET /metrics`. Metrics are incremented inside StateGraph nodes (e.g., `app/flows/message_pipeline.py`).
+- **REQ-001 §7.1 Graceful Degradation**
+  - **Status:** PASS
+  - **Evidence:** `app/flows/memory_search_flow.py` and `app/flows/search_flow.py` catch connection errors and return degraded results if Neo4j or the reranker are unavailable.
+- **REQ-001 §7.2 Independent Startup**
+  - **Status:** PASS
+  - **Evidence:** `app/main.py` catches database connection failures at startup and launches a background retry loop, allowing the container to start immediately.
+- **REQ-001 §7.3 Idempotency**
+  - **Status:** PASS
+  - **Evidence:** `app/flows/message_pipeline.py` uses `ON CONFLICT (idempotency_key) DO NOTHING`. Redis locks prevent duplicate assembly/extraction jobs.
+- **REQ-001 §7.4 Fail Fast**
+  - **Status:** PASS
+  - **Evidence:** `app/config.py` raises `RuntimeError` immediately if the config file is missing or invalid. `app/migrations.py` raises `RuntimeError` if a migration fails.
+- **REQ-001 §8.1 Configurable External Dependencies**
+  - **Status:** PASS
+  - **Evidence:** `config/config.example.yml` allows configuring LLM, embeddings, and reranker providers.
+- **REQ-001 §8.2 Externalized Configuration**
+  - **Status:** PASS
+  - **Evidence:** Prompts are externalized to `/config/prompts/` and loaded via `app/prompt_loader.py`.
+- **REQ-001 §8.3 Hot-Reload vs Startup Config**
+  - **Status:** PASS
+  - **Evidence:** `app/config.py` reads hot-reloadable settings fresh on each call via `load_config()`, while infrastructure settings are cached via `load_startup_config()`.
+
+---
+
+### REQ-002: pMAD Engineering Requirements
+
+- **REQ-002 §1.1 Root Usage Pattern**
+  - **Status:** PASS
+  - **Evidence:** `Dockerfile` runs `apt-get` and `useradd` as root, then immediately switches to `USER ${USER_NAME}`.
+- **REQ-002 §1.2 Service Account**
+  - **Status:** PASS
+  - **Evidence:** `Dockerfile` creates and uses the `context-broker` user (UID 1001).
+- **REQ-002 §1.3 File Ownership**
+  - **Status:** PASS
+  - **Evidence:** `Dockerfile` uses `COPY --chown=${USER_NAME}:${USER_NAME}`.
+- **REQ-002 §1.4 Base Image Pinning**
+  - **Status:** PASS
+  - **Evidence:** `Dockerfile` uses `python:3.12.1-slim`.
+- **REQ-002 §1.5 Dockerfile HEALTHCHECK**
+  - **Status:** PASS
+  - **Evidence:** `Dockerfile` includes a `HEALTHCHECK` directive using `curl`.
+- **REQ-002 §2.1 OTS Backing Services**
+  - **Status:** PASS
+  - **Evidence:** `docker-compose.yml` uses official, unmodified images for Postgres, Neo4j, and Redis.
+- **REQ-002 §2.2 Thin Gateway**
+  - **Status:** PASS
+  - **Evidence:** `nginx/nginx.conf` is a pure reverse proxy with no application logic.
+- **REQ-002 §2.3 Container-Only Deployment**
+  - **Status:** PASS
+  - **Evidence:** Entire system is deployed via `docker-compose.yml`.
+- **REQ-002 §3.1 Two-Network Pattern**
+  - **Status:** PASS
+  - **Evidence:** `docker-compose.yml` defines `default` (external) and `context-broker-net` (internal). Only Nginx connects to `default`.
+- **REQ-002 §3.2 Service Name DNS**
+  - **Status:** PASS
+  - **Evidence:** `docker-compose.yml` environment variables use service names (e.g., `POSTGRES_HOST=context-broker-postgres`).
+- **REQ-002 §4.1 Volume Pattern**
+  - **Status:** PASS
+  - **Evidence:** `docker-compose.yml` mounts `./config:/config:ro` and `./data:/data`.
+- **REQ-002 §4.2 Database Storage**
+  - **Status:** PASS
+  - **Evidence:** `docker-compose.yml` mounts specific subdirectories (e.g., `./data/postgres:/var/lib/postgresql/data`).
+- **REQ-002 §4.3 Backup and Recovery**
+  - **Status:** PASS
+  - **Evidence:** All state is isolated in `./data/`. `app/migrations.py` handles forward-only schema migrations.
+- **REQ-002 §4.4 Credential Management**
+  - **Status:** PASS
+  - **Evidence:** `docker-compose.yml` uses `env_file: - ./config/credentials/.env`.
+- **REQ-002 §5.1 Docker Compose**
+  - **Status:** PASS
+  - **Evidence:** A single `docker-compose.yml` is provided.
+- **REQ-002 §5.2 Health Check Architecture**
+  - **Status:** PASS
+  - **Evidence:** Docker `HEALTHCHECK` is present in compose, and `app/routes/health.py` aggregates dependency health.
+- **REQ-002 §5.3 Eventual Consistency**
+  - **Status:** PASS
+  - **Evidence:** `app/workers/arq_worker.py` processes embedding, assembly, and extraction asynchronously with retry and dead-letter queues.
+- **REQ-002 §6.1 MCP Endpoint**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/mcp.py` exposes `/mcp`.
+- **REQ-002 §6.2 OpenAI-Compatible Chat**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/chat.py` exposes `/v1/chat/completions`.
+- **REQ-002 §6.3 Authentication**
+  - **Status:** PASS
+  - **Evidence:** Application ships without built-in authentication, delegating to the gateway if needed.
+
+---
+
+### REQ-context-broker: Functional Requirements
+
+- **REQ-CB §1.1 Version Pinning**
+  - **Status:** PASS
+  - **Evidence:** `requirements.txt` and `Dockerfile` use strict versioning.
+- **REQ-CB §1.2 Code Formatting**
+  - **Status:** PASS
+  - **Evidence:** `black` is included in requirements.
+- **REQ-CB §1.3 Code Linting**
+  - **Status:** PASS
+  - **Evidence:** `ruff` is included in requirements.
+- **REQ-CB §1.4 Unit Testing**
+  - **Status:** FAIL
+  - **Evidence:** Entire codebase
+  - **Notes:** No unit tests were provided in the source code.
+- **REQ-CB §1.5 StateGraph Package Source**
+  - **Status:** PASS
+  - **Evidence:** `entrypoint.sh` reads `packages.source` from `config.yml` and installs accordingly (local, pypi, or devpi).
+- **REQ-CB §2.1 Root Usage Pattern**
+  - **Status:** PASS
+  - **Evidence:** `Dockerfile` drops root privileges immediately after setup.
+- **REQ-CB §2.2 Service Account**
+  - **Status:** PASS
+  - **Evidence:** `Dockerfile` creates the `context-broker` user.
+- **REQ-CB §2.3 File Ownership**
+  - **Status:** PASS
+  - **Evidence:** `Dockerfile` uses `COPY --chown`.
+- **REQ-CB §3.1 Two-Volume Pattern**
+  - **Status:** PASS
+  - **Evidence:** `docker-compose.yml` mounts `/config` and `/data`.
+- **REQ-CB §3.2 Data Directory Organization**
+  - **Status:** PASS
+  - **Evidence:** `docker-compose.yml` and `app/imperator/state_manager.py` adhere to the required directory structure.
+- **REQ-CB §3.3 Config Directory Organization**
+  - **Status:** PASS
+  - **Evidence:** `config/config.example.yml` and `config/credentials/.env` structure is supported.
+- **REQ-CB §3.4 Credential Management**
+  - **Status:** PASS
+  - **Evidence:** `app/config.py` resolves API keys dynamically from environment variables.
+- **REQ-CB §3.5 Database Storage**
+  - **Status:** PASS
+  - **Evidence:** `docker-compose.yml` mounts backing services to `/data/` subdirectories.
+- **REQ-CB §3.6 Backup and Recovery**
+  - **Status:** PASS
+  - **Evidence:** Architecture supports host-level directory backups.
+- **REQ-CB §3.7 Schema Migration**
+  - **Status:** PASS
+  - **Evidence:** `app/migrations.py` implements a robust, forward-only migration system.
+- **REQ-CB §4.1 MCP Transport**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/mcp.py` implements HTTP/SSE transport.
+- **REQ-CB §4.2 OpenAI-Compatible Chat**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/chat.py` implements `/v1/chat/completions` with streaming support.
+- **REQ-CB §4.3 Authentication**
+  - **Status:** PASS
+  - **Evidence:** Ships without authentication.
+- **REQ-CB §4.4 Health Endpoint**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/health.py` returns aggregated health status.
+- **REQ-CB §4.5 Tool Naming Convention**
+  - **Status:** PASS
+  - **Evidence:** Tools are prefixed correctly (e.g., `conv_`, `mem_`).
+- **REQ-CB §4.6 MCP Tool Inventory**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/mcp.py` registers all 12 required tools.
+- **REQ-CB §4.5 (LangGraph Mandate)**
+  - **Status:** PASS
+  - **Evidence:** `app/flows/` contains StateGraphs for all logic.
+- **REQ-CB §4.6 (LangGraph State Immutability)**
+  - **Status:** PASS
+  - **Evidence:** StateGraph nodes return new dictionaries.
+- **REQ-CB §4.7 Thin Gateway**
+  - **Status:** PASS
+  - **Evidence:** `nginx/nginx.conf` acts purely as a reverse proxy.
+- **REQ-CB §4.8 Prometheus Metrics**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/metrics.py` and `app/flows/metrics_flow.py` expose metrics generated inside StateGraphs.
+- **REQ-CB §5.1 Configuration File**
+  - **Status:** PASS
+  - **Evidence:** `app/config.py` manages hot-reloadable and startup configurations.
+- **REQ-CB §5.2 Inference Provider Configuration**
+  - **Status:** PASS
+  - **Evidence:** `config/config.example.yml` supports LLM, embeddings, and reranker slots.
+- **REQ-CB §5.3 Build Type Configuration**
+  - **Status:** PASS
+  - **Evidence:** `config/config.example.yml` defines `standard-tiered` and `knowledge-enriched` build types.
+- **REQ-CB §5.4 Token Budget Resolution**
+  - **Status:** PASS
+  - **Evidence:** `app/token_budget.py` resolves budgets dynamically, including querying the LLM provider for `auto`.
+- **REQ-CB §5.5 Imperator Configuration**
+  - **Status:** PASS
+  - **Evidence:** `app/flows/imperator_flow.py` conditionally loads admin tools based on `config.yml`.
+- **REQ-CB §5.6 Package Source Configuration**
+  - **Status:** PASS
+  - **Evidence:** `entrypoint.sh` reads package source settings.
+- **REQ-CB §6.1 Logging to stdout/stderr**
+  - **Status:** PASS
+  - **Evidence:** `app/logging_setup.py` outputs to `sys.stdout`.
+- **REQ-CB §6.2 Structured Logging**
+  - **Status:** PASS
+  - **Evidence:** `app/logging_setup.py` formats logs as JSON.
+- **REQ-CB §6.3 Log Levels**
+  - **Status:** PASS
+  - **Evidence:** Log levels are configurable via `config.yml`.
+- **REQ-CB §6.4 Log Content Standards**
+  - **Status:** PASS
+  - **Evidence:** Logs are clean and do not leak secrets.
+- **REQ-CB §6.5 Dockerfile HEALTHCHECK**
+  - **Status:** PASS
+  - **Evidence:** `Dockerfile` includes a `HEALTHCHECK`.
+- **REQ-CB §6.6 Health Check Architecture**
+  - **Status:** PASS
+  - **Evidence:** Both Docker-level and HTTP-level health checks are implemented.
+- **REQ-CB §6.7 Specific Exception Handling**
+  - **Status:** FAIL
+  - **Evidence:** `app/main.py`
+  - **Notes:** Blanket `except Exception:` blocks are used in `_postgres_retry_loop` and `lifespan`.
+- **REQ-CB §6.8 Resource Management**
+  - **Status:** PASS
+  - **Evidence:** Context managers are used appropriately.
+- **REQ-CB §6.9 Error Context**
+  - **Status:** PASS
+  - **Evidence:** Exceptions and error logs include relevant identifiers.
+- **REQ-CB §7.1 Graceful Degradation and Eventual Consistency**
+  - **Status:** PASS
+  - **Evidence:** Background workers retry on failure; missing optional services (Neo4j) trigger degraded modes.
+- **REQ-CB §7.2 Independent Container Startup**
+  - **Status:** PASS
+  - **Evidence:** Application starts even if Postgres is down, utilizing a background retry loop.
+- **REQ-CB §7.3 Network Topology**
+  - **Status:** PASS
+  - **Evidence:** `docker-compose.yml` isolates internal traffic.
+- **REQ-CB §7.4 Docker Compose**
+  - **Status:** PASS
+  - **Evidence:** Single `docker-compose.yml` provided.
+- **REQ-CB §7.5 Container-Only Deployment**
+  - **Status:** PASS
+  - **Evidence:** Fully containerized architecture.
+- **REQ-CB §7.6 Asynchronous Correctness**
+  - **Status:** FAIL
+  - **Evidence:** `app/config.py`, `app/prompt_loader.py`, `app/imperator/state_manager.py`, `app/flows/imperator_flow.py`
+  - **Notes:** Synchronous file I/O operations (`open()`, `read_text()`) are executed directly inside `async` functions, blocking the event loop.
+- **REQ-CB §7.7 Input Validation**
+  - **Status:** PASS
+  - **Evidence:** Pydantic models in `app/models.py` validate all inputs.
+- **REQ-CB §7.8 Null/None Checking**
+  - **Status:** PASS
+  - **Evidence:** Explicit `None` checks are implemented.
+- **REQ-CB §8.1 README**
+  - **Status:** FAIL
+  - **Evidence:** Entire codebase
+  - **Notes:** No `README.md` file was provided in the source code.
+- **REQ-CB §8.2 Tool Documentation**
+  - **Status:** PASS
+  - **Evidence:** `app/routes/mcp.py` includes detailed schemas and descriptions for all tools.
+- **REQ-CB §8.3 Config Template**
+  - **Status:** PASS
+  - **Evidence:** `config/config.example.yml` is provided and well-documented.
