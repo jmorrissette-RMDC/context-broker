@@ -220,19 +220,23 @@ class TestTwoNetworkTopology:
             "context-broker-net"
         }, f"{service_name} should only be on context-broker-net, got {nets}"
 
-    def test_ollama_on_both_networks(self, compose: dict):
+    def test_ollama_on_internal_network(self, compose: dict):
+        """Ollama must be on context-broker-net for internal serving."""
         nets = self._get_networks(compose, "context-broker-ollama")
-        assert "default" in nets, "Ollama must be on 'default' for model pulls"
-        assert (
-            "context-broker-net" in nets
-        ), "Ollama must be on 'context-broker-net' for internal serving"
+        assert "context-broker-net" in nets, "Ollama must be on context-broker-net"
 
-    def test_internal_network_is_internal(self, compose: dict):
-        """context-broker-net must be declared as internal: true."""
+    def test_internal_network_is_bridge(self, compose: dict):
+        """context-broker-net must be a standard bridge (NOT internal:true).
+
+        Containers need outbound internet via Docker NAT for cloud LLM APIs.
+        """
         net_def = compose.get("networks", {}).get("context-broker-net", {})
-        assert (
-            net_def.get("internal") is True
-        ), "context-broker-net must be declared with 'internal: true'"
+        assert net_def.get("internal") is not True, (
+            "context-broker-net must NOT be internal:true — containers need outbound internet"
+        )
+        assert net_def.get("driver", "bridge") == "bridge", (
+            "context-broker-net must be a bridge network"
+        )
 
 
 # ===================================================================
@@ -356,6 +360,7 @@ class TestNoHardcodedSecrets:
         ".pytest_cache",
         "node_modules",
         "docs",
+        "tests",  # Test files may contain test credentials
     }
     _SKIP_SUFFIXES = {".pyc", ".pyo", ".egg-info", ".whl", ".tar.gz"}
 

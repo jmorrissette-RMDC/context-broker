@@ -2,15 +2,15 @@
 End-to-end pipeline tests (T-5.1, T-5.2, T-4.2).
 
 Verifies the async processing pipeline by storing messages via MCP and
-inspecting Postgres directly for embeddings, dedup, and context assembly.
+inspecting Postgres (via SSH + docker exec) for embeddings, dedup, and
+context assembly.
 
 Connects to:
   - MCP endpoint: http://192.168.1.110:8080/mcp
-  - Postgres: 192.168.1.110:5432 (context_broker/contextbroker123)
+  - Postgres: via SSH to 192.168.1.110, docker exec into context-broker-postgres
 """
 
-import asyncio
-import json
+import subprocess
 import time
 import uuid
 
@@ -19,16 +19,28 @@ import pytest
 
 from tests.conftest_e2e import (
     BASE_URL,
-    PG_DATABASE,
-    PG_HOST,
-    PG_PASSWORD,
-    PG_PORT,
-    PG_USER,
+    SSH_HOST,
+    SSH_USER,
     extract_mcp_result,
     mcp_call,
 )
 
 pytestmark = pytest.mark.e2e
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _pg_query(sql: str) -> str:
+    """Run a SQL query against Postgres via SSH + docker exec."""
+    result = subprocess.run(
+        ["ssh", f"{SSH_USER}@{SSH_HOST}",
+         f"docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c \"{sql}\""],
+        capture_output=True, text=True, timeout=15
+    )
+    return result.stdout.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -40,27 +52,6 @@ pytestmark = pytest.mark.e2e
 def client():
     with httpx.Client(base_url=BASE_URL, timeout=60.0) as c:
         yield c
-
-
-@pytest.fixture(scope="module")
-def event_loop():
-    """Module-scoped event loop for async tests."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
-async def _get_pg_connection():
-    """Create a direct asyncpg connection to Postgres."""
-    import asyncpg
-
-    return await asyncpg.connect(
-        host=PG_HOST,
-        port=PG_PORT,
-        user=PG_USER,
-        password=PG_PASSWORD,
-        database=PG_DATABASE,
-    )
 
 
 def _create_conversation(client: httpx.Client) -> str:
@@ -117,24 +108,17 @@ class TestPipelineEmbedding:
         assert message_id is not None
 
         # Poll Postgres for the embedding (async pipeline may take a few seconds)
-        async def check_embedding():
-            conn = await _get_pg_connection()
-            try:
-                # Wait up to 30 seconds for the embedding to appear
-                for _ in range(30):
-                    row = await conn.fetchrow(
-                        "SELECT vector IS NOT NULL AS has_vector "
-                        "FROM conversation_messages WHERE id = $1",
-                        uuid.UUID(message_id),
-                    )
-                    if row and row["has_vector"]:
-                        return True
-                    await asyncio.sleep(1)
-                return False
-            finally:
-                await conn.close()
+        has_embedding = False
+        for _ in range(30):
+            output = _pg_query(
+                f"SELECT vector IS NOT NULL AS has_vector "
+                f"FROM conversation_messages WHERE id = '{message_id}'"
+            )
+            if "t" in output:
+                has_embedding = True
+                break
+            time.sleep(1)
 
-        has_embedding = asyncio.run(check_embedding())
         assert has_embedding, (
             f"Message {message_id} did not get an embedding vector within 30s"
         )
@@ -151,12 +135,13 @@ class TestPipelineIntermediateOutputs:
     def test_message_stored_in_postgres(self, client):
         """Verify stored message exists in conversation_messages table."""
         conv_id = _create_conversation(client)
+        cw_id = _create_context_window(client, conv_id)
         unique_content = f"DB check test {uuid.uuid4().hex}"
         resp = mcp_call(
             client,
             "conv_store_message",
             {
-                "conversation_id": conv_id,
+                "context_window_id": cw_id,
                 "role": "user",
                 "sender": "e2e-pipeline",
                 "content": unique_content,
@@ -166,58 +151,34 @@ class TestPipelineIntermediateOutputs:
         result = extract_mcp_result(resp)
         message_id = result["message_id"]
 
-        async def verify():
-            conn = await _get_pg_connection()
-            try:
-                row = await conn.fetchrow(
-                    "SELECT id, content, role, sender "
-                    "FROM conversation_messages WHERE id = $1",
-                    uuid.UUID(message_id),
-                )
-                assert row is not None, f"Message {message_id} not found in DB"
-                assert row["content"] == unique_content
-                assert row["role"] == "user"
-                assert row["sender"] == "e2e-pipeline"
-            finally:
-                await conn.close()
-
-        asyncio.run(verify())
+        output = _pg_query(
+            f"SELECT content, role, sender "
+            f"FROM conversation_messages WHERE id = '{message_id}'"
+        )
+        assert output, f"Message {message_id} not found in DB"
+        assert unique_content in output, f"Content mismatch in DB row: {output}"
+        assert "user" in output
+        assert "e2e-pipeline" in output
 
     def test_conversation_exists_in_postgres(self, client):
         """Verify created conversation exists in conversations table."""
         conv_id = _create_conversation(client)
 
-        async def verify():
-            conn = await _get_pg_connection()
-            try:
-                row = await conn.fetchrow(
-                    "SELECT id FROM conversations WHERE id = $1",
-                    uuid.UUID(conv_id),
-                )
-                assert row is not None, f"Conversation {conv_id} not found in DB"
-            finally:
-                await conn.close()
-
-        asyncio.run(verify())
+        output = _pg_query(
+            f"SELECT id FROM conversations WHERE id = '{conv_id}'"
+        )
+        assert conv_id in output, f"Conversation {conv_id} not found in DB: {output}"
 
     def test_context_window_exists_in_postgres(self, client):
         """Verify created context window exists in context_windows table."""
         conv_id = _create_conversation(client)
         cw_id = _create_context_window(client, conv_id)
 
-        async def verify():
-            conn = await _get_pg_connection()
-            try:
-                row = await conn.fetchrow(
-                    "SELECT id, build_type FROM context_windows WHERE id = $1",
-                    uuid.UUID(cw_id),
-                )
-                assert row is not None, f"Context window {cw_id} not found in DB"
-                assert row["build_type"] == "passthrough"
-            finally:
-                await conn.close()
-
-        asyncio.run(verify())
+        output = _pg_query(
+            f"SELECT id, build_type FROM context_windows WHERE id = '{cw_id}'"
+        )
+        assert cw_id in output, f"Context window {cw_id} not found in DB: {output}"
+        assert "passthrough" in output, f"build_type mismatch: {output}"
 
 
 # ===================================================================
