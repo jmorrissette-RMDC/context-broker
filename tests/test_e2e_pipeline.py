@@ -111,7 +111,7 @@ class TestPipelineEmbedding:
         has_embedding = False
         for _ in range(30):
             output = _pg_query(
-                f"SELECT vector IS NOT NULL AS has_vector "
+                f"SELECT embedding IS NOT NULL AS has_vector "
                 f"FROM conversation_messages WHERE id = '{message_id}'"
             )
             if "t" in output:
