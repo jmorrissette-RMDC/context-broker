@@ -477,10 +477,10 @@ imperator:
 **7.3 Network Topology**
 
 -   Two Docker networks per deployment:
-    -   **External** (`default`) — the host-exposed network. Only the gateway connects here.
-    -   **Internal** (`context-broker-net`) — private bridge network for all containers.
--   The gateway is the sole boundary between external traffic and internal services.
--   LangGraph and backing service containers connect only to the internal network.
+    -   **External** (`default`) — the host-exposed network. Only the gateway connects here and publishes ports for inbound access.
+    -   **Internal** (`context-broker-net`) — a standard Docker bridge network for all containers. This is NOT marked `internal: true` — containers on this network have outbound internet access via Docker's host NAT for cloud LLM APIs, embedding endpoints, and package downloads. No ports are published on this network, so containers are not reachable from outside.
+-   The gateway is the sole inbound boundary — it publishes ports on the external network and routes traffic to the internal network.
+-   All other containers (langgraph, backing services, Ollama) connect only to `context-broker-net`. They can reach the internet (outbound) but are not reachable from the host (no published ports).
 -   All inter-container communication uses Docker Compose service names, never IP addresses.
 
 ```yaml
@@ -488,28 +488,30 @@ imperator:
 services:
   context-broker:          # nginx gateway
     networks:
-      - default            # external — exposes ports to host
+      - default            # external — publishes ports for inbound access
       - context-broker-net # internal — routes to langgraph
+    ports:
+      - "8080:8080"        # only published port in the deployment
 
   context-broker-langgraph:
     networks:
-      - context-broker-net # internal only
+      - context-broker-net # outbound internet via NAT, no inbound from host
 
   context-broker-postgres:
     networks:
-      - context-broker-net # internal only
+      - context-broker-net # outbound internet via NAT, no inbound from host
 
   context-broker-neo4j:
     networks:
-      - context-broker-net # internal only
+      - context-broker-net # outbound internet via NAT, no inbound from host
 
   context-broker-redis:
     networks:
-      - context-broker-net # internal only
+      - context-broker-net # outbound internet via NAT, no inbound from host
 
 networks:
   context-broker-net:
-    driver: bridge
+    driver: bridge         # standard bridge — NOT internal:true
 ```
 
 **7.4 Docker Compose**

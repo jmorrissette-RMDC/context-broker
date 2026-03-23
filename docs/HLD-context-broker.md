@@ -42,7 +42,7 @@ The system is deployed as a Docker Compose group of 5 containers, communicating 
                     └─────────────────────────────────────────────┘
 ```
 
-The gateway resides on both the external host-exposed network and the internal private network (`context-broker-net`). All other containers connect strictly to the internal network.
+The gateway resides on both the external host-exposed network and the internal `context-broker-net` bridge network. All other containers connect only to `context-broker-net`. This is a standard Docker bridge network (not `internal: true`) — containers have outbound internet access via Docker's host NAT for cloud LLM APIs and package downloads, but no ports are published so they are not directly reachable from outside. The gateway is the sole inbound entry point, publishing port 8080 on the host.
 
 | Container | Role | Image |
 | --- | --- | --- |
