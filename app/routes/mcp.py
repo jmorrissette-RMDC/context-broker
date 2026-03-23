@@ -11,10 +11,18 @@ Endpoints:
 """
 
 import asyncio
+import decimal
 import json
 import logging
 import time
 import uuid
+
+
+def _json_default(obj: object) -> object:
+    """Handle non-standard types in MCP JSON responses."""
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 from collections import OrderedDict
 from typing import Any, AsyncGenerator
 
@@ -245,7 +253,7 @@ async def mcp_tool_call(
                     {
                         "type": "text",
                         "text": (
-                            json.dumps(result)
+                            json.dumps(result, default=_json_default)
                             if isinstance(result, dict)
                             else str(result)
                         ),
