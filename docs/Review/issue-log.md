@@ -399,19 +399,43 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | R7-m26 | R7 | minor | MCP schema `tool_calls` type "object" not "array" | `app/routes/mcp.py` | OPEN | |
 | R7-m27 | R7 | minor | Imperator conversation has no `flow_id`/`user_id` | `app/imperator/state_manager.py` | OPEN | |
 
+### Post-Gate Findings (deployment and testing)
+
+| ID | Round | Severity | Description | File(s) | Status | Notes |
+|----|-------|----------|-------------|---------|--------|-------|
+| PG-01 | Post | major | Infinity serves at `/embeddings` not `/v1/embeddings` — embeddings config had wrong base_url | `config/config.example.yml` | FIXED | Removed `/v1` suffix from embeddings base_url. |
+| PG-02 | Post | major | Reranker code called `/v1/rerank` but Infinity serves at `/rerank` | `app/flows/search_flow.py` | FIXED | Changed to `/rerank`. base_url includes provider prefix when needed. |
+| PG-03 | Post | major | Decimal not JSON serializable in MCP search responses | `app/routes/mcp.py` | FIXED | Postgres ts_rank returns Decimal. Added `_json_default` handler. |
+| PG-04 | Post | minor | Embedding test queried wrong column name `vector` instead of `embedding` | `tests/test_e2e_pipeline.py` | FIXED | Column is `embedding` in schema. |
+| PG-05 | Post | minor | Ollama healthcheck false negative — bash TCP trick unreliable | `docker-compose.yml` | FIXED | Changed to `ollama list`. |
+| PG-06 | Post | minor | Gateway healthcheck false negative — Alpine wget resolves localhost to IPv6 | `docker-compose.yml` | FIXED | Changed to `http://127.0.0.1:8080/health`. |
+| PG-07 | Post | blocker | REQ-001 missing AE/TE separation requirements (§9-13) | `draft-REQ-001-mad-requirements.md` | FIXED | Added §9 AE/TE Separation, §10 Dynamic Loading, §11 Imperator, §12 TE Package, §13 Base Contract. |
+| PG-08 | Post | blocker | REQ-002 missing TE configuration separation (§7) | `draft-REQ-002-pmad-requirements.md` | FIXED | Added §7 TE Configuration with per-use inference. |
+| PG-09 | Post | blocker | REQ-context-broker says "single config.yml" — contradicts AE/TE separation | `REQ-context-broker.md` | FIXED | Split into AE config (config.yml) and TE config (imperator.yml). |
+| PG-10 | Post | major | Single global `llm` config — no per-use inference configuration | `app/config.py`, `config/config.example.yml` | OPEN | Imperator, summarization, extraction need independent LLM configs. |
+| PG-11 | Post | major | No Anthropic provider support — `get_chat_model()` only creates `ChatOpenAI` | `app/config.py` | OPEN | Need `provider` field to select `ChatAnthropic`. Hopper has the pattern. |
+| PG-12 | Post | major | No TE config file — Imperator config embedded in AE's config.yml | `config/config.example.yml` | OPEN | Need separate `/config/imperator.yml` per REQ-002 §7. |
+| PG-13 | Post | major | No Imperator Identity/Purpose declarations in system prompt | `app/flows/imperator_flow.py` | OPEN | REQ-001 §11.2 requires baked-in Identity and Purpose. |
+| PG-14 | Post | minor | Together rerank models require dedicated endpoints (non-serverless) | N/A | WONTFIX | Account limitation. Skipped in cross-provider tests. |
+| PG-15 | Post | minor | REQ-104 missing package registration in deliverable structure | `draft-REQ-104-code-standard.md` | FIXED | Added item 7 for AE/TE entry_points. |
+
 ---
 
 ## Summary
 
-Updated 2026-03-23 after Round 7 review.
+Updated 2026-03-23 after post-gate deployment and testing.
 
 | Status | Count |
 |--------|-------|
-| OPEN | 50 |
-| FIXED | 156 |
-| WONTFIX | 12 |
+| OPEN | 54 |
+| FIXED | 165 |
+| WONTFIX | 13 |
 | FALSE_POSITIVE | 1 |
 | REMOVED | 1 |
+
+### Open Items
+
+50 items from Round 7 + 4 new items (PG-10 through PG-13) from post-gate findings.
 
 ### Open Items
 
