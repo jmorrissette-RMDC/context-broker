@@ -36,7 +36,7 @@ A State 4 MAD separates infrastructure (AE — Action Engine) from intelligence 
 
 -   **AE** — MCP tool handlers, message routing, database operations, queue processing. Stable, changes infrequently.
 -   **TE** — The Imperator (conversational agent) and its cognitive apparatus. Evolves independently of infrastructure.
--   **Configuration** — A single `config.yml` controls inference providers, model selection, package sources, token budgets, and build type definitions. Code reads config fresh on each operation — no restart required after config changes.
+-   **Configuration** — Separated into AE configuration (infrastructure settings, database connections, queue config, package sources) and TE configuration (Imperator settings, inference provider assignments per cognitive function, build type definitions, cognitive parameters). Both are hot-reloadable for inference and tuning settings; infrastructure settings require restart.
 
 ### Container Architecture
 
@@ -308,41 +308,50 @@ The Context Broker exposes the following tools via MCP. Full input/output schema
 
 ### 5. Configuration
 
-**Purpose:** All external dependencies and tuning parameters are configurable via a single file.
+**Purpose:** All external dependencies and tuning parameters are configurable. Configuration is separated into AE (infrastructure) and TE (cognitive) concerns per REQ-001 §9 and REQ-002 §7.
 
-**5.1 Configuration File**
+**5.1 Configuration Separation**
 
--   All configuration lives in `/config/config.yml`.
--   Inference providers, models, build type definitions, and token budgets are read from config on each operation. Changes to these take effect immediately without restart.
--   Infrastructure configuration (database connection strings, ports, network settings) is read at startup. Changes to these require a container restart.
+-   Configuration is split into two files:
+    -   **AE configuration** (`/config/config.yml`): Infrastructure settings (database connections, ports, network), queue configuration, package source, operational settings (log level, health check intervals). Read at startup; changes require restart.
+    -   **TE configuration** (`/config/imperator.yml`): Imperator settings (Identity, Purpose, Persona), inference provider assignments per cognitive function, build type definitions, cognitive parameters (token budgets, tier percentages, tuning). Hot-reloadable; changes take effect without restart.
+-   The TE configuration is conceptually part of the TE package. When the TE is upgraded or replaced, its configuration changes without touching AE infrastructure settings.
 
 **5.2 Inference Provider Configuration**
 
--   Three independent provider slots: LLM, embeddings, and reranker.
--   Each slot accepts an OpenAI-compatible `base_url`, `model`, and API key reference.
--   The provider interface works with any service that speaks the OpenAI wire protocol (OpenAI, Google, xAI, Groq, Ollama, vLLM, etc.).
+-   Inference providers are configured per cognitive function, not globally. Different functions have different requirements (the Imperator needs a capable conversational model; summarization needs a fast/cheap model; extraction has its own needs).
+-   Each inference slot accepts a `base_url`, `model`, and optional `provider` field. The `provider` field defaults to `"openai"` (OpenAI-compatible wire protocol) but can be set to `"anthropic"` for Anthropic's native API.
+-   Embedding and reranker slots are independent of LLM slots.
 
 ```yaml
-llm:
-  base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-  # API keys: set OPENAI_API_KEY (or provider equivalent) as a container
-  # environment variable. LangChain reads it automatically.
+# TE configuration (imperator.yml)
+inference:
+  imperator:
+    provider: anthropic          # "openai" (default) or "anthropic"
+    model: claude-haiku-4-5-20251001
+    # API key via ANTHROPIC_API_KEY env var
+
+  summarization:
+    base_url: http://context-broker-ollama:11434/v1
+    model: qwen2.5:7b
+
+  extraction:
+    base_url: http://context-broker-ollama:11434/v1
+    model: qwen2.5:7b
 
 embeddings:
-  base_url: https://api.openai.com/v1
-  model: text-embedding-3-small
-  # API keys: set OPENAI_API_KEY as a container environment variable.
+  base_url: http://context-broker-infinity:7997
+  model: nomic-ai/nomic-embed-text-v1.5
 
 reranker:
-  provider: api                # "api" or "none"
+  provider: api                  # "api" or "none"
   base_url: http://context-broker-infinity:7997
   model: mixedbread-ai/mxbai-rerank-xsmall-v1
   top_n: 10
 ```
 
--   The reranker defaults to the local Infinity container, which serves the `/v1/rerank` endpoint on the internal network. No API key required.
--   `provider: api` hits a `/v1/rerank` endpoint — works with Infinity (local), Together, Cohere, Jina, Voyage, or any compatible provider.
+-   The reranker defaults to the local Infinity container, which serves the `/rerank` endpoint on the internal network. No API key required.
+-   `provider: api` hits a `/rerank` endpoint — works with Infinity (local), Together, Cohere, Jina, Voyage, or any compatible provider. The `base_url` includes any path prefix the provider requires.
 -   Setting `provider: none` disables reranking (raw RRF scores used).
 
 **5.3 Build Type Configuration**
@@ -397,16 +406,21 @@ build_types:
 **5.5 Imperator Configuration**
 
 ```yaml
+# TE configuration (imperator.yml)
 imperator:
+  identity: "I am the Context Broker's Imperator — the cognitive agent responsible for this context engineering service."
+  purpose: "I manage conversations, assemble context windows, extract knowledge, and help users understand and operate the Context Broker."
   build_type: standard-tiered    # or "knowledge-enriched"
   max_context_tokens: auto
-  admin_tools: false             # true = allow config and database modification
+  participant_id: imperator
+  admin_tools: false             # true = allow config and database modification (requires restart)
 ```
 
+-   The Imperator must declare Identity (what it is) and Purpose (what it is for) per REQ-001 §11.2. These are expressed in the system prompt template and defined in the TE configuration.
 -   The Imperator is the built-in reference consumer of the Context Broker. It uses the same conversation storage, context assembly, embedding, and knowledge extraction capabilities that external callers access via MCP. It serves as both a conversational interface and a live demonstration of the system's capabilities.
 -   `build_type` controls which retrieval layers the Imperator's context window uses. Defaults to `standard-tiered` for lower inference cost. Switching to `knowledge-enriched` activates the full retrieval pipeline including vector similarity search and knowledge graph traversal.
 -   `admin_tools: false` (default): Imperator can read system state, search conversations and memories, introspect context assembly.
--   `admin_tools: true`: Imperator can additionally read/write `config.yml` and run read-only database queries.
+-   `admin_tools: true`: Imperator can additionally read/write configuration and run read-only database queries.
 
 **5.6 Package Source Configuration**
 

@@ -143,12 +143,14 @@ Malformed data is rejected at the boundary with appropriate HTTP status codes, p
 
 ## 7. Configuration System
 
-All external dependencies and tuning parameters are governed by a single file: `/config/config.yml`.
+Configuration is separated into AE (infrastructure) and TE (cognitive) concerns per REQ-001 §9 and REQ-002 §7:
 
-- **Startup Configuration:** Database connection strings, network topology, and the StateGraph **package source** (`local`, `pypi`, or `devpi`) are read at startup and require a restart to change.
-- **Hot-Reloadable Inference:** `llm`, `embeddings`, `reranker` provider settings, and build types are read fresh on each operation. Deployers can swap models or endpoints without container restarts.
+- **AE Configuration** (`/config/config.yml`): Database connection strings, network topology, queue settings, package source (`local`, `pypi`, or `devpi`), operational parameters (log level, health check intervals). Read at startup; changes require a container restart.
+- **TE Configuration** (`/config/imperator.yml`): Imperator settings (Identity, Purpose, Persona), inference provider assignments per cognitive function (Imperator conversation, summarization, extraction), embeddings, reranker, build type definitions, cognitive tuning parameters. Hot-reloadable; changes take effect without restart.
+- **Per-Use Inference:** Different cognitive functions use different LLM configurations. The Imperator's conversational model, summarization model, and extraction model are independently configurable. This enables cost/quality trade-offs (e.g., a capable model for the Imperator, a fast/cheap model for bulk summarization).
+- **Provider Abstraction:** Each LLM slot supports a `provider` field (`"openai"` for OpenAI-compatible providers, `"anthropic"` for Anthropic's native API). Defaults to `"openai"`.
 - **Token Budget Resolution:** When a context window requests `auto` max tokens, the system queries the configured provider's model endpoint to automatically resolve the context length, falling back to a configured default if unavailable. Callers may override the build type's default token budget with an explicit `max_tokens` at window creation time. Once resolved, the token budget is stored with the window and remains immutable; subsequent model changes do not retroactively affect existing windows.
-- **Credential Management:** API keys are never hardcoded in `config.yml`. They are stored in `/config/credentials/.env` and loaded into the container environment via `env_file` in `docker-compose.yml`. LangChain reads standard platform environment variables automatically (e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). No `api_key_env` indirection — standard env var names are used directly.
+- **Credential Management:** API keys are never hardcoded in configuration files. They are stored in `/config/credentials/.env` and loaded into the container environment via `env_file` in `docker-compose.yml`. LangChain reads standard platform environment variables automatically (e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). No `api_key_env` indirection — standard env var names are used directly.
 
 ## 8. Build Types and Retrieval
 
@@ -184,14 +186,16 @@ The system uses ARQ (Async Redis Queue) — a standard, lightweight Python libra
 
 ## 10. Imperator Design
 
-The Imperator is the Context Broker's built-in conversational agent. It demonstrates and consumes the service's own capabilities via a graph-based ReAct loop (agent node → tool node → conditional edges back to agent).
+The Imperator is the Context Broker's TE — the cognitive agent that owns the service's conversational intelligence. It is a fully autonomous agent with declared Identity and Purpose per REQ-001 §11.
 
-- **Graph-Based ReAct:** Implemented as a LangGraph StateGraph with an agent node (LLM call with `bind_tools()`) and a tool node. Conditional edges route back to the agent when tool calls are present, or to the end node when the response is complete. This is a proper graph-based ReAct pattern, not an imperative loop.
+- **Identity and Purpose:** The Imperator declares its Identity ("the Context Broker's cognitive agent responsible for context engineering") and Purpose ("manage conversations, assemble context windows, extract knowledge, help users understand and operate the system") in the TE configuration (`/config/imperator.yml`). These are expressed through the system prompt template and do not change at runtime.
+- **Graph-Based ReAct:** Implemented as a LangGraph StateGraph with an agent node (LLM call with `bind_tools()`) and a tool node. Conditional edges route back to the agent when tool calls are present, or to the end node when the response is complete. This is a proper graph-based ReAct pattern (System 3 ReAct), not an imperative loop.
+- **Per-Use Inference:** The Imperator's LLM is configured independently from the summarization and extraction LLMs. The TE configuration assigns a specific provider/model for the Imperator's conversational inference.
 - **No MemorySaver:** The Imperator does **not** use LangGraph checkpointing. The `conversation_messages` table is the persistence layer. The Imperator's `context_window_id` serves as the conceptual thread_id. Before each turn, it calls `conv_retrieve_context` to load its assembled context, and after each turn, messages (including tool calls and tool results) are stored via `conv_store_message`.
 - **Self-Consumption:** The Imperator uses the same internal functions that back the MCP tools (`conv_search`, `mem_search`, etc.), consuming the Context Broker's own context assembly pipeline.
 - **Configurable Context:** The Imperator has its own configurable `build_type` and token budget, allowing operators to tune its cognitive strategy independently.
 - **Persistent Continuity:** It stores its current `conversation_id` and `context_window_id` in `/data/imperator_state.json`. Upon reboot, it resumes the exact same continuous context window, ensuring long-term memory across restarts. If the state file is missing, or the referenced conversation no longer exists, it automatically creates a new conversation and context window and persists the new IDs.
-- **Admin Capabilities:** Governed by `config.yml`, setting `admin_tools: true` grants the Imperator additional read/write tools to modify configuration files and execute read-only database queries.
+- **Admin Capabilities:** Governed by TE configuration, setting `admin_tools: true` grants the Imperator additional read/write tools to modify configuration files and execute read-only database queries.
 
 ## 11. Resilience and Observability
 
