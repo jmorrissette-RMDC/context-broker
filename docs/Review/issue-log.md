@@ -412,10 +412,10 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | PG-07 | Post | blocker | REQ-001 missing AE/TE separation requirements (§9-13) | `draft-REQ-001-mad-requirements.md` | FIXED | Added §9 AE/TE Separation, §10 Dynamic Loading, §11 Imperator, §12 TE Package, §13 Base Contract. |
 | PG-08 | Post | blocker | REQ-002 missing TE configuration separation (§7) | `draft-REQ-002-pmad-requirements.md` | FIXED | Added §7 TE Configuration with per-use inference. |
 | PG-09 | Post | blocker | REQ-context-broker says "single config.yml" — contradicts AE/TE separation | `REQ-context-broker.md` | FIXED | Split into AE config (config.yml) and TE config (imperator.yml). |
-| PG-10 | Post | major | Single global `llm` config — no per-use inference configuration | `app/config.py`, `config/config.example.yml` | OPEN | Imperator, summarization, extraction need independent LLM configs. |
-| PG-11 | Post | major | No Anthropic provider support — `get_chat_model()` only creates `ChatOpenAI` | `app/config.py` | OPEN | Need `provider` field to select `ChatAnthropic`. Hopper has the pattern. |
-| PG-12 | Post | major | No TE config file — Imperator config embedded in AE's config.yml | `config/config.example.yml` | OPEN | Need separate `/config/imperator.yml` per REQ-002 §7. |
-| PG-13 | Post | major | No Imperator Identity/Purpose declarations in system prompt | `app/flows/imperator_flow.py` | OPEN | REQ-001 §11.2 requires baked-in Identity and Purpose. |
+| PG-10 | Post | major | Single global `llm` config — no per-use inference configuration | `app/config.py`, `config/config.example.yml` | FIXED | Per-role inference: `inference.imperator`, `inference.summarization`, `inference.extraction`. `get_chat_model()` accepts `role` parameter. |
+| PG-11 | Post | major | No Anthropic provider support — `get_chat_model()` only creates `ChatOpenAI` | `app/config.py` | FIXED | `provider` field ("openai" or "anthropic"). Lazy import of `ChatAnthropic`. `langchain-anthropic==0.3.1` added. |
+| PG-12 | Post | major | No TE config file — Imperator config embedded in AE's config.yml | `config/config.example.yml` | FIXED | Split: AE in `config.yml`, TE in `imperator.yml`. `load_te_config()` / `async_load_te_config()`. Merged via `async_load_config()` for backward compat. |
+| PG-13 | Post | major | No Imperator Identity/Purpose declarations in system prompt | `app/flows/imperator_flow.py` | FIXED | `identity` and `purpose` fields in TE config, injected into system prompt at startup. |
 | PG-14 | Post | minor | Together rerank models require dedicated endpoints (non-serverless) | N/A | WONTFIX | Account limitation. Skipped in cross-provider tests. |
 | PG-15 | Post | minor | REQ-104 missing package registration in deliverable structure | `draft-REQ-104-code-standard.md` | FIXED | Added item 7 for AE/TE entry_points. |
 
@@ -427,15 +427,15 @@ Updated 2026-03-23 after post-gate deployment and testing.
 
 | Status | Count |
 |--------|-------|
-| OPEN | 54 |
-| FIXED | 165 |
+| OPEN | 50 |
+| FIXED | 169 |
 | WONTFIX | 13 |
 | FALSE_POSITIVE | 1 |
 | REMOVED | 1 |
 
 ### Open Items
 
-50 items from Round 7 + 4 new items (PG-10 through PG-13) from post-gate findings.
+50 items from Round 7 (all deferred to deployment phase).
 
 ### Open Items
 
