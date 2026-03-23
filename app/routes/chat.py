@@ -37,8 +37,8 @@ def _get_imperator_flow():
     return _imperator_flow
 
 
-@router.post("/v1/chat/completions")
-async def chat_completions(request: Request) -> JSONResponse | StreamingResponse:
+@router.post("/v1/chat/completions", response_model=None)
+async def chat_completions(request: Request):
     """Handle OpenAI-compatible chat completion requests.
 
     Routes to the Imperator StateGraph. Supports streaming and non-streaming.
