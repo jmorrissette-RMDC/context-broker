@@ -133,16 +133,10 @@ services:
     networks:
       - context-broker-net
     environment:
-      - OLLAMA_SCHED_SPREAD=true  # Distribute model across all available GPUs
+      - NVIDIA_VISIBLE_DEVICES=all   # Expose GPUs if available; ignored if no NVIDIA runtime
+      - OLLAMA_SCHED_SPREAD=true     # Distribute model across all available GPUs
     volumes:
       - ./data/ollama:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     healthcheck:
       test: ["CMD-SHELL", "cat < /dev/tcp/localhost/11434 || exit 1"]
       interval: 30s
