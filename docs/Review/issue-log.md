@@ -412,31 +412,35 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | PG-07 | Post | blocker | REQ-001 missing AE/TE separation requirements (§9-13) | `draft-REQ-001-mad-requirements.md` | FIXED | Added §9 AE/TE Separation, §10 Dynamic Loading, §11 Imperator, §12 TE Package, §13 Base Contract. |
 | PG-08 | Post | blocker | REQ-002 missing TE configuration separation (§7) | `draft-REQ-002-pmad-requirements.md` | FIXED | Added §7 TE Configuration with per-use inference. |
 | PG-09 | Post | blocker | REQ-context-broker says "single config.yml" — contradicts AE/TE separation | `REQ-context-broker.md` | FIXED | Split into AE config (config.yml) and TE config (imperator.yml). |
-| PG-10 | Post | major | Single global `llm` config — no per-use inference configuration | `app/config.py`, `config/config.example.yml` | FIXED | Per-role inference: `inference.imperator`, `inference.summarization`, `inference.extraction`. `get_chat_model()` accepts `role` parameter. |
-| PG-11 | Post | major | No Anthropic provider support — `get_chat_model()` only creates `ChatOpenAI` | `app/config.py` | FIXED | `provider` field ("openai" or "anthropic"). Lazy import of `ChatAnthropic`. `langchain-anthropic==0.3.1` added. |
-| PG-12 | Post | major | No TE config file — Imperator config embedded in AE's config.yml | `config/config.example.yml` | FIXED | Split: AE in `config.yml`, TE in `imperator.yml`. `load_te_config()` / `async_load_te_config()`. Merged via `async_load_config()` for backward compat. |
-| PG-13 | Post | major | No Imperator Identity/Purpose declarations in system prompt | `app/flows/imperator_flow.py` | FIXED | `identity` and `purpose` fields in TE config, injected into system prompt at startup. |
+| PG-10 | Post | major | Single global `llm` config — no per-use inference configuration | `app/config.py`, `config/config.example.yml` | FIXED | Per-role inference slots: `imperator` in te.yml, `summarization`/`extraction` in config.yml. `get_chat_model(config, role)` resolves from merged config. |
+| PG-11 | Post | major | No Anthropic provider support — `get_chat_model()` only creates `ChatOpenAI` | `app/config.py` | FIXED | Tested: Anthropic's OpenAI-compatible endpoint works for chat + tool calling. No `ChatAnthropic` needed. All providers use `ChatOpenAI` with `base_url`. Removed `langchain-anthropic` dependency. |
+| PG-12 | Post | major | No TE config file — Imperator config embedded in AE's config.yml | `config/` | FIXED | Split: AE in `config.yml` (infrastructure, pipeline LLMs, embeddings, reranker, build types, tuning), TE in `te.yml` (Imperator model, system prompt, cognitive settings). `async_load_config()` merges both for backward compat. |
+| PG-13 | Post | major | No Imperator Identity/Purpose declarations in system prompt | `app/flows/imperator_flow.py` | FIXED | Identity/Purpose live in the system prompt file (loaded via `system_prompt` field in te.yml). Prompt file path configurable. Not injected as config fields. |
 | PG-14 | Post | minor | Together rerank models require dedicated endpoints (non-serverless) | N/A | WONTFIX | Account limitation. Skipped in cross-provider tests. |
 | PG-15 | Post | minor | REQ-104 missing package registration in deliverable structure | `draft-REQ-104-code-standard.md` | FIXED | Added item 7 for AE/TE entry_points. |
+| PG-16 | Post | major | REQ-001 missing §9-13 (AE/TE separation, dynamic loading, Imperator, TE package, base contract) | `draft-REQ-001-mad-requirements.md` | FIXED | Added §9 AE/TE Separation, §10 Dynamic Loading, §11 Imperator Requirements, §12 TE Package Structure, §13 AE/TE Base Contract. |
+| PG-17 | Post | major | REQ-002 missing §7 (TE configuration separation) | `draft-REQ-002-pmad-requirements.md` | FIXED | Added §7 with per-use inference, TE vs AE config contents. |
+| PG-18 | Post | major | REQ-context-broker said "single config.yml" contradicting AE/TE separation | `REQ-context-broker.md` | FIXED | Updated §1 and §5 for AE/TE config split, per-use inference, system prompt. |
+| PG-19 | Post | major | HLD-context-broker §7 and §10 didn't reflect AE/TE separation | `HLD-context-broker.md` | FIXED | Updated configuration system and Imperator design sections. |
+| PG-20 | Post | minor | Cross-provider tests: clear embeddings between runs when switching embedding providers | `tests/` | NOTE | Dimension mismatch (e.g., 768 vs 1024) is expected when switching embedding models — not a bug. Clear old embeddings before each cross-provider run. |
+| PG-21 | Post | minor | `get_chat_model()` contains application logic (role→config resolution) outside StateGraph | `app/config.py` | OPEN | Decision logic should be a graph node. Factory/cache is substrate. Deferred — record for Gate 3. |
+| PG-22 | Post | info | Cross-provider regression: 6/6 runs PASS (268/268 each) | N/A | FIXED | Together, Google, OpenAI, Anthropic, xAI, Ollama — all with same codebase, config-only changes. State 4 promise validated. |
 
 ---
 
 ## Summary
 
-Updated 2026-03-23 after post-gate deployment and testing.
+Updated 2026-03-23 after cross-provider regression.
 
 | Status | Count |
 |--------|-------|
-| OPEN | 50 |
-| FIXED | 169 |
+| OPEN | 51 |
+| FIXED | 176 |
 | WONTFIX | 13 |
 | FALSE_POSITIVE | 1 |
 | REMOVED | 1 |
+| NOTE | 1 |
 
 ### Open Items
 
-50 items from Round 7 (all deferred to deployment phase).
-
-### Open Items
-
-All 50 open items are from Round 7: 2 blockers, 21 majors, 27 minors.
+50 items from Round 7 (all deferred to deployment phase) + 1 new (PG-21: StateGraph mandate for config resolution logic).
