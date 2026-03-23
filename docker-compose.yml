@@ -123,9 +123,10 @@ services:
       retries: 3
 
   # Infinity: serves embeddings and reranking via OpenAI-compatible APIs.
-  # Loads models at startup; first boot downloads weights to ./data/infinity.
+  # CPU only, torch engine — no GPU conflicts with Ollama.
+  # First boot downloads model weights to ./data/infinity.
   context-broker-infinity:
-    image: michaelf34/infinity:latest-cpu
+    image: michaelf34/infinity:latest
     container_name: context-broker-infinity
     hostname: context-broker-infinity
     restart: unless-stopped
@@ -143,7 +144,7 @@ services:
       test: ["CMD-SHELL", "curl -sf http://localhost:7997/health || exit 1"]
       interval: 30s
       timeout: 5s
-      start_period: 120s
+      start_period: 60s
       retries: 3
 
   # Optional: local inference via Ollama (no API keys needed)
