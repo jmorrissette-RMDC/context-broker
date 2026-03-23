@@ -514,6 +514,10 @@ networks:
     driver: bridge         # standard bridge — NOT internal:true
 ```
 
+**7.3.1 Future Option: Forward Proxy for Outbound Access Control**
+
+The default deployment allows unrestricted outbound internet access from `context-broker-net` via Docker's host NAT. For deployments requiring tighter control, a forward proxy container (e.g., Squid or Tinyproxy) can be added to `context-broker-net` via `docker-compose.override.yml`. The network would be set to `internal: true`, and application containers would route outbound traffic through the proxy via `HTTP_PROXY`/`HTTPS_PROXY` environment variables. The proxy can enforce domain allowlists (e.g., only permit connections to configured LLM API endpoints), log all outbound traffic, and block unauthorized destinations. This is not deployed in the current release.
+
 **7.4 Docker Compose**
 
 -   The project ships a single `docker-compose.yml`.
