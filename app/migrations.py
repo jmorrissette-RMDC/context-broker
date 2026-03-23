@@ -190,7 +190,19 @@ async def _migration_012(conn) -> None:
         )
         """
     )
-    if has_sender_id:
+    has_sender = await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'conversation_messages' AND column_name = 'sender'
+        )
+        """
+    )
+    if has_sender_id and has_sender:
+        # Fresh DB: init.sql created 'sender', old migration added 'sender_id' — drop the old one
+        await conn.execute("ALTER TABLE conversation_messages DROP COLUMN sender_id")
+        _log.info("Dropped duplicate sender_id (sender already exists from init.sql)")
+    elif has_sender_id:
         await conn.execute(
             "ALTER TABLE conversation_messages RENAME COLUMN sender_id TO sender"
         )
@@ -205,7 +217,19 @@ async def _migration_012(conn) -> None:
         )
         """
     )
-    if has_recipient_id:
+    has_recipient = await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'conversation_messages' AND column_name = 'recipient'
+        )
+        """
+    )
+    if has_recipient_id and has_recipient:
+        # Fresh DB: init.sql created 'recipient', migration 4 added 'recipient_id' — drop the old one
+        await conn.execute("ALTER TABLE conversation_messages DROP COLUMN recipient_id")
+        _log.info("Dropped duplicate recipient_id (recipient already exists from init.sql)")
+    elif has_recipient_id:
         await conn.execute(
             "ALTER TABLE conversation_messages RENAME COLUMN recipient_id TO recipient"
         )
