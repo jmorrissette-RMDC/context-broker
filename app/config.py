@@ -314,9 +314,9 @@ def get_embeddings_model(config: dict) -> Any:
                 del _embeddings_cache[oldest_key]
             _embeddings_cache[cache_key] = OpenAIEmbeddings(
                 model=embeddings_config.get("model", "text-embedding-3-small"),
-                openai_api_base=embeddings_config.get(
+                base_url=embeddings_config.get(
                     "base_url", "https://api.openai.com/v1"
                 ),
-                openai_api_key=api_key or "not-needed",
+                api_key=api_key or "not-needed",
             )
         return _embeddings_cache[cache_key]
