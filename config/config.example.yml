@@ -51,7 +51,7 @@ reranker:
   # "none" disables reranking (raw RRF scores used)
   provider: api
   base_url: http://context-broker-infinity:7997
-  model: BAAI/bge-reranker-v2-m3
+  model: mixedbread-ai/mxbai-rerank-xsmall-v1
   top_n: 10
 
 # ============================================================
