@@ -318,10 +318,9 @@ def get_embeddings_model(config: dict) -> Any:
                     "base_url", "https://api.openai.com/v1"
                 ),
                 api_key=api_key or "not-needed",
-                # Disable tiktoken tokenization — sends raw text strings.
-                # Required for Ollama and other providers that don't accept
-                # token arrays. OpenAI accepts both formats.
-                check_embedding_ctx_length=False,
-                tiktoken_enabled=False,
+                tiktoken_enabled=embeddings_config.get("tiktoken_enabled", False),
+                check_embedding_ctx_length=embeddings_config.get(
+                    "check_embedding_ctx_length", False
+                ),
             )
         return _embeddings_cache[cache_key]
