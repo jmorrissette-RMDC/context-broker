@@ -131,7 +131,8 @@ services:
     hostname: context-broker-ollama
     restart: unless-stopped
     networks:
-      - context-broker-net
+      - default            # External access for model pulls
+      - context-broker-net # Internal access for serving
     volumes:
       - ./data/ollama:/root/.ollama
     deploy:
