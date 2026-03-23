@@ -142,9 +142,9 @@ services:
       - ./data/infinity:/app/.cache
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:7997/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      start_period: 60s
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
       retries: 3
 
   # Optional: local inference via Ollama (no API keys needed)
