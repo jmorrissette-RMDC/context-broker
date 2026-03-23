@@ -30,7 +30,8 @@ llm:
 
 embeddings:
   # Local Infinity (default — no API key needed):
-  base_url: http://context-broker-infinity:7997/v1
+  # Note: no /v1 suffix — Infinity serves at /embeddings, not /v1/embeddings.
+  base_url: http://context-broker-infinity:7997
   model: nomic-ai/nomic-embed-text-v1.5
   # Send raw text instead of token arrays. Required for Infinity, Ollama,
   # and most non-OpenAI providers. OpenAI accepts both formats. Set to true

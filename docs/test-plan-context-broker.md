@@ -105,6 +105,12 @@ The testing approach is layered to ensure comprehensive coverage from individual
 - **Test Case:** Verify Redis lock prevents concurrent context assembly.
   - **Input:** In an integration test, create a single context window. Programmatically enqueue two `context_assembly_jobs` for that same window in rapid succession, simulating a race condition.
   - **Expected Outcome:** By inspecting verbose logs with timestamps, verify that the second job did not start until after the first job completed. This confirms the distributed lock enforced serial execution for the critical section.
+- **Test Case:** Verify embedding generation via Infinity.
+  - **Input:** Store a message via `conv_store_message`. Wait for the embedding worker to process.
+  - **Expected Outcome:** The `vector` column in `conversation_messages` is populated. Query the Infinity `/v1/embeddings` endpoint directly to confirm it returns vectors of the expected dimension for the configured model (nomic-embed-text-v1.5: 768 dimensions).
+- **Test Case:** Verify reranking via Infinity `/v1/rerank` API.
+  - **Input:** Call `conv_search_messages` with a query that returns multiple results and reranking enabled (`reranker.provider: api`).
+  - **Expected Outcome:** Results are reranked by the Infinity reranker. Verify by comparing the order of results with reranking enabled vs disabled (`provider: none`). The reranked order should differ from raw RRF order for a sufficiently diverse result set.
 
 ### 4.6 Interface & Endpoints (REQ §4)
 
@@ -166,6 +172,23 @@ The testing approach is layered to ensure comprehensive coverage from individual
   - **Input:** Unit tests for individual StateGraph nodes.
   - **Expected Outcome:** For each node, the test passes a copy of an input state dictionary. After the node function executes, the test asserts that the original dictionary remains unmodified.
 
+### 4.12 Cross-Provider Inference (provider-capabilities.md)
+
+These tests verify that each supported inference provider works correctly with the Context Broker's configuration system. Each test swaps the relevant config section to point at a real provider, makes a single cheap API call, and verifies a valid response.
+
+- **Test Case:** Verify LLM provider compatibility (6 providers).
+  - **Providers:** OpenAI, Anthropic (via adapter), Google Gemini, xAI (Grok), Together AI, Ollama (local).
+  - **Input:** For each provider, configure `llm.base_url` and `llm.model` to a cheap model. Send a single `/v1/chat/completions` request with a trivial prompt.
+  - **Expected Outcome:** Each provider returns a valid chat completion response. The response contains at least one choice with a non-empty message.
+- **Test Case:** Verify embedding provider compatibility (5 providers).
+  - **Providers:** OpenAI, Google Gemini, Together AI, Ollama (local), Infinity (local).
+  - **Input:** For each provider, configure `embeddings.base_url` and `embeddings.model`. Call the embedding endpoint with a short text string.
+  - **Expected Outcome:** Each provider returns a valid embedding vector. The vector dimension matches the configured model's expected output.
+- **Test Case:** Verify reranking provider compatibility (4 providers).
+  - **Providers:** Infinity (local), Together AI, Cohere, Jina.
+  - **Input:** For each provider, configure `reranker.base_url` and `reranker.model`. Call `/v1/rerank` with a query and 3 documents.
+  - **Expected Outcome:** Each provider returns results with `index` and `relevance_score` fields. Results are ordered by relevance score descending.
+
 ## 5. Integration Test Approach
 
 - Tests will be written using `pytest` and the `httpx` library for making asynchronous HTTP requests.
@@ -185,7 +208,7 @@ The testing approach is layered to ensure comprehensive coverage from individual
 The test environment is fully defined and provisioned by Docker and Docker Compose. No host-level dependencies are required beyond a working Docker installation.
 
 - **Infrastructure:** The environment is defined by the project's `docker-compose.yml` and the associated Dockerfiles.
-- **Components:** The environment consists of the five specified containers (`context-broker`, `context-broker-langgraph`, `context-broker-postgres`, `context-broker-neo4j`, `context-broker-redis`), using the exact image versions pinned in the project configuration.
+- **Components:** The environment consists of seven containers (`context-broker`, `context-broker-langgraph`, `context-broker-postgres`, `context-broker-neo4j`, `context-broker-redis`, `context-broker-infinity`, `context-broker-ollama`), using the exact image versions pinned in the project configuration. Infinity provides embeddings and reranking; Ollama provides local LLM inference.
 - **Execution:** Tests are executed by a Python test runner (`pytest`) from a host or CI environment that has access to the Docker daemon.
 
 ## 8. Traceability Matrix
@@ -231,3 +254,8 @@ The test environment is fully defined and provisioned by Docker and Docker Compo
 | T-10.1 | No blocking I/O in async functions | 4.10 | Unit | | Not started | | Not run | Static analysis or runtime detection |
 | T-11.1 | LangGraph mandate (routes are thin) | 4.11 | Static | test_static_checks.py::TestStateGraphMandate | Written | 2026-03-23 | Pass | |
 | T-11.2 | StateGraph node immutability | 4.11 | Unit | test_state_immutability.py | Written | 2026-03-23 | Pass | Tests scoring/scaling functions only |
+| T-5.4 | Embedding generation via Infinity | 4.5 | E2E | | Not started | | Not run | Verify vector populated + correct dimension |
+| T-5.5 | Reranking via Infinity /v1/rerank | 4.5 | E2E | | Not started | | Not run | Compare reranked vs raw RRF order |
+| T-12.1 | LLM provider compatibility (6 providers) | 4.12 | E2E | | Not started | | Not run | OpenAI, Anthropic, Google, xAI, Together, Ollama |
+| T-12.2 | Embedding provider compatibility (5 providers) | 4.12 | E2E | | Not started | | Not run | OpenAI, Google, Together, Ollama, Infinity |
+| T-12.3 | Reranking provider compatibility (4 providers) | 4.12 | E2E | | Not started | | Not run | Infinity, Together, Cohere, Jina |

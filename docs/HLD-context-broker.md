@@ -51,8 +51,8 @@ The gateway resides on both the external host-exposed network and the internal `
 | `context-broker-postgres` | Relational and vector storage (messages, windows, summaries). | `pgvector/pgvector:pg16` |
 | `context-broker-neo4j` | Entity and relationship knowledge graph (via Mem0). | `neo4j:5` |
 | `context-broker-redis` | Async job queues, locks, and ephemeral state. | `redis:7-alpine` |
-| `context-broker-infinity` | Local embeddings and reranking via OpenAI-compatible `/v1/embeddings` and `/v1/rerank` APIs. No API keys needed. | `michaelf34/infinity` |
-| `context-broker-ollama` (optional) | Local LLM inference via OpenAI-compatible API. No API keys needed. | `ollama/ollama` |
+| `context-broker-infinity` (optional) | Local embeddings and reranking via OpenAI-compatible `/v1/embeddings` and `/v1/rerank` APIs. No API keys needed. Remove if using cloud providers. | `michaelf34/infinity` |
+| `context-broker-ollama` (optional) | Local LLM inference via OpenAI-compatible API. No API keys needed. Remove if using cloud providers. | `ollama/ollama` |
 
 The Infinity container serves embeddings and reranking on the internal network using the Infinity inference engine. It loads configured models at startup (first boot downloads weights) and exposes standard OpenAI-compatible endpoints. The LangGraph container calls it the same way it calls any cloud embedding or reranking provider.
 
@@ -148,7 +148,7 @@ All external dependencies and tuning parameters are governed by a single file: `
 - **Startup Configuration:** Database connection strings, network topology, and the StateGraph **package source** (`local`, `pypi`, or `devpi`) are read at startup and require a restart to change.
 - **Hot-Reloadable Inference:** `llm`, `embeddings`, `reranker` provider settings, and build types are read fresh on each operation. Deployers can swap models or endpoints without container restarts.
 - **Token Budget Resolution:** When a context window requests `auto` max tokens, the system queries the configured provider's model endpoint to automatically resolve the context length, falling back to a configured default if unavailable. Callers may override the build type's default token budget with an explicit `max_tokens` at window creation time. Once resolved, the token budget is stored with the window and remains immutable; subsequent model changes do not retroactively affect existing windows.
-- **Credential Management:** API keys are never hardcoded in `config.yml`. Instead, the config references environment variables (e.g., `api_key_env: LLM_API_KEY`), which are populated securely via `/config/credentials/.env`.
+- **Credential Management:** API keys are never hardcoded in `config.yml`. They are stored in `/config/credentials/.env` and loaded into the container environment via `env_file` in `docker-compose.yml`. LangChain reads standard platform environment variables automatically (e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). No `api_key_env` indirection — standard env var names are used directly.
 
 ## 8. Build Types and Retrieval
 

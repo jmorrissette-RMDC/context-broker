@@ -26,6 +26,8 @@ Below you will find the complete source code for the Context Broker, plus three 
 - `small-basic` build type renamed to `passthrough`
 - Single configurable LLM per build type (not dual small/large routing)
 - Secret redaction uses regex patterns (heuristic, documented in docstring)
+- Reranking uses API-based `/v1/rerank` endpoint (Infinity container or cloud provider), not a local cross-encoder model
+- Embeddings served by Infinity container, not Ollama or a local model
 - `context_window_id` is the primary agent interface, equivalent to LangGraph thread_id
 - No LangGraph checkpointer — conversation_messages table is the persistence layer
 - `imperator_chat` is the tool name (not `broker_chat`)

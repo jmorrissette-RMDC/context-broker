@@ -122,11 +122,13 @@ services:
       start_period: 10s
       retries: 3
 
-  # Infinity: serves embeddings and reranking via OpenAI-compatible APIs.
+  # Optional: local embeddings and reranking via Infinity.
+  # Serves OpenAI-compatible /v1/embeddings and /v1/rerank APIs.
   # CPU only, torch engine — no GPU conflicts with Ollama.
   # First boot downloads model weights to ./data/infinity.
+  # Remove or comment out if using cloud embedding/reranking providers.
   context-broker-infinity:
-    image: michaelf34/infinity:latest
+    image: michaelf34/infinity:0.0.77
     container_name: context-broker-infinity
     hostname: context-broker-infinity
     restart: unless-stopped

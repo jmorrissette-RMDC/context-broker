@@ -29,7 +29,7 @@ docker compose up -d
 curl http://localhost:8080/health
 ```
 
-The default configuration uses the optional Ollama container for fully local inference with no API keys. To use a cloud provider instead, update the `llm` and `embeddings` sections in `config/config.yml` and set the corresponding API keys in `config/credentials/.env`.
+The default configuration uses the optional Ollama container for LLM inference and the Infinity container for embeddings and reranking — fully local, no API keys needed. To use cloud providers instead, update the `llm`, `embeddings`, and `reranker` sections in `config/config.yml` and set the corresponding API keys in `config/credentials/.env`.
 
 ### Connecting
 
@@ -53,7 +53,7 @@ Primary LLM provider for summarization, extraction, and the Imperator agent.
 |-------|-------------|
 | `base_url` | OpenAI-compatible API endpoint |
 | `model` | Model name |
-| `api_key_env` | Environment variable holding the API key (empty string for keyless providers like Ollama) |
+| | API keys: set the standard platform env var (e.g., `OPENAI_API_KEY`) in `config/credentials/.env`. LangChain reads it automatically. No config needed for keyless providers like Ollama. |
 
 ### `embeddings`
 
@@ -63,17 +63,19 @@ Embedding provider for vector search and contextual embeddings.
 |-------|-------------|
 | `base_url` | OpenAI-compatible API endpoint |
 | `model` | Embedding model name |
-| `api_key_env` | Environment variable for the API key |
+| | API keys: set the standard platform env var (e.g., `OPENAI_API_KEY`) in `config/credentials/.env`. LangChain reads it automatically. |
 | `context_window_size` | Number of prior messages to include as context prefix when embedding (default: 3) |
 
 ### `reranker`
 
-Cross-encoder reranker for hybrid search result refinement.
+API-based reranker for hybrid search result refinement. Default: local Infinity container.
 
 | Field | Description |
 |-------|-------------|
-| `provider` | `"cross-encoder"` (local CPU), `"cohere"`, or `"none"` to disable |
-| `model` | Model name (default: `BAAI/bge-reranker-v2-m3`) |
+| `provider` | `"api"` (hits `/v1/rerank` endpoint — works with Infinity, Together, Cohere, Jina, Voyage) or `"none"` to disable |
+| `base_url` | Reranker API endpoint (default: `http://context-broker-infinity:7997`) |
+| `model` | Model name (default: `mixedbread-ai/mxbai-rerank-xsmall-v1`) |
+| `top_n` | Number of top results to return after reranking (default: 10) |
 
 ### `build_types`
 
@@ -217,7 +219,7 @@ Semantic and structured search across conversations.
 
 ### `conv_search_messages`
 
-Hybrid search (vector + BM25 + cross-encoder reranking) across messages.
+Hybrid search (vector + BM25 + API-based reranking) across messages.
 
 | Input | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -364,7 +366,8 @@ The Context Broker runs as a Docker Compose group of containers communicating ov
 | `context-broker-postgres` | Conversation storage, vector embeddings (pgvector), context windows, summaries. | `pgvector/pgvector:0.7.0-pg16` |
 | `context-broker-neo4j` | Knowledge graph storage via Mem0. Entity nodes, fact nodes, relationships. | `neo4j:5.15.0` |
 | `context-broker-redis` | Async job queues (ARQ), assembly locks, ephemeral state. | `redis:7.2.3-alpine` |
-| `context-broker-ollama` | (Optional) Local inference via Ollama. No API keys needed. | `ollama/ollama:0.6.2` |
+| `context-broker-infinity` | (Optional) Local embeddings and reranking via OpenAI-compatible APIs. CPU only, torch engine. Remove if using cloud providers. | `michaelf34/infinity:0.0.77` |
+| `context-broker-ollama` | (Optional) Local LLM inference via Ollama. No API keys needed. Remove if using cloud providers. | `ollama/ollama:0.6.2` |
 
 Only the LangGraph container is custom-built. All backing services use official images unmodified.
 

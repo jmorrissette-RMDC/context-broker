@@ -24,13 +24,15 @@ _log = logging.getLogger("context_broker.flows.search")
 async def _rerank_via_api(
     query: str, candidates: list[dict], config: dict
 ) -> list[dict]:
-    """Rerank candidates by calling a /v1/rerank endpoint.
+    """Rerank candidates by calling a /rerank endpoint.
 
     Works with Infinity (local), Together, Cohere, Jina, Voyage, or any
-    provider exposing the emerging /v1/rerank standard.
+    provider exposing the /rerank standard. The base_url should include
+    any path prefix the provider requires (e.g., https://api.together.xyz/v1
+    for Together, http://context-broker-infinity:7997 for Infinity).
     """
     reranker_config = config.get("reranker", {})
-    base_url = reranker_config.get("base_url", "")
+    base_url = reranker_config.get("base_url", "").rstrip("/")
     model = reranker_config.get("model", "")
     top_n = reranker_config.get("top_n", 10)
 
@@ -38,7 +40,7 @@ async def _rerank_via_api(
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
-            f"{base_url}/v1/rerank",
+            f"{base_url}/rerank",
             json={
                 "model": model,
                 "query": query,

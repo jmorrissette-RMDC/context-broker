@@ -49,7 +49,8 @@ The Context Broker runs as a group of containers managed by Docker Compose:
 | `context-broker-postgres`  | Conversation storage, vector embeddings (pgvector), build types             | PostgreSQL + pgvector (OTS) |
 | `context-broker-neo4j`     | Knowledge graph storage (Mem0)                                              | Neo4j (OTS)                 |
 | `context-broker-redis`     | Job queues, assembly locks, ephemeral state                                 | Redis (OTS)                 |
-| `context-broker-infinity`  | Embeddings and reranking via OpenAI-compatible APIs                         | Infinity (OTS)              |
+| `context-broker-infinity`  | (Optional) Embeddings and reranking via OpenAI-compatible APIs. Remove if using cloud providers. | Infinity (OTS)              |
+| `context-broker-ollama`    | (Optional) Local LLM inference via OpenAI-compatible API. Remove if using cloud providers.       | Ollama (OTS)                |
 
 Only the LangGraph container is custom. All backing services use official images unmodified.
 
@@ -169,9 +170,9 @@ packages:
 
 **3.4 Credential Management**
 
--   All credentials stored in `/config/credentials/.env` as key-value pairs (e.g., `LLM_API_KEY=sk-...`).
+-   All credentials stored in `/config/credentials/.env` as key-value pairs (e.g., `OPENAI_API_KEY=sk-...`).
 -   The `.env` file is loaded into the container environment via `env_file` in `docker-compose.yml`.
--   Application code reads credentials from environment variables at runtime. The `api_key_env` field in `config.yml` names the environment variable to read (e.g., `api_key_env: LLM_API_KEY`).
+-   Application code reads credentials from standard platform environment variables at runtime. LangChain reads provider-standard variables automatically (e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). No `api_key_env` indirection in `config.yml` — the standard env var names are used directly.
 -   No credentials in Dockerfiles, application code, or committed files. The `.env` file is gitignored. The repository ships a `.env.example` listing required variable names without values.
 -   Verification: grep codebase for hardcoded secrets — must find none. The only place real secrets exist is the user's local `.env` file.
 
@@ -325,17 +326,18 @@ The Context Broker exposes the following tools via MCP. Full input/output schema
 llm:
   base_url: https://api.openai.com/v1
   model: gpt-4o-mini
-  api_key_env: LLM_API_KEY
+  # API keys: set OPENAI_API_KEY (or provider equivalent) as a container
+  # environment variable. LangChain reads it automatically.
 
 embeddings:
   base_url: https://api.openai.com/v1
   model: text-embedding-3-small
-  api_key_env: EMBEDDINGS_API_KEY
+  # API keys: set OPENAI_API_KEY as a container environment variable.
 
 reranker:
   provider: api                # "api" or "none"
   base_url: http://context-broker-infinity:7997
-  model: BAAI/bge-reranker-v2-m3
+  model: mixedbread-ai/mxbai-rerank-xsmall-v1
   top_n: 10
 ```
 

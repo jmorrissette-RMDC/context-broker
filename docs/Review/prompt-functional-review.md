@@ -37,5 +37,7 @@ The following differences from Rogers are intentional architectural decisions fo
 - Build types defined as code (graph pairs) not database rows
 - Extraction queued parallel with embedding
 - Priority queue uses Redis sorted set instead of ZSET with 4 named levels
+- Reranking uses API-based `/v1/rerank` (Infinity container) instead of local CrossEncoder model
+- Embeddings served by Infinity container instead of Ollama or local sentence-transformers
 
 Do NOT flag intentional architectural changes (e.g., different framework choices, different container layout) as missing functionality — those are expected. Focus on lost *behavior*.
