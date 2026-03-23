@@ -22,26 +22,25 @@ llm:
   # Local Ollama (default — no API key needed):
   base_url: http://context-broker-ollama:11434/v1
   model: qwen2.5:7b
-  api_key_env: ""
-  # Cloud provider example (uncomment and set api_key_env):
+  # Cloud provider example (uncomment, remove base_url above):
   # base_url: https://api.openai.com/v1
   # model: gpt-4o-mini
-  # api_key_env: LLM_API_KEY
+  # API keys: set OPENAI_API_KEY (or provider equivalent) as a container
+  # environment variable. LangChain reads it automatically. No config needed.
 
 embeddings:
   # Local Ollama (default — no API key needed):
   base_url: http://context-broker-ollama:11434/v1
   model: nomic-embed-text
-  api_key_env: ""
   # Send raw text instead of token arrays. Required for Ollama and most
   # non-OpenAI providers. OpenAI accepts both formats. Set to true only
   # if using OpenAI directly and you want token-level context length checks.
   tiktoken_enabled: false
   check_embedding_ctx_length: false
-  # Cloud provider example (uncomment and set api_key_env):
+  # Cloud provider example:
   # base_url: https://api.openai.com/v1
   # model: text-embedding-3-small
-  # api_key_env: EMBEDDINGS_API_KEY
+  # API keys: set OPENAI_API_KEY as a container environment variable.
   # Number of prior messages to include as context prefix when embedding
   context_window_size: 3
 

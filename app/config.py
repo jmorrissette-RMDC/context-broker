@@ -160,19 +160,19 @@ def load_startup_config() -> dict[str, Any]:
 
 
 def get_api_key(provider_config: dict[str, Any]) -> str:
-    """Resolve an API key from the environment variable named in api_key_env.
+    """Resolve an API key for a provider.
 
-    Returns empty string if api_key_env is not set (e.g., local Ollama).
+    Standard pattern: LangChain reads default env vars (OPENAI_API_KEY, etc.)
+    automatically. This function is only needed when config explicitly overrides
+    the key via api_key_env (non-standard, for multi-key setups).
+    For Ollama and other keyless providers, returns empty string.
     """
+    # If config explicitly names an env var, use it (backward compat)
     env_var_name = provider_config.get("api_key_env", "")
-    if not env_var_name:
-        return ""
-    api_key = os.environ.get(env_var_name, "")
-    if not api_key:
-        _log.warning(
-            "API key environment variable '%s' is not set or empty", env_var_name
-        )
-    return api_key
+    if env_var_name:
+        return os.environ.get(env_var_name, "")
+    # Otherwise return empty — LangChain will read its default env vars
+    return ""
 
 
 def get_build_type_config(
@@ -271,22 +271,25 @@ def get_chat_model(config: dict) -> Any:
 
     llm_config = config.get("llm", {})
     api_key = get_api_key(llm_config)
-    # G5-05: Include api_key hash so credential rotation doesn't reuse a stale client.
-    # m3: Use stable SHA-256 hash instead of Python's hash() which is
-    # randomized per process (PYTHONHASHSEED).
-    cache_key = f"{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
+    cache_key = f"{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256((api_key or 'default').encode()).hexdigest()[:16]}"
     with _cache_lock:
         if cache_key not in _llm_cache:
-            # R5-m9: Evict oldest entry instead of clearing entire cache.
             if len(_llm_cache) >= _MAX_CACHE_ENTRIES:
                 oldest_key = next(iter(_llm_cache))
                 del _llm_cache[oldest_key]
-            _llm_cache[cache_key] = ChatOpenAI(
-                base_url=llm_config.get("base_url", "https://api.openai.com/v1"),
-                model=llm_config.get("model", "gpt-4o-mini"),
-                api_key=api_key or "not-needed",
-                timeout=1800,
-            )
+            kwargs = {
+                "base_url": llm_config.get("base_url"),
+                "model": llm_config.get("model", "gpt-4o-mini"),
+                "timeout": 1800,
+            }
+            # Only pass api_key if explicitly configured — otherwise let
+            # LangChain read its default env var (OPENAI_API_KEY)
+            if api_key:
+                kwargs["api_key"] = api_key
+            elif llm_config.get("base_url", "").startswith("http://"):
+                # Local provider (Ollama) — no key needed
+                kwargs["api_key"] = "not-needed"
+            _llm_cache[cache_key] = ChatOpenAI(**kwargs)
         return _llm_cache[cache_key]
 
 
@@ -302,25 +305,23 @@ def get_embeddings_model(config: dict) -> Any:
 
     embeddings_config = config.get("embeddings", {})
     api_key = get_api_key(embeddings_config)
-    # G5-05: Include api_key hash so credential rotation doesn't reuse a stale client.
-    # m3: Use stable SHA-256 hash instead of Python's hash() which is
-    # randomized per process (PYTHONHASHSEED).
-    cache_key = f"{embeddings_config.get('base_url')}:{embeddings_config.get('model')}:{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
+    cache_key = f"{embeddings_config.get('base_url')}:{embeddings_config.get('model')}:{hashlib.sha256((api_key or 'default').encode()).hexdigest()[:16]}"
     with _cache_lock:
         if cache_key not in _embeddings_cache:
-            # R5-m9: Evict oldest entry instead of clearing entire cache.
             if len(_embeddings_cache) >= _MAX_CACHE_ENTRIES:
                 oldest_key = next(iter(_embeddings_cache))
                 del _embeddings_cache[oldest_key]
-            _embeddings_cache[cache_key] = OpenAIEmbeddings(
-                model=embeddings_config.get("model", "text-embedding-3-small"),
-                base_url=embeddings_config.get(
-                    "base_url", "https://api.openai.com/v1"
-                ),
-                api_key=api_key or "not-needed",
-                tiktoken_enabled=embeddings_config.get("tiktoken_enabled", False),
-                check_embedding_ctx_length=embeddings_config.get(
+            kwargs = {
+                "model": embeddings_config.get("model", "text-embedding-3-small"),
+                "base_url": embeddings_config.get("base_url"),
+                "tiktoken_enabled": embeddings_config.get("tiktoken_enabled", False),
+                "check_embedding_ctx_length": embeddings_config.get(
                     "check_embedding_ctx_length", False
                 ),
-            )
+            }
+            if api_key:
+                kwargs["api_key"] = api_key
+            elif embeddings_config.get("base_url", "").startswith("http://"):
+                kwargs["api_key"] = "not-needed"
+            _embeddings_cache[cache_key] = OpenAIEmbeddings(**kwargs)
         return _embeddings_cache[cache_key]
