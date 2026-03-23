@@ -1,30 +1,118 @@
-# Context Broker — AE Configuration (Infrastructure)
+# Context Broker — AE Configuration (Action Engine / Infrastructure)
 # Copy this file to config/config.yml and customize for your deployment.
-# Infrastructure settings require a container restart to change.
 #
-# Cognitive settings (Imperator, inference providers, build types, tuning)
-# are in imperator.yml (the TE configuration).
+# Cognitive settings (Imperator model, system prompt, persona) are in
+# te.yml (the TE configuration).
 
 # ============================================================
 # Logging
 # ============================================================
 
-# Log level: DEBUG, INFO, WARN, ERROR
-# Default: INFO
 log_level: INFO
+
+# ============================================================
+# Inference Providers (AE pipeline operations)
+# ============================================================
+# These LLMs are used by AE infrastructure pipelines, not by the Imperator.
+# The Imperator's model is configured in te.yml.
+
+# Summarization LLM — used for chunk summarization and archival consolidation
+summarization:
+  base_url: http://context-broker-ollama:11434/v1
+  model: qwen2.5:7b
+  # api_key_env: OPENAI_API_KEY   # env var holding the API key (omit for keyless)
+
+# Extraction LLM — used by Mem0 for memory extraction
+extraction:
+  base_url: http://context-broker-ollama:11434/v1
+  model: qwen2.5:7b
+  # api_key_env: OPENAI_API_KEY   # env var holding the API key (omit for keyless)
+
+# Embeddings — used for vector search and contextual embeddings
+embeddings:
+  base_url: http://context-broker-infinity:7997
+  model: nomic-ai/nomic-embed-text-v1.5
+  tiktoken_enabled: false
+  check_embedding_ctx_length: false
+  context_window_size: 3
+
+# Reranker — used for hybrid search result refinement
+reranker:
+  provider: api
+  base_url: http://context-broker-infinity:7997
+  model: mixedbread-ai/mxbai-rerank-xsmall-v1
+  top_n: 10
+
+# ============================================================
+# Build Types
+# ============================================================
+
+build_types:
+
+  passthrough:
+    max_context_tokens: auto
+    fallback_tokens: 8192
+
+  standard-tiered:
+    tier1_pct: 0.08
+    tier2_pct: 0.20
+    tier3_pct: 0.72
+    max_context_tokens: auto
+    fallback_tokens: 8192
+
+  knowledge-enriched:
+    tier1_pct: 0.05
+    tier2_pct: 0.15
+    tier3_pct: 0.50
+    knowledge_graph_pct: 0.15
+    semantic_retrieval_pct: 0.15
+    max_context_tokens: auto
+    fallback_tokens: 16000
 
 # ============================================================
 # Package Source
 # ============================================================
-# Controls where Python packages are installed from.
-# "local": install from wheels in /app/packages (offline)
-# "pypi": install from public PyPI (default)
-# "devpi": install from a private devpi index
 
 packages:
   source: pypi
   local_path: /app/packages
-  devpi_url: null   # e.g., http://devpi-host:3141/root/internal/+simple/
+  devpi_url: null
+
+# ============================================================
+# Tuning Parameters (AE pipeline behavior)
+# ============================================================
+
+tuning:
+  verbose_logging: false
+
+  # Context assembly
+  chunk_size: 20
+  consolidation_threshold: 3
+  consolidation_keep_recent: 2
+  summarization_temperature: 0.1
+  trigger_threshold_percent: 0.1
+
+  # Memory extraction
+  extraction_max_chars: 90000
+
+  # Memory confidence scoring
+  memory_half_lives:
+    ephemeral: 3
+    contextual: 14
+    factual: 60
+    historical: 365
+    default: 30
+
+  # Retrieval
+  tokens_per_message_estimate: 150
+  content_truncation_chars: 500
+  query_truncation_chars: 200
+
+  # Search
+  rrf_constant: 60
+  search_candidate_limit: 100
+  recency_decay_days: 90
+  recency_max_penalty: 0.2
 
 # ============================================================
 # Workers (infrastructure — queue processing)

@@ -1,0 +1,43 @@
+# Context Broker — TE Configuration (Thought Engine)
+# Copy this file to config/te.yml and customize.
+# All settings are hot-reloadable (no restart needed).
+#
+# This file configures the Thought Engine — the Imperator and its
+# cognitive apparatus. The TE is a swappable package: replace this
+# config and the system prompt to get a different cognitive personality
+# on the same AE infrastructure.
+#
+# Infrastructure settings (database, embeddings, reranker, build types,
+# pipeline tuning, workers) are in config.yml (the AE configuration).
+
+# ============================================================
+# Imperator
+# ============================================================
+
+imperator:
+  # LLM for the Imperator's conversational inference.
+  # All providers use the OpenAI-compatible wire protocol (including Anthropic).
+  # For local Ollama, no api_key_env needed.
+  base_url: http://context-broker-ollama:11434/v1
+  model: qwen2.5:7b
+  # api_key_env: OPENAI_API_KEY   # env var holding the API key (omit for keyless)
+
+  # Path to the system prompt file (without extension).
+  # Loaded from /config/prompts/{name}.md.
+  # Contains Identity, Purpose, Persona, and behavioral instructions.
+  # This is the primary artifact that defines who the Imperator is.
+  system_prompt: imperator_identity
+
+  # Build type for the Imperator's own context window
+  build_type: standard-tiered
+  max_context_tokens: auto
+  participant_id: imperator
+
+  # admin_tools: false = read-only access to system state
+  # admin_tools: true = can read/write config and run DB queries
+  # NOTE: Requires container restart to take effect (Imperator graph compiled once).
+  admin_tools: false
+
+  # Cognitive tuning
+  max_iterations: 5
+  temperature: 0.3

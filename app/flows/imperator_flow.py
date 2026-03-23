@@ -352,30 +352,21 @@ async def agent_node(state: ImperatorState) -> dict:
     messages = list(state["messages"])
 
     # First call: prepend system prompt with DB history context
-    # PG-13: Identity and Purpose from TE config (REQ-001 §11.2)
+    # PG-13: System prompt contains Identity, Purpose, Persona (REQ-001 §11.2)
+    # The prompt name is configured in te.yml; defaults to "imperator_identity"
     has_system = any(isinstance(m, SystemMessage) for m in messages)
     if not has_system:
+        imperator_cfg = config.get("imperator", {})
+        prompt_name = imperator_cfg.get("system_prompt", "imperator_identity")
         try:
-            system_content = await async_load_prompt("imperator_identity")
+            system_content = await async_load_prompt(prompt_name)
         except RuntimeError as exc:
-            _log.error("Failed to load imperator_identity prompt: %s", exc)
+            _log.error("Failed to load system prompt '%s': %s", prompt_name, exc)
             return {
                 "messages": [AIMessage(content="I encountered a configuration error.")],
                 "response_text": "I encountered a configuration error.",
                 "error": f"Prompt loading failed: {exc}",
             }
-
-        # Inject Identity and Purpose from TE config if available
-        imperator_cfg = config.get("imperator", {})
-        identity = imperator_cfg.get("identity", "")
-        purpose = imperator_cfg.get("purpose", "")
-        if identity or purpose:
-            id_block = ""
-            if identity:
-                id_block += f"\n\nIdentity: {identity.strip()}"
-            if purpose:
-                id_block += f"\nPurpose: {purpose.strip()}"
-            system_content = id_block.strip() + "\n\n" + system_content
 
         context_window_id = state.get("context_window_id")
         if context_window_id:

@@ -104,10 +104,9 @@ def _build_mem0_instance(config: dict) -> object:
 
     from app.config import get_api_key
 
-    # PG-10: Per-use inference — extraction role for Mem0's internal LLM.
-    # Falls back to top-level "llm" for backward compat with legacy config.
-    inference = config.get("inference", {})
-    llm_config = inference.get("extraction", {}) or config.get("llm", {})
+    # Extraction LLM config — AE config top-level "extraction" section.
+    # Falls back to "llm" for backward compat with legacy single-config.
+    llm_config = config.get("extraction", {}) or config.get("llm", {})
     embeddings_config = config.get("embeddings", {})
 
     llm_api_key = get_api_key(llm_config)

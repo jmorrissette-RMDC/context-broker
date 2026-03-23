@@ -22,7 +22,7 @@ import yaml
 _log = logging.getLogger("context_broker.config")
 
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/config/config.yml")
-TE_CONFIG_PATH = os.environ.get("TE_CONFIG_PATH", "/config/imperator.yml")
+TE_CONFIG_PATH = os.environ.get("TE_CONFIG_PATH", "/config/te.yml")
 
 # Cached config with mtime check to avoid repeated file reads (M-11).
 # os.stat() is near-instant and avoids synchronous file I/O on every call.
@@ -184,11 +184,11 @@ def _read_and_parse_te_config() -> tuple[dict[str, Any], str]:
             raw = f.read()
         config = yaml.safe_load(raw)
         if not isinstance(config, dict):
-            raise ValueError("imperator.yml must be a YAML mapping at the top level")
+            raise ValueError("te.yml must be a YAML mapping at the top level")
     except FileNotFoundError as exc:
         raise RuntimeError(
             f"TE configuration file not found at {TE_CONFIG_PATH}. "
-            "Mount /config/imperator.yml into the container."
+            "Mount /config/te.yml into the container."
         ) from exc
     except yaml.YAMLError as exc:
         raise RuntimeError(f"Failed to parse {TE_CONFIG_PATH}: {exc}") from exc
@@ -229,7 +229,7 @@ def load_te_config() -> dict[str, Any]:
     except FileNotFoundError as exc:
         raise RuntimeError(
             f"TE configuration file not found at {TE_CONFIG_PATH}. "
-            "Mount /config/imperator.yml into the container."
+            "Mount /config/te.yml into the container."
         ) from exc
 
     if _te_config_cache is not None and current_mtime == _te_config_mtime:
@@ -251,7 +251,7 @@ async def async_load_te_config() -> dict[str, Any]:
     except FileNotFoundError as exc:
         raise RuntimeError(
             f"TE configuration file not found at {TE_CONFIG_PATH}. "
-            "Mount /config/imperator.yml into the container."
+            "Mount /config/te.yml into the container."
         ) from exc
 
     if _te_config_cache is not None and current_mtime == _te_config_mtime:
@@ -265,16 +265,16 @@ async def async_load_te_config() -> dict[str, Any]:
 def get_api_key(provider_config: dict[str, Any]) -> str:
     """Resolve an API key for a provider.
 
-    Standard pattern: LangChain reads default env vars (OPENAI_API_KEY, etc.)
-    automatically. This function is only needed when config explicitly overrides
-    the key via api_key_env (non-standard, for multi-key setups).
-    For Ollama and other keyless providers, returns empty string.
+    Every inference slot should specify api_key_env naming the environment
+    variable that holds its API key. No defaults, no magic — explicit is
+    better than implicit.
+
+    If api_key_env is absent or empty, returns empty string (keyless
+    providers like Ollama).
     """
-    # If config explicitly names an env var, use it (backward compat)
     env_var_name = provider_config.get("api_key_env", "")
     if env_var_name:
         return os.environ.get(env_var_name, "")
-    # Otherwise return empty — LangChain will read its default env vars
     return ""
 
 
@@ -379,46 +379,29 @@ _embeddings_cache: dict[str, Any] = {}
 _MAX_CACHE_ENTRIES = 10
 
 
-_ChatAnthropic = None
-
-
-def _get_anthropic_class():
-    """Lazy import for ChatAnthropic — only loaded if needed."""
-    global _ChatAnthropic
-    if _ChatAnthropic is None:
-        from langchain_anthropic import ChatAnthropic
-        _ChatAnthropic = ChatAnthropic
-    return _ChatAnthropic
-
-
 def get_chat_model(config: dict, role: str = "imperator") -> Any:
-    """Return a cached LLM instance for the given cognitive role.
+    """Return a cached ChatOpenAI instance for the given role.
 
-    Reads from the TE config's inference section. Each role (imperator,
-    summarization, extraction) has its own provider/model configuration.
+    Role determines where to look for the LLM config in the merged config:
+    - "imperator": from TE config (config["imperator"])
+    - "summarization": from AE config (config["summarization"])
+    - "extraction": from AE config (config["extraction"])
+    - Fallback: config["llm"] for legacy single-config deployments
 
-    Supports two provider types:
-    - "openai" (default): Creates ChatOpenAI for OpenAI-compatible APIs
-    - "anthropic": Creates ChatAnthropic for Anthropic's native API
-
-    Falls back to a top-level "llm" key for backward compatibility with
-    legacy single-config deployments.
+    All providers use ChatOpenAI — the OpenAI-compatible wire protocol is
+    universal (OpenAI, Anthropic, Google, xAI, Together, Ollama all support it).
 
     R5-M12: Uses _cache_lock around the full check-and-set.
     """
     from langchain_openai import ChatOpenAI
 
-    # Resolve the LLM config for this role:
-    # 1. TE config: inference.<role> (new pattern)
-    # 2. Legacy: top-level "llm" key (backward compat)
-    inference = config.get("inference", {})
-    llm_config = inference.get(role, {})
+    # Resolve config for this role
+    llm_config = config.get(role, {})
     if not llm_config:
         llm_config = config.get("llm", {})
 
-    provider = llm_config.get("provider", "openai")
     api_key = get_api_key(llm_config)
-    cache_key = f"{role}:{provider}:{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256((api_key or 'default').encode()).hexdigest()[:16]}"
+    cache_key = f"{role}:{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256((api_key or 'none').encode()).hexdigest()[:16]}"
 
     with _cache_lock:
         if cache_key not in _llm_cache:
@@ -426,28 +409,13 @@ def get_chat_model(config: dict, role: str = "imperator") -> Any:
                 oldest_key = next(iter(_llm_cache))
                 del _llm_cache[oldest_key]
 
-            if provider == "anthropic":
-                ChatAnthropicCls = _get_anthropic_class()
-                kwargs = {
-                    "model": llm_config.get("model", "claude-haiku-4-5-20251001"),
-                    "timeout": 1800.0,
-                    "max_retries": 1,
-                }
-                if api_key:
-                    kwargs["anthropic_api_key"] = api_key
-                # Otherwise ChatAnthropic reads ANTHROPIC_API_KEY from env
-                _llm_cache[cache_key] = ChatAnthropicCls(**kwargs)
-            else:
-                kwargs = {
-                    "base_url": llm_config.get("base_url"),
-                    "model": llm_config.get("model", "gpt-4o-mini"),
-                    "timeout": 1800,
-                }
-                if api_key:
-                    kwargs["api_key"] = api_key
-                elif llm_config.get("base_url", "").startswith("http://"):
-                    kwargs["api_key"] = "not-needed"
-                _llm_cache[cache_key] = ChatOpenAI(**kwargs)
+            kwargs = {
+                "base_url": llm_config.get("base_url"),
+                "model": llm_config.get("model", "gpt-4o-mini"),
+                "api_key": api_key or "not-needed",
+                "timeout": 1800,
+            }
+            _llm_cache[cache_key] = ChatOpenAI(**kwargs)
         return _llm_cache[cache_key]
 
 
@@ -472,14 +440,11 @@ def get_embeddings_model(config: dict) -> Any:
             kwargs = {
                 "model": embeddings_config.get("model", "text-embedding-3-small"),
                 "base_url": embeddings_config.get("base_url"),
+                "api_key": api_key or "not-needed",
                 "tiktoken_enabled": embeddings_config.get("tiktoken_enabled", False),
                 "check_embedding_ctx_length": embeddings_config.get(
                     "check_embedding_ctx_length", False
                 ),
             }
-            if api_key:
-                kwargs["api_key"] = api_key
-            elif embeddings_config.get("base_url", "").startswith("http://"):
-                kwargs["api_key"] = "not-needed"
             _embeddings_cache[cache_key] = OpenAIEmbeddings(**kwargs)
         return _embeddings_cache[cache_key]
