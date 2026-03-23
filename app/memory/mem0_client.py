@@ -120,7 +120,9 @@ def _build_mem0_instance(config: dict) -> object:
             config={
                 "api_key": llm_api_key or "",
                 "model": llm_config.get("model", "gpt-4o-mini"),
-                "openai_base_url": llm_config.get("base_url", "https://api.openai.com/v1"),
+                "openai_base_url": llm_config.get(
+                    "base_url", "https://api.openai.com/v1"
+                ),
             },
         ),
         embedder=EmbedderConfig(

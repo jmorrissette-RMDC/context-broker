@@ -43,12 +43,12 @@ class MessagePipelineState(TypedDict):
     context_window_id: Optional[str]  # ARCH-04: replaces conversation_id
     conversation_id_input: Optional[str]  # Direct conversation_id bypass
     role: str
-    sender: str                     # ARCH-13: was sender_id
-    recipient: Optional[str]        # ARCH-13: was recipient_id
-    content: Optional[str]          # ARCH-01: now nullable
+    sender: str  # ARCH-13: was sender_id
+    recipient: Optional[str]  # ARCH-13: was recipient_id
+    content: Optional[str]  # ARCH-01: now nullable
     model_name: Optional[str]
-    tool_calls: Optional[list[dict]] # ARCH-01: tool calls as list of dicts (JSONB)
-    tool_call_id: Optional[str]     # ARCH-01: tool call ID for tool responses
+    tool_calls: Optional[list[dict]]  # ARCH-01: tool calls as list of dicts (JSONB)
+    tool_call_id: Optional[str]  # ARCH-01: tool call ID for tool responses
 
     # Outputs set by nodes
     message_id: Optional[str]
@@ -67,7 +67,13 @@ async def store_message(state: MessagePipelineState) -> dict:
     consecutive identical messages from the same sender.
     """
     _t0 = time.monotonic()
-    verbose_log_auto(_log, "store_message ENTER context_window=%s conversation_id_input=%s sender=%s", state.get("context_window_id"), state.get("conversation_id_input"), state["sender"])
+    verbose_log_auto(
+        _log,
+        "store_message ENTER context_window=%s conversation_id_input=%s sender=%s",
+        state.get("context_window_id"),
+        state.get("conversation_id_input"),
+        state["sender"],
+    )
     pool = get_pg_pool()
 
     # Resolve conversation_id from whichever identifier was provided
@@ -87,7 +93,9 @@ async def store_message(state: MessagePipelineState) -> dict:
         # Direct conversation_id — skip context window lookup
         conversation_id = conv_id_input
     else:
-        return {"error": "At least one of context_window_id or conversation_id must be provided"}
+        return {
+            "error": "At least one of context_window_id or conversation_id must be provided"
+        }
 
     conv_uuid = uuid.UUID(conversation_id)
 
@@ -197,7 +205,11 @@ async def store_message(state: MessagePipelineState) -> dict:
                         priority,
                         effective_token_count,
                         state.get("model_name"),
-                        json.dumps(state["tool_calls"]) if state.get("tool_calls") else None,
+                        (
+                            json.dumps(state["tool_calls"])
+                            if state.get("tool_calls")
+                            else None
+                        ),
                         state.get("tool_call_id"),
                     )
 
@@ -226,9 +238,17 @@ async def store_message(state: MessagePipelineState) -> dict:
                 "Sequence number conflict persisted after retry for conv=%s",
                 conversation_id,
             )
-            return {"error": f"Failed to assign sequence number for conversation {conversation_id}"}
+            return {
+                "error": f"Failed to assign sequence number for conversation {conversation_id}"
+            }
 
-    verbose_log_auto(_log, "store_message EXIT conv=%s msg=%s duration_ms=%d", conversation_id, str(row["id"]), int((time.monotonic() - _t0) * 1000))
+    verbose_log_auto(
+        _log,
+        "store_message EXIT conv=%s msg=%s duration_ms=%d",
+        conversation_id,
+        str(row["id"]),
+        int((time.monotonic() - _t0) * 1000),
+    )
     return {
         "message_id": str(row["id"]),
         "conversation_id": conversation_id,
@@ -269,7 +289,9 @@ async def enqueue_background_jobs(state: MessagePipelineState) -> dict:
         # messages where embedding IS NULL AND created_at < NOW() - INTERVAL
         # '5 minutes' can detect and re-enqueue these orphaned messages.
         # The queue depth metrics (M-03) can also surface this condition.
-        _log.warning("Failed to enqueue embedding job (message safe in Postgres): %s", exc)
+        _log.warning(
+            "Failed to enqueue embedding job (message safe in Postgres): %s", exc
+        )
 
     # F-01: Enqueue memory extraction job via sorted set with priority as score
     extract_job = json.dumps(
@@ -291,7 +313,10 @@ async def enqueue_background_jobs(state: MessagePipelineState) -> dict:
     except (redis.exceptions.RedisError, ConnectionError) as exc:
         # M-17: Same as above — message is safe in Postgres. Memory extraction
         # can be retried via the periodic dead-letter sweep.
-        _log.warning("Failed to enqueue memory extraction job (message safe in Postgres): %s", exc)
+        _log.warning(
+            "Failed to enqueue memory extraction job (message safe in Postgres): %s",
+            exc,
+        )
 
     return {"queued_jobs": queued}
 

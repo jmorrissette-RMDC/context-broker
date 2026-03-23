@@ -58,7 +58,8 @@ def _evict_stale_sessions() -> None:
     global _total_queued_messages
     now = time.monotonic()
     stale_ids = [
-        sid for sid, info in _sessions.items()
+        sid
+        for sid, info in _sessions.items()
         if now - info["created_at"] > _SESSION_TTL_SECONDS
     ]
     for sid in stale_ids:
@@ -77,9 +78,7 @@ def _evict_stale_sessions() -> None:
     while _total_queued_messages > _MAX_TOTAL_QUEUED and _sessions:
         evicted_id, info = _sessions.popitem(last=False)
         _total_queued_messages -= info["queue"].qsize()
-        _log.warning(
-            "MCP SSE session evicted (total queue pressure): %s", evicted_id
-        )
+        _log.warning("MCP SSE session evicted (total queue pressure): %s", evicted_id)
 
 
 @router.get("/mcp")
@@ -130,7 +129,9 @@ async def mcp_sse_session(request: Request) -> StreamingResponse:
                 # R6-M2: Decrement global counter by remaining queue size before removal
                 removed = _sessions.pop(session_id, None)
                 if removed is not None:
-                    _total_queued_messages = max(0, _total_queued_messages - removed["queue"].qsize())
+                    _total_queued_messages = max(
+                        0, _total_queued_messages - removed["queue"].qsize()
+                    )
             _log.info("MCP SSE session closed: %s", session_id)
 
     return StreamingResponse(
@@ -231,7 +232,9 @@ async def mcp_tool_call(
     config = await async_load_config()
 
     try:
-        result = await dispatch_tool(tool_name, tool_arguments, config, request.app.state)
+        result = await dispatch_tool(
+            tool_name, tool_arguments, config, request.app.state
+        )
         status = "success"
 
         response_content = {
@@ -241,9 +244,11 @@ async def mcp_tool_call(
                 "content": [
                     {
                         "type": "text",
-                        "text": json.dumps(result)
-                        if isinstance(result, dict)
-                        else str(result),
+                        "text": (
+                            json.dumps(result)
+                            if isinstance(result, dict)
+                            else str(result)
+                        ),
                     }
                 ]
             },
@@ -258,7 +263,10 @@ async def mcp_tool_call(
                     content={
                         "jsonrpc": "2.0",
                         "id": mcp_request.id,
-                        "error": {"code": -32001, "message": f"Session not found: {session_id}"},
+                        "error": {
+                            "code": -32001,
+                            "message": f"Session not found: {session_id}",
+                        },
                     },
                 )
             try:
@@ -269,7 +277,10 @@ async def mcp_tool_call(
                             content={
                                 "jsonrpc": "2.0",
                                 "id": mcp_request.id,
-                                "error": {"code": -32001, "message": f"Session disconnected: {session_id}"},
+                                "error": {
+                                    "code": -32001,
+                                    "message": f"Session disconnected: {session_id}",
+                                },
                             },
                         )
                     _sessions[session_id]["queue"].put_nowait(response_content)
@@ -291,11 +302,13 @@ async def mcp_tool_call(
                         },
                     },
                 )
-            return JSONResponse(content={
-                "jsonrpc": "2.0",
-                "id": mcp_request.id,
-                "result": "queued",
-            })
+            return JSONResponse(
+                content={
+                    "jsonrpc": "2.0",
+                    "id": mcp_request.id,
+                    "result": "queued",
+                }
+            )
 
         return JSONResponse(content=response_content)
 
@@ -336,10 +349,23 @@ def _get_tool_list() -> list[dict]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "conversation_id": {"type": "string", "format": "uuid", "description": "Caller-supplied ID for idempotent creation"},
-                    "title": {"type": "string", "description": "Optional conversation title"},
-                    "flow_id": {"type": "string", "description": "Optional flow identifier"},
-                    "user_id": {"type": "string", "description": "Optional user identifier"},
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Caller-supplied ID for idempotent creation",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional conversation title",
+                    },
+                    "flow_id": {
+                        "type": "string",
+                        "description": "Optional flow identifier",
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "Optional user identifier",
+                    },
                 },
             },
         },
@@ -350,9 +376,20 @@ def _get_tool_list() -> list[dict]:
                 "type": "object",
                 "required": ["role", "sender"],
                 "properties": {
-                    "context_window_id": {"type": "string", "format": "uuid", "description": "Context window ID (resolves conversation automatically). At least one of context_window_id or conversation_id is required."},
-                    "conversation_id": {"type": "string", "format": "uuid", "description": "Direct conversation ID (skips context window lookup). At least one of context_window_id or conversation_id is required."},
-                    "role": {"type": "string", "enum": ["user", "assistant", "system", "tool"]},
+                    "context_window_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Context window ID (resolves conversation automatically). At least one of context_window_id or conversation_id is required.",
+                    },
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Direct conversation ID (skips context window lookup). At least one of context_window_id or conversation_id is required.",
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "system", "tool"],
+                    },
                     "sender": {"type": "string"},
                     "recipient": {"type": "string"},
                     "content": {"type": "string"},
@@ -397,11 +434,26 @@ def _get_tool_list() -> list[dict]:
                     "query": {"type": "string"},
                     "limit": {"type": "integer", "default": 10},
                     "offset": {"type": "integer", "default": 0},
-                    "date_from": {"type": "string", "description": "ISO-8601 date lower bound"},
-                    "date_to": {"type": "string", "description": "ISO-8601 date upper bound"},
-                    "flow_id": {"type": "string", "description": "Filter by flow identifier"},
-                    "user_id": {"type": "string", "description": "Filter by user identifier"},
-                    "sender": {"type": "string", "description": "Filter by sender (matches conversations containing messages from this sender)"},
+                    "date_from": {
+                        "type": "string",
+                        "description": "ISO-8601 date lower bound",
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "ISO-8601 date upper bound",
+                    },
+                    "flow_id": {
+                        "type": "string",
+                        "description": "Filter by flow identifier",
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "Filter by user identifier",
+                    },
+                    "sender": {
+                        "type": "string",
+                        "description": "Filter by sender (matches conversations containing messages from this sender)",
+                    },
                 },
             },
         },
@@ -415,9 +467,18 @@ def _get_tool_list() -> list[dict]:
                     "query": {"type": "string"},
                     "conversation_id": {"type": "string", "format": "uuid"},
                     "sender": {"type": "string", "description": "Filter by sender"},
-                    "role": {"type": "string", "enum": ["user", "assistant", "system", "tool"]},
-                    "date_from": {"type": "string", "description": "ISO-8601 date lower bound"},
-                    "date_to": {"type": "string", "description": "ISO-8601 date upper bound"},
+                    "role": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "system", "tool"],
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "description": "ISO-8601 date lower bound",
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "ISO-8601 date upper bound",
+                    },
                     "limit": {"type": "integer", "default": 10},
                 },
             },
@@ -440,7 +501,11 @@ def _get_tool_list() -> list[dict]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "context_window_id": {"type": "string", "format": "uuid", "description": "Look up a specific context window by ID"},
+                    "context_window_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Look up a specific context window by ID",
+                    },
                     "conversation_id": {"type": "string", "format": "uuid"},
                     "participant_id": {"type": "string"},
                     "build_type": {"type": "string"},

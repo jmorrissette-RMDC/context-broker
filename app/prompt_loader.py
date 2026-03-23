@@ -9,7 +9,6 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Any
 
 _log = logging.getLogger("context_broker.prompt_loader")
 

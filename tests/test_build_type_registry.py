@@ -16,10 +16,10 @@ from app.flows.build_type_registry import (
     register_build_type,
 )
 
-
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
 
 def _save_and_restore_registry():
     """Save registry state for restoration after test."""

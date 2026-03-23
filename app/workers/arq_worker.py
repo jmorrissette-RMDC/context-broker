@@ -19,7 +19,6 @@ import random
 import sys
 import time
 import uuid
-from typing import Any
 
 import redis.asyncio as aioredis
 import redis.exceptions as redis_exc
@@ -134,7 +133,11 @@ async def process_assembly_job(job: dict) -> None:
     except ValueError as exc:
         raise ValueError(f"Malformed UUID in assembly job: {exc}") from exc
 
-    _log.info("Processing assembly job: window=%s build_type=%s", context_window_id, build_type)
+    _log.info(
+        "Processing assembly job: window=%s build_type=%s",
+        context_window_id,
+        build_type,
+    )
     start = time.monotonic()
 
     # ARCH-18: Look up the assembly graph from the registry by build type name
@@ -278,9 +281,7 @@ async def _handle_job_failure(
         )
         # B-03 / G5-34: Use sorted set for delayed queue (score = retry_after)
         retry_after_ts = job["retry_after"]
-        await redis.zadd(
-            f"{queue_name}:delayed", {json.dumps(job): retry_after_ts}
-        )
+        await redis.zadd(f"{queue_name}:delayed", {json.dumps(job): retry_after_ts})
     else:
         _log.error(
             "Dead-lettering job after %d attempts: queue=%s error=%s",
@@ -380,9 +381,16 @@ async def _consume_queue(
         # M-24: Broadened exception handler to cover flow-level errors
         # (ValueError, KeyError, TypeError) that shouldn't kill the consumer.
         # CB-R3-05: Added redis_exc.RedisError for Redis-level failures.
-        except (RuntimeError, ConnectionError, json.JSONDecodeError, OSError,
-                ValueError, KeyError, TypeError,
-                redis_exc.RedisError) as exc:
+        except (
+            RuntimeError,
+            ConnectionError,
+            json.JSONDecodeError,
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            redis_exc.RedisError,
+        ) as exc:
             _log.error(
                 "Job processing error in queue %s: %s", queue_name, exc, exc_info=True
             )
@@ -484,7 +492,8 @@ async def _sweep_dead_letters(config: dict) -> None:
             # G5-35: Preserve unparseable payloads for forensic review
             _log.error(
                 "Dead-letter sweep: malformed JSON, pushing to "
-                "dead_letter_unparseable: %s", exc,
+                "dead_letter_unparseable: %s",
+                exc,
             )
             await redis.lpush("dead_letter_unparseable", raw)
         except (ConnectionError, OSError) as exc:
@@ -531,7 +540,9 @@ async def _sweep_delayed_queues(config: dict) -> None:
 async def _dead_letter_sweep_loop(config: dict) -> None:
     """Periodic dead-letter and delayed-queue sweep loop."""
     while True:
-        await asyncio.sleep(get_tuning(config, "dead_letter_sweep_interval_seconds", 60))
+        await asyncio.sleep(
+            get_tuning(config, "dead_letter_sweep_interval_seconds", 60)
+        )
         try:
             await _sweep_dead_letters(config)
         except asyncio.CancelledError:
@@ -612,7 +623,9 @@ async def start_background_worker(config: dict) -> None:
         _consume_queue("embedding_jobs", process_embedding_job, config),
         _consume_queue("context_assembly_jobs", process_assembly_job, config),
         _consume_queue(
-            "memory_extraction_jobs", process_extraction_job, config,
+            "memory_extraction_jobs",
+            process_extraction_job,
+            config,
             sorted_set=True,
         ),
         _dead_letter_sweep_loop(config),

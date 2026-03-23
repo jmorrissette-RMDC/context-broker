@@ -10,7 +10,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-
 # ============================================================
 # MCP Tool Input Models
 # ============================================================
@@ -19,7 +18,9 @@ from pydantic import BaseModel, Field, model_validator
 class CreateConversationInput(BaseModel):
     """Input for conv_create_conversation."""
 
-    conversation_id: Optional[UUID] = Field(None, description="Caller-supplied ID for idempotent creation")
+    conversation_id: Optional[UUID] = Field(
+        None, description="Caller-supplied ID for idempotent creation"
+    )
     title: Optional[str] = Field(None, max_length=500)
     flow_id: Optional[str] = Field(None, max_length=255)
     user_id: Optional[str] = Field(None, max_length=255)
@@ -39,6 +40,7 @@ class StoreMessageInput(BaseModel):
                 "At least one of context_window_id or conversation_id must be provided"
             )
         return self
+
     sender: str = Field(..., min_length=1, max_length=255)
     recipient: Optional[str] = Field(None, max_length=255)
     content: Optional[str] = Field(None)
@@ -176,7 +178,6 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, ge=1)
-
 
 
 # ============================================================

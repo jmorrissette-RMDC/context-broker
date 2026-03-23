@@ -221,9 +221,7 @@ class ImperatorStateManager:
         # falling back to the build type's own setting.
         imperator_max_tokens = imperator_config.get("max_context_tokens")
         caller_override = (
-            imperator_max_tokens
-            if isinstance(imperator_max_tokens, int)
-            else None
+            imperator_max_tokens if isinstance(imperator_max_tokens, int) else None
         )
         token_budget = await resolve_token_budget(
             config=self._config,

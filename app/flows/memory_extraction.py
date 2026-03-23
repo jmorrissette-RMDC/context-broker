@@ -26,10 +26,20 @@ _log = logging.getLogger("context_broker.flows.memory_extraction")
 
 # Secret redaction patterns — applied before Mem0 ingestion
 _SECRET_PATTERNS = [
-    (re.compile(r'(?i)(api[_-]?key|token|secret|password|credential)["\s:=]+["\']?[\w\-\.]{20,}'), '[REDACTED]'),
-    (re.compile(r'(?i)bearer\s+[\w\-\.]{20,}'), 'Bearer [REDACTED]'),
-    (re.compile(r'sk-[a-zA-Z0-9\-]{20,}'), '[REDACTED]'),
-    (re.compile(r'(?i)(aws|gcp|azure)[_-]?[\w]*[_-]?(key|secret|token)["\s:=]+["\']?[\w\-\.]{16,}'), '[REDACTED]'),
+    (
+        re.compile(
+            r'(?i)(api[_-]?key|token|secret|password|credential)["\s:=]+["\']?[\w\-\.]{20,}'
+        ),
+        "[REDACTED]",
+    ),
+    (re.compile(r"(?i)bearer\s+[\w\-\.]{20,}"), "Bearer [REDACTED]"),
+    (re.compile(r"sk-[a-zA-Z0-9\-]{20,}"), "[REDACTED]"),
+    (
+        re.compile(
+            r'(?i)(aws|gcp|azure)[_-]?[\w]*[_-]?(key|secret|token)["\s:=]+["\']?[\w\-\.]{16,}'
+        ),
+        "[REDACTED]",
+    ),
 ]
 
 
@@ -71,12 +81,22 @@ class MemoryExtractionState(TypedDict):
 
 async def acquire_extraction_lock(state: MemoryExtractionState) -> dict:
     """Acquire a Redis lock to prevent concurrent extraction of the same conversation."""
-    verbose_log(state["config"], _log, "memory_extraction.acquire_lock ENTER conv=%s", state["conversation_id"])
+    verbose_log(
+        state["config"],
+        _log,
+        "memory_extraction.acquire_lock ENTER conv=%s",
+        state["conversation_id"],
+    )
     lock_key = f"extraction_in_progress:{state['conversation_id']}"
     lock_token = str(uuid.uuid4())
     redis = get_redis()
 
-    acquired = await redis.set(lock_key, lock_token, ex=get_tuning(state["config"], "extraction_lock_ttl_seconds", 180), nx=True)
+    acquired = await redis.set(
+        lock_key,
+        lock_token,
+        ex=get_tuning(state["config"], "extraction_lock_ttl_seconds", 180),
+        nx=True,
+    )
     if not acquired:
         _log.info(
             "Memory extraction: lock not acquired for conv=%s — skipping",
@@ -204,7 +224,14 @@ async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
         )
         return {"error": None}
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         # Mem0 wraps Neo4j driver errors and other backend failures in
         # various exception types. We catch broadly here to ensure

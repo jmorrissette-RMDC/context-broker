@@ -46,7 +46,12 @@ class EmbedPipelineState(TypedDict):
 
 async def fetch_message(state: EmbedPipelineState) -> dict:
     """Fetch the message row from PostgreSQL."""
-    verbose_log(state["config"], _log, "embed_pipeline.fetch_message ENTER msg=%s", state["message_id"])
+    verbose_log(
+        state["config"],
+        _log,
+        "embed_pipeline.fetch_message ENTER msg=%s",
+        state["message_id"],
+    )
     pool = get_pg_pool()
     row = await pool.fetchrow(
         "SELECT * FROM conversation_messages WHERE id = $1",
@@ -65,7 +70,12 @@ async def generate_embedding(state: EmbedPipelineState) -> dict:
     """
     _t0 = _time_mod.monotonic()
     config = state["config"]
-    verbose_log(config, _log, "embed_pipeline.generate_embedding ENTER msg=%s", state["message_id"])
+    verbose_log(
+        config,
+        _log,
+        "embed_pipeline.generate_embedding ENTER msg=%s",
+        state["message_id"],
+    )
     message = state["message"]
 
     # ARCH-01: Tool-call messages may have NULL content — skip embedding entirely.
@@ -160,11 +170,7 @@ async def enqueue_context_assembly(state: EmbedPipelineState) -> dict:
     )
 
     # Get conversation token count for threshold check
-    conv = await pool.fetchrow(
-        "SELECT estimated_token_count FROM conversations WHERE id = $1",
-        uuid.UUID(state["conversation_id"]),
-    )
-    conv_tokens = conv["estimated_token_count"] if conv else 0
+    # Token count for threshold checking is fetched per-window in the batch query below
 
     queued = []
     now = datetime.now(timezone.utc).isoformat()
@@ -190,7 +196,8 @@ async def enqueue_context_assembly(state: EmbedPipelineState) -> dict:
     # added after each distinct last_assembled_at timestamp.
     tokens_since_map: dict[str, int] = {}
     windows_needing_token_check = [
-        w for w in windows
+        w
+        for w in windows
         if str(w["id"]) not in locked_window_ids and w["last_assembled_at"] is not None
     ]
     if windows_needing_token_check:
@@ -233,7 +240,12 @@ async def enqueue_context_assembly(state: EmbedPipelineState) -> dict:
         # is intentional: build-type-specific threshold takes priority, then the
         # global tuning knob, then a safe default. This avoids unnecessary assembly
         # when no threshold is configured at any level.
-        trigger_pct = float(bt_config.get("trigger_threshold_percent", get_tuning(config, "trigger_threshold_percent", 0.1)))
+        trigger_pct = float(
+            bt_config.get(
+                "trigger_threshold_percent",
+                get_tuning(config, "trigger_threshold_percent", 0.1),
+            )
+        )
         threshold_tokens = int(max_budget * trigger_pct)
 
         if window["last_assembled_at"] is not None:

@@ -8,22 +8,20 @@ management is not corrupted by side effects.
 
 import copy
 
-import pytest
 
 from app.flows.message_pipeline import route_after_store
 from app.flows.build_types.tier_scaling import scale_tier_percentages
 from app.flows.memory_scoring import filter_and_rank_memories, score_memory
 
-
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
 
+
 def _assert_state_unchanged(original: dict, after: dict, fn_name: str):
     """Assert that two dicts are identical, providing a clear error message."""
     assert original == after, (
-        f"{fn_name} mutated its input state. "
-        f"Diff: expected {original}, got {after}"
+        f"{fn_name} mutated its input state. " f"Diff: expected {original}, got {after}"
     )
 
 
@@ -133,6 +131,7 @@ class TestScoreMemoryImmutability:
     def test_standard_memory(self):
         """Scoring a standard memory does not mutate the input."""
         from datetime import datetime, timezone
+
         mem = {
             "id": "mem-1",
             "content": "Test",
@@ -165,6 +164,7 @@ class TestFilterAndRankImmutability:
     def test_input_list_not_mutated(self):
         """The original list is not modified (no in-place sort, no dict mutation)."""
         from datetime import datetime, timedelta, timezone
+
         now = datetime.now(timezone.utc)
         memories = [
             {
@@ -182,7 +182,11 @@ class TestFilterAndRankImmutability:
                 "last_accessed": None,
             },
         ]
-        config = {"tuning": {"memory_half_lives": {"factual": 60, "ephemeral": 3, "default": 30}}}
+        config = {
+            "tuning": {
+                "memory_half_lives": {"factual": 60, "ephemeral": 3, "default": 30}
+            }
+        }
         original = copy.deepcopy(memories)
         filter_and_rank_memories(memories, config)
         _assert_state_unchanged(original, memories, "filter_and_rank_memories")
@@ -190,6 +194,7 @@ class TestFilterAndRankImmutability:
     def test_individual_dicts_not_mutated(self):
         """Individual memory dicts do not gain a confidence_score key."""
         from datetime import datetime, timezone
+
         mem = {
             "id": "mem-1",
             "content": "Test",

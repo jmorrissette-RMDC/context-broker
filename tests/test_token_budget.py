@@ -12,7 +12,6 @@ import pytest
 
 from app.token_budget import resolve_token_budget
 
-
 # ------------------------------------------------------------------
 # Priority chain
 # ------------------------------------------------------------------
@@ -117,7 +116,9 @@ class TestResolveTokenBudget:
             "app.token_budget._query_provider_context_length",
             new_callable=AsyncMock,
         ) as mock_query:
-            mock_query.return_value = 8192  # _query_provider returns fallback on failure
+            mock_query.return_value = (
+                8192  # _query_provider returns fallback on failure
+            )
             result = await resolve_token_budget(
                 config=sample_config,
                 build_type_config=build_type_config,
@@ -201,7 +202,9 @@ class TestQueryProviderIntegration:
             request=mock_request,
         )
 
-        with patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_response):
+        with patch(
+            "httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_response
+        ):
             result = await resolve_token_budget(
                 config=sample_config,
                 build_type_config=build_type_config,
@@ -225,7 +228,9 @@ class TestQueryProviderIntegration:
             request=mock_request,
         )
 
-        with patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_response):
+        with patch(
+            "httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_response
+        ):
             result = await resolve_token_budget(
                 config=sample_config,
                 build_type_config=build_type_config,

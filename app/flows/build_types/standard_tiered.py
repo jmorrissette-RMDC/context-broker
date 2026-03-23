@@ -96,13 +96,19 @@ async def acquire_assembly_lock(state: StandardTieredAssemblyState) -> dict:
         )
         return {"error": "Invalid UUID in assembly input", "lock_acquired": False}
 
-    verbose_log(state["config"], _log, "standard_tiered.acquire_lock ENTER window=%s", state["context_window_id"])
+    verbose_log(
+        state["config"],
+        _log,
+        "standard_tiered.acquire_lock ENTER window=%s",
+        state["context_window_id"],
+    )
     lock_key = f"assembly_in_progress:{state['context_window_id']}"
     lock_token = str(uuid.uuid4())
     redis = get_redis()
 
     acquired = await redis.set(
-        lock_key, lock_token,
+        lock_key,
+        lock_token,
         ex=get_tuning(state["config"], "assembly_lock_ttl_seconds", 300),
         nx=True,
     )
@@ -113,7 +119,12 @@ async def acquire_assembly_lock(state: StandardTieredAssemblyState) -> dict:
         )
         return {"lock_key": lock_key, "lock_token": None, "lock_acquired": False}
 
-    return {"lock_key": lock_key, "lock_token": lock_token, "lock_acquired": True, "assembly_start_time": time.monotonic()}
+    return {
+        "lock_key": lock_key,
+        "lock_token": lock_token,
+        "lock_acquired": True,
+        "assembly_start_time": time.monotonic(),
+    }
 
 
 async def load_window_config(state: StandardTieredAssemblyState) -> dict:
@@ -130,7 +141,9 @@ async def load_window_config(state: StandardTieredAssemblyState) -> dict:
     window_dict = dict(window)
 
     try:
-        build_type_config = get_build_type_config(state["config"], window_dict["build_type"])
+        build_type_config = get_build_type_config(
+            state["config"], window_dict["build_type"]
+        )
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -203,7 +216,9 @@ async def calculate_tier_boundaries(state: StandardTieredAssemblyState) -> dict:
     tier3_start_seq = messages[-1]["sequence_number"] + 1
 
     for msg in reversed(messages):
-        msg_tokens = msg.get("token_count") or max(1, len(msg.get("content") or "") // 4)
+        msg_tokens = msg.get("token_count") or max(
+            1, len(msg.get("content") or "") // 4
+        )
         if tier3_tokens_used + msg_tokens <= tier3_budget:
             tier3_messages.insert(0, msg)
             tier3_tokens_used += msg_tokens
@@ -234,7 +249,9 @@ async def calculate_tier_boundaries(state: StandardTieredAssemblyState) -> dict:
         max_summarized_seq = existing_t2[0]["summarizes_to_seq"]
 
     # Only process messages not yet summarized
-    unsummarized = [m for m in older_messages if m["sequence_number"] > max_summarized_seq]
+    unsummarized = [
+        m for m in older_messages if m["sequence_number"] > max_summarized_seq
+    ]
 
     # Chunk unsummarized messages into groups
     chunk_size = get_tuning(state["config"], "chunk_size", 20)
@@ -332,7 +349,8 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
             continue
 
         chunk_tokens = sum(
-            m.get("token_count") or max(1, len(m.get("content") or "") // 4) for m in chunk
+            m.get("token_count") or max(1, len(m.get("content") or "") // 4)
+            for m in chunk
         )
 
         # Idempotency: skip if summary already exists for this range
@@ -648,7 +666,10 @@ def build_standard_tiered_assembly():
     workflow.add_conditional_edges(
         "load_window_config",
         route_after_load_config,
-        {"load_messages": "load_messages", "release_assembly_lock": "release_assembly_lock"},
+        {
+            "load_messages": "load_messages",
+            "release_assembly_lock": "release_assembly_lock",
+        },
     )
     workflow.add_conditional_edges(
         "load_messages",
@@ -725,7 +746,12 @@ async def ret_load_window(state: StandardTieredRetrievalState) -> dict:
         )
         return {"error": "Invalid UUID in retrieval input", "assembly_status": "error"}
 
-    verbose_log(state["config"], _log, "standard_tiered.retrieval.load_window ENTER window=%s", state["context_window_id"])
+    verbose_log(
+        state["config"],
+        _log,
+        "standard_tiered.retrieval.load_window ENTER window=%s",
+        state["context_window_id"],
+    )
     pool = get_pg_pool()
 
     window = await pool.fetchrow(
@@ -747,7 +773,9 @@ async def ret_load_window(state: StandardTieredRetrievalState) -> dict:
     window_dict = dict(window)
 
     try:
-        build_type_config = get_build_type_config(state["config"], window_dict["build_type"])
+        build_type_config = get_build_type_config(
+            state["config"], window_dict["build_type"]
+        )
     except ValueError as exc:
         return {"error": str(exc), "assembly_status": "error"}
 
@@ -942,7 +970,9 @@ async def ret_assemble_context(state: StandardTieredRetrievalState) -> dict:
     # Tier 3: Recent verbatim messages (M-08: newest first truncation)
     truncated_recent_messages: list[dict] = []
     if state.get("recent_messages"):
-        remaining = max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        remaining = (
+            max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        )
         msg_tokens = 0
         for m in reversed(state["recent_messages"]):
             msg_content = m.get("content", "")
@@ -1028,4 +1058,6 @@ def build_standard_tiered_retrieval():
 # Registration
 # ============================================================
 
-register_build_type("standard-tiered", build_standard_tiered_assembly, build_standard_tiered_retrieval)
+register_build_type(
+    "standard-tiered", build_standard_tiered_assembly, build_standard_tiered_retrieval
+)

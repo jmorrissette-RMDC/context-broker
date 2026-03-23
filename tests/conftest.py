@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 # ------------------------------------------------------------------
 # Sample configuration
 # ------------------------------------------------------------------
+
 
 @pytest.fixture
 def sample_config() -> dict:
@@ -82,6 +82,7 @@ def sample_config() -> dict:
 # Mock infrastructure
 # ------------------------------------------------------------------
 
+
 @pytest.fixture
 def mock_pg_pool():
     """Return a mock asyncpg connection pool.
@@ -132,6 +133,7 @@ def mock_redis():
 # Sample data factories
 # ------------------------------------------------------------------
 
+
 @pytest.fixture
 def sample_conversation_id() -> uuid.UUID:
     """Return a deterministic conversation UUID."""
@@ -162,7 +164,9 @@ def sample_store_message_data(sample_context_window_id) -> dict:
 
 
 @pytest.fixture
-def sample_message_pipeline_state(sample_context_window_id, sample_conversation_id) -> dict:
+def sample_message_pipeline_state(
+    sample_context_window_id, sample_conversation_id
+) -> dict:
     """Return a valid MessagePipelineState dict for node-level tests."""
     return {
         "context_window_id": str(sample_context_window_id),
@@ -191,7 +195,9 @@ def sample_memory() -> dict:
         "content": "User prefers dark mode.",
         "category": "contextual",
         "created_at": datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc).isoformat(),
-        "last_accessed": datetime(2026, 3, 20, 8, 0, 0, tzinfo=timezone.utc).isoformat(),
+        "last_accessed": datetime(
+            2026, 3, 20, 8, 0, 0, tzinfo=timezone.utc
+        ).isoformat(),
         "user_id": "user-1",
     }
 
@@ -199,13 +205,14 @@ def sample_memory() -> dict:
 @pytest.fixture
 def sample_memories() -> list[dict]:
     """Return a list of sample memories with different categories and ages."""
-    base = datetime(2026, 3, 23, 0, 0, 0, tzinfo=timezone.utc)
     return [
         {
             "id": "mem-recent",
             "content": "User is working on ContextBroker tests.",
             "category": "ephemeral",
-            "created_at": datetime(2026, 3, 22, 12, 0, 0, tzinfo=timezone.utc).isoformat(),
+            "created_at": datetime(
+                2026, 3, 22, 12, 0, 0, tzinfo=timezone.utc
+            ).isoformat(),
             "last_accessed": None,
             "user_id": "user-1",
         },
@@ -213,7 +220,9 @@ def sample_memories() -> list[dict]:
             "id": "mem-old",
             "content": "User likes Python.",
             "category": "factual",
-            "created_at": datetime(2025, 6, 1, 0, 0, 0, tzinfo=timezone.utc).isoformat(),
+            "created_at": datetime(
+                2025, 6, 1, 0, 0, 0, tzinfo=timezone.utc
+            ).isoformat(),
             "last_accessed": None,
             "user_id": "user-1",
         },
@@ -221,7 +230,9 @@ def sample_memories() -> list[dict]:
             "id": "mem-medium",
             "content": "Project context for Rogers refactor.",
             "category": "contextual",
-            "created_at": datetime(2026, 3, 10, 0, 0, 0, tzinfo=timezone.utc).isoformat(),
+            "created_at": datetime(
+                2026, 3, 10, 0, 0, 0, tzinfo=timezone.utc
+            ).isoformat(),
             "last_accessed": None,
             "user_id": "user-1",
         },

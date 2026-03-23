@@ -7,7 +7,6 @@ boundary conditions, and input immutability.
 
 import copy
 
-import pytest
 
 from app.flows.build_types.tier_scaling import (
     _LONG_CONVERSATION,
@@ -15,10 +14,10 @@ from app.flows.build_types.tier_scaling import (
     scale_tier_percentages,
 )
 
-
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
 
 def _base_config() -> dict:
     """Return a standard-tiered build type config for testing."""

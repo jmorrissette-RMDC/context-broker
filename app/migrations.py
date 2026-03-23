@@ -30,12 +30,10 @@ async def _migration_002(conn) -> None:
 
     Safe to run multiple times (CREATE INDEX IF NOT EXISTS).
     """
-    await conn.execute(
-        """
+    await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_windows_participant_conversation
         ON context_windows(participant_id, conversation_id)
-        """
-    )
+        """)
 
 
 async def _migration_003(conn) -> None:
@@ -44,12 +42,10 @@ async def _migration_003(conn) -> None:
     Prevents duplicate sequence numbers under concurrent inserts.
     Safe to run multiple times (CREATE UNIQUE INDEX IF NOT EXISTS).
     """
-    await conn.execute(
-        """
+    await conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_conversation_seq_unique
         ON conversation_messages(conversation_id, sequence_number)
-        """
-    )
+        """)
 
 
 async def _migration_004(conn) -> None:
@@ -58,12 +54,10 @@ async def _migration_004(conn) -> None:
     Captures who the message was addressed to alongside the existing sender_id.
     Safe to run multiple times (ADD COLUMN IF NOT EXISTS).
     """
-    await conn.execute(
-        """
+    await conn.execute("""
         ALTER TABLE conversation_messages
         ADD COLUMN IF NOT EXISTS recipient_id VARCHAR(255)
-        """
-    )
+        """)
 
 
 async def _migration_005(conn) -> None:
@@ -95,12 +89,10 @@ async def _migration_007(conn) -> None:
     Adds a unique index on (context_window_id, tier, summarizes_from_seq, summarizes_to_seq)
     to prevent duplicate summary rows when multiple workers race to summarize the same range.
     """
-    await conn.execute(
-        """
+    await conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_window_tier_seq
         ON conversation_summaries(context_window_id, tier, summarizes_from_seq, summarizes_to_seq)
-        """
-    )
+        """)
 
 
 async def _migration_008(conn) -> None:
@@ -114,12 +106,10 @@ async def _migration_008(conn) -> None:
     # Use a savepoint so UndefinedTableError doesn't abort the outer transaction
     try:
         async with conn.transaction():
-            await conn.execute(
-                """
+            await conn.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_mem0_memories_dedup
                 ON mem0_memories(memory, user_id)
-                """
-            )
+                """)
         _log.info("Mem0 dedup index created or already exists")
     except asyncpg.UndefinedTableError:
         _log.info("Mem0 table not yet created — dedup index deferred to next startup")
@@ -135,12 +125,10 @@ async def _migration_009(conn) -> None:
         "SELECT vector_dims(embedding) FROM conversation_messages WHERE embedding IS NOT NULL LIMIT 1"
     )
     if dim is not None:
-        await conn.execute(
-            f"""
+        await conn.execute(f"""
             CREATE INDEX IF NOT EXISTS idx_messages_embedding
             ON conversation_messages USING hnsw ((embedding::vector({dim})) vector_cosine_ops)
-            """
-        )
+            """)
         _log.info("HNSW index created for %d-dimensional embeddings", dim)
     else:
         _log.info("No embeddings yet — HNSW index deferred to next startup")
@@ -152,12 +140,10 @@ async def _migration_010(conn) -> None:
     Prevents duplicate context windows for the same (conversation, participant, build_type).
     Safe to run multiple times (CREATE UNIQUE INDEX IF NOT EXISTS).
     """
-    await conn.execute(
-        """
+    await conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_windows_conv_participant_build
         ON context_windows(conversation_id, participant_id, build_type)
-        """
-    )
+        """)
 
 
 async def _migration_011(conn) -> None:
@@ -182,22 +168,18 @@ async def _migration_012(conn) -> None:
     """
 
     # ── ARCH-13: Rename sender_id → sender ──────────────────────────
-    has_sender_id = await conn.fetchval(
-        """
+    has_sender_id = await conn.fetchval("""
         SELECT EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name = 'conversation_messages' AND column_name = 'sender_id'
         )
-        """
-    )
-    has_sender = await conn.fetchval(
-        """
+        """)
+    has_sender = await conn.fetchval("""
         SELECT EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name = 'conversation_messages' AND column_name = 'sender'
         )
-        """
-    )
+        """)
     if has_sender_id and has_sender:
         # Fresh DB: init.sql created 'sender', old migration added 'sender_id' — drop the old one
         await conn.execute("ALTER TABLE conversation_messages DROP COLUMN sender_id")
@@ -209,26 +191,24 @@ async def _migration_012(conn) -> None:
         _log.info("Renamed sender_id → sender")
 
     # ── ARCH-13: Rename recipient_id → recipient ────────────────────
-    has_recipient_id = await conn.fetchval(
-        """
+    has_recipient_id = await conn.fetchval("""
         SELECT EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name = 'conversation_messages' AND column_name = 'recipient_id'
         )
-        """
-    )
-    has_recipient = await conn.fetchval(
-        """
+        """)
+    has_recipient = await conn.fetchval("""
         SELECT EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name = 'conversation_messages' AND column_name = 'recipient'
         )
-        """
-    )
+        """)
     if has_recipient_id and has_recipient:
         # Fresh DB: init.sql created 'recipient', migration 4 added 'recipient_id' — drop the old one
         await conn.execute("ALTER TABLE conversation_messages DROP COLUMN recipient_id")
-        _log.info("Dropped duplicate recipient_id (recipient already exists from init.sql)")
+        _log.info(
+            "Dropped duplicate recipient_id (recipient already exists from init.sql)"
+        )
     elif has_recipient_id:
         await conn.execute(
             "ALTER TABLE conversation_messages RENAME COLUMN recipient_id TO recipient"
@@ -240,12 +220,10 @@ async def _migration_012(conn) -> None:
         "UPDATE conversation_messages SET recipient = 'unknown' WHERE recipient IS NULL"
     )
     # Check if the column already has a NOT NULL constraint
-    is_nullable = await conn.fetchval(
-        """
+    is_nullable = await conn.fetchval("""
         SELECT is_nullable FROM information_schema.columns
         WHERE table_name = 'conversation_messages' AND column_name = 'recipient'
-        """
-    )
+        """)
     if is_nullable == "YES":
         await conn.execute(
             "ALTER TABLE conversation_messages ALTER COLUMN recipient SET DEFAULT 'unknown'"
@@ -286,14 +264,12 @@ async def _migration_012(conn) -> None:
 
     # ── ARCH-13: Rename sender index to match new column name ───────
     # PostgreSQL doesn't have ALTER INDEX IF EXISTS … RENAME, so check first.
-    idx_exists = await conn.fetchval(
-        """
+    idx_exists = await conn.fetchval("""
         SELECT EXISTS (
             SELECT 1 FROM pg_indexes
             WHERE indexname = 'idx_messages_conversation_sender'
         )
-        """
-    )
+        """)
     if idx_exists:
         await conn.execute(
             "ALTER INDEX idx_messages_conversation_sender RENAME TO idx_messages_conversation_sender_new"
@@ -318,13 +294,25 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
     (3, "Add unique constraint on (conversation_id, sequence_number)", _migration_003),
     (4, "Add recipient_id column to conversation_messages", _migration_004),
     (5, "Add flow_id, user_id to conversations", _migration_005),
-    (6, "Add content_type, priority, repeat_count to conversation_messages", _migration_006),
+    (
+        6,
+        "Add content_type, priority, repeat_count to conversation_messages",
+        _migration_006,
+    ),
     (7, "Unique index on summaries to prevent duplicate rows (M-08)", _migration_007),
     (8, "Mem0 dedup index on mem0_memories (F-19)", _migration_008),
     (9, "Deferred HNSW vector index (G5-41)", _migration_009),
-    (10, "Unique constraint on context_windows (conversation_id, participant_id, build_type) (G5-08)", _migration_010),
+    (
+        10,
+        "Unique constraint on context_windows (conversation_id, participant_id, build_type) (G5-08)",
+        _migration_010,
+    ),
     (11, "Add last_accessed_at to context_windows", _migration_011),
-    (12, "Schema alignment: renames, tool_calls, drops, constraints (ARCH-01/08/09/12/13)", _migration_012),
+    (
+        12,
+        "Schema alignment: renames, tool_calls, drops, constraints (ARCH-01/08/09/12/13)",
+        _migration_012,
+    ),
 ]
 
 

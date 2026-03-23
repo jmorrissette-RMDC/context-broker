@@ -50,7 +50,9 @@ async def create_conversation_node(state: CreateConversationState) -> dict:
         try:
             new_id = uuid.UUID(state["conversation_id"])
         except ValueError:
-            return {"error": f"Invalid conversation_id format: {state['conversation_id']}"}
+            return {
+                "error": f"Invalid conversation_id format: {state['conversation_id']}"
+            }
     else:
         new_id = uuid.uuid4()
 
@@ -118,7 +120,10 @@ async def resolve_token_budget_node(state: CreateContextWindowState) -> dict:
         caller_override=state.get("max_tokens_override"),
     )
 
-    return {"resolved_token_budget": token_budget, "build_type_config": build_type_config}
+    return {
+        "resolved_token_budget": token_budget,
+        "build_type_config": build_type_config,
+    }
 
 
 async def create_context_window_node(state: CreateContextWindowState) -> dict:
@@ -166,7 +171,9 @@ async def create_context_window_node(state: CreateContextWindowState) -> dict:
         )
         # R5-M21: Defensive None check — should not happen but prevents crash
         if existing is None:
-            return {"error": "Context window conflict: INSERT returned nothing and existing row not found"}
+            return {
+                "error": "Context window conflict: INSERT returned nothing and existing row not found"
+            }
         return {"context_window_id": str(existing["id"])}
 
     return {"context_window_id": str(row["id"])}

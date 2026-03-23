@@ -14,11 +14,11 @@ from datetime import datetime, timezone
 
 # Half-life in days by category
 DEFAULT_HALF_LIVES = {
-    "ephemeral": 3,      # Short-lived facts (moods, preferences, temp state)
-    "contextual": 14,    # Session/project context
-    "factual": 60,       # Learned facts about entities
-    "historical": 365,   # Historical events, permanent-ish
-    "default": 30,       # When category unknown
+    "ephemeral": 3,  # Short-lived facts (moods, preferences, temp state)
+    "contextual": 14,  # Session/project context
+    "factual": 60,  # Learned facts about entities
+    "historical": 365,  # Historical events, permanent-ish
+    "default": 30,  # When category unknown
 }
 
 
@@ -62,7 +62,9 @@ def score_memory(memory: dict, config: dict) -> float:
     return score
 
 
-def filter_and_rank_memories(memories: list[dict], config: dict, min_score: float = 0.1) -> list[dict]:
+def filter_and_rank_memories(
+    memories: list[dict], config: dict, min_score: float = 0.1
+) -> list[dict]:
     """Score, filter, and rank memories by confidence.
 
     Memories below min_score are filtered out.

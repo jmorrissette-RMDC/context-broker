@@ -75,7 +75,14 @@ async def search_memory_graph(state: MemorySearchState) -> dict:
             "degraded": False,
         }
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:  # EX-CB-001: broad catch for Mem0
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:  # EX-CB-001: broad catch for Mem0
         _log.warning("Memory search failed (degraded mode): %s", exc)
         return {
             "memories": [],
@@ -122,7 +129,12 @@ async def retrieve_memory_context(state: MemoryContextState) -> dict:
 
         mem0 = await get_mem0_client(config)
         if mem0 is None:
-            return {"memories": [], "context_text": "", "degraded": True, "error": "Mem0 client not available"}
+            return {
+                "memories": [],
+                "context_text": "",
+                "degraded": True,
+                "error": "Mem0 client not available",
+            }
 
         loop = asyncio.get_running_loop()
         results = await loop.run_in_executor(
@@ -153,7 +165,14 @@ async def retrieve_memory_context(state: MemoryContextState) -> dict:
 
         return {"memories": memories, "context_text": context_text, "degraded": False}
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:  # EX-CB-001: broad catch for Mem0
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:  # EX-CB-001: broad catch for Mem0
         _log.warning("Memory context retrieval failed (degraded mode): %s", exc)
         return {"memories": [], "context_text": "", "degraded": True, "error": str(exc)}
 

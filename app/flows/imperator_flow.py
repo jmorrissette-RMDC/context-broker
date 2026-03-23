@@ -40,6 +40,7 @@ _log = logging.getLogger("context_broker.flows.imperator")
 
 # ── State ────────────────────────────────────────────────────────────────
 
+
 class ImperatorState(TypedDict):
     """State for the Imperator ReAct agent.
 
@@ -67,6 +68,7 @@ def _get_conv_search_flow():
     global _conv_search_flow_singleton
     if _conv_search_flow_singleton is None:
         from app.flows.search_flow import build_conversation_search_flow
+
         _conv_search_flow_singleton = build_conversation_search_flow()
     return _conv_search_flow_singleton
 
@@ -75,6 +77,7 @@ def _get_mem_search_flow():
     global _mem_search_flow_singleton
     if _mem_search_flow_singleton is None:
         from app.flows.memory_search_flow import build_memory_search_flow
+
         _mem_search_flow_singleton = build_memory_search_flow()
     return _mem_search_flow_singleton
 
@@ -125,7 +128,9 @@ async def _conv_search_tool(query: str, limit: int = 5) -> str:
 
 
 @tool
-async def _mem_search_tool(query: str, user_id: str = "imperator", limit: int = 5) -> str:
+async def _mem_search_tool(
+    query: str, user_id: str = "imperator", limit: int = 5
+) -> str:
     """Search extracted knowledge and memories from the knowledge graph.
 
     Use this when the user asks about facts, preferences, relationships,
@@ -205,6 +210,7 @@ async def _config_read_tool() -> str:
     and API keys redacted for safety.
     """
     from app.config import CONFIG_PATH
+
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             raw = yaml.safe_load(f)
@@ -265,11 +271,13 @@ def _get_message_pipeline():
     global _message_pipeline_singleton
     if _message_pipeline_singleton is None:
         from app.flows.message_pipeline import build_message_pipeline
+
         _message_pipeline_singleton = build_message_pipeline()
     return _message_pipeline_singleton
 
 
 # ── Helper: load DB history ─────────────────────────────────────────────
+
 
 async def _load_conversation_history(context_window_id: str, config: dict) -> str:
     """Load recent conversation history from PostgreSQL for context.
@@ -320,6 +328,7 @@ async def _load_conversation_history(context_window_id: str, config: dict) -> st
 
 # ── Graph nodes ──────────────────────────────────────────────────────────
 
+
 async def agent_node(state: ImperatorState) -> dict:
     """Call the LLM with bound tools and return the response.
 
@@ -357,7 +366,9 @@ async def agent_node(state: ImperatorState) -> dict:
 
         context_window_id = state.get("context_window_id")
         if context_window_id:
-            history_context = await _load_conversation_history(context_window_id, config)
+            history_context = await _load_conversation_history(
+                context_window_id, config
+            )
             if history_context:
                 system_content += history_context
 
@@ -370,10 +381,13 @@ async def agent_node(state: ImperatorState) -> dict:
     max_react_messages = get_tuning(config, "imperator_max_react_messages", 40)
     if len(messages) > max_react_messages:
         from langchain_core.messages import ToolMessage
+
         # Start with the default cut index (keep last max_react_messages-1)
         cut_index = len(messages) - (max_react_messages - 1)
         # Walk backwards until the message at cut_index is not a ToolMessage
-        while cut_index < len(messages) and isinstance(messages[cut_index], ToolMessage):
+        while cut_index < len(messages) and isinstance(
+            messages[cut_index], ToolMessage
+        ):
             cut_index += 1
         messages = [messages[0]] + messages[cut_index:]
 
@@ -382,13 +396,18 @@ async def agent_node(state: ImperatorState) -> dict:
     except (openai.APIError, httpx.HTTPError, ValueError, RuntimeError) as exc:
         _log.error("Imperator LLM call failed: %s", exc, exc_info=True)
         return {
-            "messages": [AIMessage(content="I encountered an error processing your request.")],
+            "messages": [
+                AIMessage(content="I encountered an error processing your request.")
+            ],
             "response_text": "I encountered an error processing your request.",
             "error": str(exc),
         }
 
     # Return the AI response — add_messages reducer will append it
-    return {"messages": [response], "iteration_count": state.get("iteration_count", 0) + 1}
+    return {
+        "messages": [response],
+        "iteration_count": state.get("iteration_count", 0) + 1,
+    }
 
 
 def should_continue(state: ImperatorState) -> str:
@@ -407,7 +426,9 @@ def should_continue(state: ImperatorState) -> str:
     last_message = messages[-1]
     if isinstance(last_message, AIMessage) and last_message.tool_calls:
         # Check iteration limit to prevent unbounded loops
-        max_iterations = get_tuning(state.get("config", {}), "imperator_max_iterations", 5)
+        max_iterations = get_tuning(
+            state.get("config", {}), "imperator_max_iterations", 5
+        )
         if state.get("iteration_count", 0) >= max_iterations:
             _log.warning(
                 "Imperator hit max iterations (%d) — forcing end",
@@ -457,51 +478,58 @@ async def store_and_end(state: ImperatorState) -> dict:
     # Store user message
     if user_content:
         try:
-            await pipeline.ainvoke({
-                "context_window_id": context_window_id,
-                "role": "user",
-                "sender": "imperator_user",
-                "recipient": "imperator",
-                "content": user_content,
-                "model_name": None,
-                "tool_calls": None,
-                "tool_call_id": None,
-                "message_id": None,
-                "conversation_id": None,
-                "sequence_number": None,
-                "was_collapsed": False,
-                "queued_jobs": [],
-                "error": None,
-            })
+            await pipeline.ainvoke(
+                {
+                    "context_window_id": context_window_id,
+                    "role": "user",
+                    "sender": "imperator_user",
+                    "recipient": "imperator",
+                    "content": user_content,
+                    "model_name": None,
+                    "tool_calls": None,
+                    "tool_call_id": None,
+                    "message_id": None,
+                    "conversation_id": None,
+                    "sequence_number": None,
+                    "was_collapsed": False,
+                    "queued_jobs": [],
+                    "error": None,
+                }
+            )
         except (RuntimeError, OSError) as exc:
             _log.warning("Failed to store Imperator user message via pipeline: %s", exc)
 
     # Store assistant response
     if response_text:
         try:
-            await pipeline.ainvoke({
-                "context_window_id": context_window_id,
-                "role": "assistant",
-                "sender": "imperator",
-                "recipient": "imperator_user",
-                "content": response_text,
-                "model_name": None,
-                "tool_calls": None,
-                "tool_call_id": None,
-                "message_id": None,
-                "conversation_id": None,
-                "sequence_number": None,
-                "was_collapsed": False,
-                "queued_jobs": [],
-                "error": None,
-            })
+            await pipeline.ainvoke(
+                {
+                    "context_window_id": context_window_id,
+                    "role": "assistant",
+                    "sender": "imperator",
+                    "recipient": "imperator_user",
+                    "content": response_text,
+                    "model_name": None,
+                    "tool_calls": None,
+                    "tool_call_id": None,
+                    "message_id": None,
+                    "conversation_id": None,
+                    "sequence_number": None,
+                    "was_collapsed": False,
+                    "queued_jobs": [],
+                    "error": None,
+                }
+            )
         except (RuntimeError, OSError) as exc:
-            _log.warning("Failed to store Imperator assistant message via pipeline: %s", exc)
+            _log.warning(
+                "Failed to store Imperator assistant message via pipeline: %s", exc
+            )
 
     return {"response_text": response_text}
 
 
 # ── Build the graph ──────────────────────────────────────────────────────
+
 
 def build_imperator_flow(config: dict | None = None) -> StateGraph:
     """Build and compile the Imperator StateGraph.
@@ -517,6 +545,7 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
     # so even if the LLM hallucinated an admin tool call, ToolNode would reject it.
     if config is None:
         from app.config import load_config
+
         config = load_config()
     imperator_config = config.get("imperator", {})
     active_tools = list(_imperator_tools)

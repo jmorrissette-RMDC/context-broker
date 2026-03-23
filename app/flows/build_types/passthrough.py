@@ -17,7 +17,7 @@ from typing import Annotated, Optional
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
-from app.config import get_build_type_config, get_tuning, verbose_log
+from app.config import get_tuning, verbose_log
 from app.database import get_pg_pool, get_redis
 from app.flows.build_type_registry import register_build_type
 from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
@@ -61,21 +61,35 @@ async def pt_acquire_lock(state: PassthroughAssemblyState) -> dict:
         )
         return {"error": "Invalid UUID in assembly input", "lock_acquired": False}
 
-    verbose_log(state["config"], _log, "passthrough.acquire_lock ENTER window=%s", state["context_window_id"])
+    verbose_log(
+        state["config"],
+        _log,
+        "passthrough.acquire_lock ENTER window=%s",
+        state["context_window_id"],
+    )
     lock_key = f"assembly_in_progress:{state['context_window_id']}"
     lock_token = str(uuid.uuid4())
     redis = get_redis()
 
     acquired = await redis.set(
-        lock_key, lock_token,
+        lock_key,
+        lock_token,
         ex=get_tuning(state["config"], "assembly_lock_ttl_seconds", 300),
         nx=True,
     )
     if not acquired:
-        _log.info("Passthrough assembly: lock not acquired for window=%s — skipping", state["context_window_id"])
+        _log.info(
+            "Passthrough assembly: lock not acquired for window=%s — skipping",
+            state["context_window_id"],
+        )
         return {"lock_key": lock_key, "lock_token": None, "lock_acquired": False}
 
-    return {"lock_key": lock_key, "lock_token": lock_token, "lock_acquired": True, "assembly_start_time": time.monotonic()}
+    return {
+        "lock_key": lock_key,
+        "lock_token": lock_token,
+        "lock_acquired": True,
+        "assembly_start_time": time.monotonic(),
+    }
 
 
 async def pt_finalize(state: PassthroughAssemblyState) -> dict:
@@ -96,10 +110,16 @@ async def pt_finalize(state: PassthroughAssemblyState) -> dict:
             duration = time.monotonic() - start_time
             CONTEXT_ASSEMBLY_DURATION.labels(build_type="passthrough").observe(duration)
 
-        _log.info("Passthrough assembly complete for window=%s", state["context_window_id"])
+        _log.info(
+            "Passthrough assembly complete for window=%s", state["context_window_id"]
+        )
         return {}
     except (RuntimeError, OSError, Exception) as exc:
-        _log.error("Passthrough finalize failed for window=%s: %s", state["context_window_id"], exc)
+        _log.error(
+            "Passthrough finalize failed for window=%s: %s",
+            state["context_window_id"],
+            exc,
+        )
         return {"error": f"Passthrough finalize failed: {exc}"}
 
 
@@ -193,7 +213,12 @@ async def pt_load_window(state: PassthroughRetrievalState) -> dict:
         )
         return {"error": "Invalid UUID in retrieval input"}
 
-    verbose_log(state["config"], _log, "passthrough.retrieval.load_window ENTER window=%s", state["context_window_id"])
+    verbose_log(
+        state["config"],
+        _log,
+        "passthrough.retrieval.load_window ENTER window=%s",
+        state["context_window_id"],
+    )
     pool = get_pg_pool()
 
     window = await pool.fetchrow(
@@ -234,7 +259,9 @@ async def pt_load_recent(state: PassthroughRetrievalState) -> dict:
     tokens_used = 0
     for row in rows:
         msg = dict(row)
-        msg_tokens = msg.get("token_count") or max(1, len(msg.get("content", "") or "") // 4)
+        msg_tokens = msg.get("token_count") or max(
+            1, len(msg.get("content", "") or "") // 4
+        )
         if tokens_used + msg_tokens > max_budget:
             break
         messages.insert(0, msg)
@@ -252,13 +279,15 @@ async def pt_load_recent(state: PassthroughRetrievalState) -> dict:
         if m.get("sender"):
             out["name"] = m["sender"]
         context_messages.append(out)
-        recent_for_tiers.append({
-            "id": str(m["id"]),
-            "role": m["role"],
-            "sender": m.get("sender", ""),
-            "content": m.get("content", ""),
-            "sequence_number": m["sequence_number"],
-        })
+        recent_for_tiers.append(
+            {
+                "id": str(m["id"]),
+                "role": m["role"],
+                "sender": m.get("sender", ""),
+                "content": m.get("content", ""),
+                "sequence_number": m["sequence_number"],
+            }
+        )
 
     context_tiers = {
         "archival_summary": None,
@@ -303,4 +332,6 @@ def build_passthrough_retrieval():
 # Registration
 # ============================================================
 
-register_build_type("passthrough", build_passthrough_assembly, build_passthrough_retrieval)
+register_build_type(
+    "passthrough", build_passthrough_assembly, build_passthrough_retrieval
+)

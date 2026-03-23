@@ -17,12 +17,9 @@ from app.models import (
     CreateConversationInput,
     ImperatorChatInput,
     MCPToolCall,
-    MemSearchInput,
     SearchConversationsInput,
-    SearchMessagesInput,
     StoreMessageInput,
 )
-
 
 # ==================================================================
 # StoreMessageInput
@@ -70,7 +67,10 @@ class TestStoreMessageInput:
 
     def test_error_when_neither_id_provided(self):
         """Raises ValidationError when neither context_window_id nor conversation_id is given."""
-        with pytest.raises(ValidationError, match="At least one of context_window_id or conversation_id"):
+        with pytest.raises(
+            ValidationError,
+            match="At least one of context_window_id or conversation_id",
+        ):
             StoreMessageInput(
                 role="user",
                 sender="user-1",
@@ -90,7 +90,11 @@ class TestStoreMessageInput:
     def test_tool_calls_as_list_of_dicts(self):
         """tool_calls accepts a list of dicts."""
         tool_calls = [
-            {"id": "tc_1", "type": "function", "function": {"name": "search", "arguments": "{}"}},
+            {
+                "id": "tc_1",
+                "type": "function",
+                "function": {"name": "search", "arguments": "{}"},
+            },
         ]
         model = StoreMessageInput(
             context_window_id=uuid.uuid4(),

@@ -11,7 +11,6 @@ startup and cached.
 
 import asyncio
 import hashlib
-import json
 import logging
 import os
 import threading
@@ -60,7 +59,9 @@ def _read_and_parse_config() -> tuple[dict[str, Any], str]:
     return config, raw
 
 
-def _apply_config(config: dict[str, Any], raw: str, current_mtime: float) -> dict[str, Any]:
+def _apply_config(
+    config: dict[str, Any], raw: str, current_mtime: float
+) -> dict[str, Any]:
     """Update global cache state after a successful config read.
 
     Shared by both load_config() and async_load_config().
@@ -72,7 +73,9 @@ def _apply_config(config: dict[str, Any], raw: str, current_mtime: float) -> dic
     new_hash = hashlib.sha256(raw.encode()).hexdigest()
     with _cache_lock:
         if new_hash != _config_content_hash and _config_content_hash != "":
-            _log.info("Config file content changed — clearing LLM and embeddings caches")
+            _log.info(
+                "Config file content changed — clearing LLM and embeddings caches"
+            )
             _llm_cache.clear()
             _embeddings_cache.clear()
 
@@ -172,7 +175,9 @@ def get_api_key(provider_config: dict[str, Any]) -> str:
     return api_key
 
 
-def get_build_type_config(config: dict[str, Any], build_type_name: str) -> dict[str, Any]:
+def get_build_type_config(
+    config: dict[str, Any], build_type_name: str
+) -> dict[str, Any]:
     """Return the configuration for a named build type.
 
     Raises ValueError if the build type is not defined.
@@ -186,7 +191,13 @@ def get_build_type_config(config: dict[str, Any], build_type_name: str) -> dict[
     bt_config = build_types[build_type_name]
 
     # Validate that ALL tier percentages sum to <= 1.0
-    pct_keys = ["tier1_pct", "tier2_pct", "tier3_pct", "semantic_retrieval_pct", "knowledge_graph_pct"]
+    pct_keys = [
+        "tier1_pct",
+        "tier2_pct",
+        "tier3_pct",
+        "semantic_retrieval_pct",
+        "knowledge_graph_pct",
+    ]
     total_pct = sum(bt_config.get(k, 0) or 0 for k in pct_keys)
     if total_pct > 1.0:
         raise ValueError(
@@ -263,9 +274,7 @@ def get_chat_model(config: dict) -> Any:
     # G5-05: Include api_key hash so credential rotation doesn't reuse a stale client.
     # m3: Use stable SHA-256 hash instead of Python's hash() which is
     # randomized per process (PYTHONHASHSEED).
-    cache_key = (
-        f"{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
-    )
+    cache_key = f"{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
     with _cache_lock:
         if cache_key not in _llm_cache:
             # R5-m9: Evict oldest entry instead of clearing entire cache.
@@ -296,9 +305,7 @@ def get_embeddings_model(config: dict) -> Any:
     # G5-05: Include api_key hash so credential rotation doesn't reuse a stale client.
     # m3: Use stable SHA-256 hash instead of Python's hash() which is
     # randomized per process (PYTHONHASHSEED).
-    cache_key = (
-        f"{embeddings_config.get('base_url')}:{embeddings_config.get('model')}:{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
-    )
+    cache_key = f"{embeddings_config.get('base_url')}:{embeddings_config.get('model')}:{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
     with _cache_lock:
         if cache_key not in _embeddings_cache:
             # R5-m9: Evict oldest entry instead of clearing entire cache.
@@ -307,7 +314,9 @@ def get_embeddings_model(config: dict) -> Any:
                 del _embeddings_cache[oldest_key]
             _embeddings_cache[cache_key] = OpenAIEmbeddings(
                 model=embeddings_config.get("model", "text-embedding-3-small"),
-                openai_api_base=embeddings_config.get("base_url", "https://api.openai.com/v1"),
+                openai_api_base=embeddings_config.get(
+                    "base_url", "https://api.openai.com/v1"
+                ),
                 openai_api_key=api_key or "not-needed",
             )
         return _embeddings_cache[cache_key]

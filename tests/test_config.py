@@ -6,7 +6,6 @@ validation, get_api_key environment lookup, get_tuning defaults,
 and cache invalidation on content change.
 """
 
-import hashlib
 import os
 from unittest.mock import patch
 
@@ -21,10 +20,10 @@ from app.config import (
     load_config,
 )
 
-
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
 
 def _reset_config_cache():
     """Reset the module-level config cache so each test starts clean."""

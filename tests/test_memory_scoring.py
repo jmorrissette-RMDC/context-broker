@@ -9,7 +9,6 @@ import copy
 import math
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from app.flows.memory_scoring import (
     DEFAULT_HALF_LIVES,
@@ -17,10 +16,10 @@ from app.flows.memory_scoring import (
     score_memory,
 )
 
-
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
 
 def _make_memory(
     category: str = "default",
@@ -39,7 +38,9 @@ def _make_memory(
         "user_id": "user-1",
     }
     if last_accessed_days_ago is not None:
-        mem["last_accessed"] = (now - timedelta(days=last_accessed_days_ago)).isoformat()
+        mem["last_accessed"] = (
+            now - timedelta(days=last_accessed_days_ago)
+        ).isoformat()
     return mem
 
 
@@ -138,7 +139,9 @@ class TestScoreMemory:
         mem_no_access = _make_memory("default", age_days=age)
         score_no_access = score_memory(mem_no_access, config)
 
-        mem_old_access = _make_memory("default", age_days=age, last_accessed_days_ago=10)
+        mem_old_access = _make_memory(
+            "default", age_days=age, last_accessed_days_ago=10
+        )
         score_old_access = score_memory(mem_old_access, config)
 
         assert abs(score_no_access - score_old_access) < 0.01
@@ -208,8 +211,10 @@ class TestFilterAndRankMemories:
         """Memories scoring below min_score are excluded."""
         config = _config_with_half_lives()
         memories = [
-            _make_memory("ephemeral", age_days=0),   # fresh, high score
-            _make_memory("ephemeral", age_days=100),  # very old, low score (3d half-life)
+            _make_memory("ephemeral", age_days=0),  # fresh, high score
+            _make_memory(
+                "ephemeral", age_days=100
+            ),  # very old, low score (3d half-life)
         ]
         result = filter_and_rank_memories(memories, config, min_score=0.1)
         assert len(result) == 1
@@ -219,9 +224,9 @@ class TestFilterAndRankMemories:
         """Results are sorted by confidence_score descending."""
         config = _config_with_half_lives()
         memories = [
-            _make_memory("factual", age_days=50),   # older
-            _make_memory("factual", age_days=1),    # newer
-            _make_memory("factual", age_days=10),   # middle
+            _make_memory("factual", age_days=50),  # older
+            _make_memory("factual", age_days=1),  # newer
+            _make_memory("factual", age_days=10),  # middle
         ]
         result = filter_and_rank_memories(memories, config, min_score=0.0)
         scores = [m["confidence_score"] for m in result]
@@ -255,6 +260,8 @@ class TestFilterAndRankMemories:
     def test_all_filtered_returns_empty(self):
         """If all memories fall below threshold, returns empty list."""
         config = _config_with_half_lives()
-        memories = [_make_memory("ephemeral", age_days=300)]  # 3d half-life, 300 days old
+        memories = [
+            _make_memory("ephemeral", age_days=300)
+        ]  # 3d half-life, 300 days old
         result = filter_and_rank_memories(memories, config, min_score=0.5)
         assert result == []

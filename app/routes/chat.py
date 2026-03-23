@@ -53,7 +53,9 @@ async def chat_completions(request: Request):
         _log.warning("Chat: failed to parse request body: %s", exc)
         return JSONResponse(
             status_code=400,
-            content={"error": {"message": "Invalid JSON", "type": "invalid_request_error"}},
+            content={
+                "error": {"message": "Invalid JSON", "type": "invalid_request_error"}
+            },
         )
 
     try:
@@ -103,7 +105,12 @@ async def chat_completions(request: Request):
 
     # Convert plain messages to LangChain message objects
     # G5-28: Include ToolMessage so tool-role messages are not coerced to HumanMessage.
-    _role_map = {"user": HumanMessage, "system": SystemMessage, "assistant": AIMessage, "tool": ToolMessage}
+    _role_map = {
+        "user": HumanMessage,
+        "system": SystemMessage,
+        "assistant": AIMessage,
+        "tool": ToolMessage,
+    }
     lc_messages = []
     for m in chat_request.messages:
         cls = _role_map.get(m.role, HumanMessage)
@@ -111,7 +118,9 @@ async def chat_completions(request: Request):
             # ToolMessage requires a tool_call_id; use the one from the
             # request body if available, otherwise fall back to a placeholder.
             tool_call_id = getattr(m, "tool_call_id", None) or "unknown"
-            lc_messages.append(ToolMessage(content=m.content, tool_call_id=tool_call_id))
+            lc_messages.append(
+                ToolMessage(content=m.content, tool_call_id=tool_call_id)
+            )
         else:
             lc_messages.append(cls(content=m.content))
 

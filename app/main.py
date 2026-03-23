@@ -40,11 +40,15 @@ async def _postgres_retry_loop(application: FastAPI, config: dict) -> None:
             # Postgres came back — also retry Imperator init if it was skipped
             if not getattr(application.state, "imperator_initialized", False):
                 try:
-                    imperator_manager = getattr(application.state, "imperator_manager", None)
+                    imperator_manager = getattr(
+                        application.state, "imperator_manager", None
+                    )
                     if imperator_manager is not None:
                         await imperator_manager.initialize()
                         application.state.imperator_initialized = True
-                        _log.info("Imperator initialization succeeded on Postgres retry")
+                        _log.info(
+                            "Imperator initialization succeeded on Postgres retry"
+                        )
                 except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
                     _log.warning("Imperator initialization retry failed: %s", exc)
             return
@@ -58,13 +62,20 @@ async def _postgres_retry_loop(application: FastAPI, config: dict) -> None:
             # Retry Imperator init now that Postgres is available
             if not getattr(application.state, "imperator_initialized", False):
                 try:
-                    imperator_manager = getattr(application.state, "imperator_manager", None)
+                    imperator_manager = getattr(
+                        application.state, "imperator_manager", None
+                    )
                     if imperator_manager is not None:
                         await imperator_manager.initialize()
                         application.state.imperator_initialized = True
-                        _log.info("Imperator initialization succeeded on Postgres retry")
+                        _log.info(
+                            "Imperator initialization succeeded on Postgres retry"
+                        )
                 except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
-                    _log.warning("Imperator initialization retry failed (will retry next loop): %s", exc)
+                    _log.warning(
+                        "Imperator initialization retry failed (will retry next loop): %s",
+                        exc,
+                    )
                     # Don't return — keep retrying Imperator on next loop iteration
                     continue
 
@@ -84,6 +95,7 @@ async def _redis_retry_loop(application: FastAPI, config: dict) -> None:
             return
         try:
             from app.database import get_redis
+
             # R5-M23: Recreate the Redis client if it doesn't exist or
             # if the previous init_redis() failed (client is None)
             try:
@@ -99,7 +111,12 @@ async def _redis_retry_loop(application: FastAPI, config: dict) -> None:
                 start_background_worker(config)
             )
             return
-        except (ConnectionError, OSError, RuntimeError, redis.exceptions.RedisError) as exc:
+        except (
+            ConnectionError,
+            OSError,
+            RuntimeError,
+            redis.exceptions.RedisError,
+        ) as exc:
             _log.warning("Redis retry failed: %s", exc)
 
 
@@ -134,18 +151,18 @@ async def lifespan(application: FastAPI):
     worker_task = None
     try:
         from app.database import get_redis
+
         redis_client = get_redis()
         await redis_client.ping()
         application.state.redis_available = True
         worker_task = asyncio.create_task(start_background_worker(config))
     except (ConnectionError, OSError, RuntimeError, redis.exceptions.RedisError) as exc:
         _log.warning(
-            "Redis unavailable at startup — worker deferred until Redis connects: %s", exc
+            "Redis unavailable at startup — worker deferred until Redis connects: %s",
+            exc,
         )
         application.state.redis_available = False
-        redis_retry_task = asyncio.create_task(
-            _redis_retry_loop(application, config)
-        )
+        redis_retry_task = asyncio.create_task(_redis_retry_loop(application, config))
 
     # Initialize Imperator persistent state
     imperator_manager = ImperatorStateManager(config)
@@ -158,12 +175,15 @@ async def lifespan(application: FastAPI):
     except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
         _log.warning(
             "Imperator initialization failed (Postgres may be unavailable) — "
-            "will retry when Postgres connects: %s", exc
+            "will retry when Postgres connects: %s",
+            exc,
         )
         application.state.imperator_initialized = False
         # Ensure retry loop is running if not already started
         if pg_retry_task is None:
-            pg_retry_task = asyncio.create_task(_postgres_retry_loop(application, config))
+            pg_retry_task = asyncio.create_task(
+                _postgres_retry_loop(application, config)
+            )
 
     _log.info("Context Broker startup complete")
 

@@ -48,7 +48,9 @@ async def resolve_token_budget(
     fallback_tokens = build_type_config.get("fallback_tokens", 8192)
 
     if isinstance(max_context_tokens, int) and max_context_tokens > 0:
-        _log.info("Token budget: using explicit build type value %d", max_context_tokens)
+        _log.info(
+            "Token budget: using explicit build type value %d", max_context_tokens
+        )
         return max_context_tokens
 
     if max_context_tokens == "auto":

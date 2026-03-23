@@ -79,9 +79,7 @@ def get_pg_pool() -> asyncpg.Pool:
 def get_redis() -> aioredis.Redis:
     """Return the initialized Redis client. Raises if not initialized."""
     if _redis_client is None:
-        raise RuntimeError(
-            "Redis client not initialized — call init_redis() first"
-        )
+        raise RuntimeError("Redis client not initialized — call init_redis() first")
     return _redis_client
 
 

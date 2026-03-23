@@ -40,10 +40,12 @@ async def _get_reranker(model_name: str):
 
             def _load():
                 from sentence_transformers import CrossEncoder
+
                 return CrossEncoder(model_name)
 
             _reranker_cache[model_name] = await loop.run_in_executor(None, _load)
     return _reranker_cache[model_name]
+
 
 _log = logging.getLogger("context_broker.flows.search")
 
@@ -84,8 +86,13 @@ async def embed_conversation_query(state: ConversationSearchState) -> dict:
         embedding = await embeddings_model.aembed_query(state["query"])
         return {"query_embedding": embedding}
     except (openai.APIError, httpx.HTTPError, ValueError) as exc:
-        _log.warning("Conversation search: embedding failed, falling back to text: %s", exc)
-        return {"query_embedding": None, "warning": "embedding unavailable, results are text-only"}
+        _log.warning(
+            "Conversation search: embedding failed, falling back to text: %s", exc
+        )
+        return {
+            "query_embedding": None,
+            "warning": "embedding unavailable, results are text-only",
+        }
 
 
 async def search_conversations_db(state: ConversationSearchState) -> dict:
@@ -119,7 +126,9 @@ async def search_conversations_db(state: ConversationSearchState) -> dict:
     except ValueError as exc:
         return {"error": f"Invalid date format: {exc}", "results": []}
 
-    def _build_conv_filters(start_idx: int, table_prefix: str = "") -> tuple[str, list, int]:
+    def _build_conv_filters(
+        start_idx: int, table_prefix: str = ""
+    ) -> tuple[str, list, int]:
         """Build dynamic WHERE clause fragments for conversation filters.
 
         CB-R3-07: Build filter list and args together, compute indices at the end.
@@ -138,7 +147,9 @@ async def search_conversations_db(state: ConversationSearchState) -> dict:
             # R6-M18: sender lives on messages table, not conversations, so a
             # correlated EXISTS subquery is required. For performance, the
             # idx_messages_conversation_sender index covers this query.
-            filters.append(f"EXISTS (SELECT 1 FROM conversation_messages sm WHERE sm.conversation_id = {prefix}id AND sm.sender = ${{}})")
+            filters.append(
+                f"EXISTS (SELECT 1 FROM conversation_messages sm WHERE sm.conversation_id = {prefix}id AND sm.sender = ${{}})"
+            )
             args.append(filter_sender)
         if parsed_date_from:
             filters.append(f"{prefix}created_at >= ${{}}::timestamptz")
@@ -256,7 +267,10 @@ async def embed_message_query(state: MessageSearchState) -> dict:
         return {"query_embedding": embedding}
     except (openai.APIError, httpx.HTTPError, ValueError) as exc:
         _log.warning("Message search: embedding failed, falling back to BM25: %s", exc)
-        return {"query_embedding": None, "warning": "embedding unavailable, results are text-only"}
+        return {
+            "query_embedding": None,
+            "warning": "embedding unavailable, results are text-only",
+        }
 
 
 async def hybrid_search_messages(state: MessageSearchState) -> dict:
@@ -428,7 +442,10 @@ async def hybrid_search_messages(state: MessageSearchState) -> dict:
                     # Clamp to 0 to guard against clock skew inflating scores
                     age_days = max(0, (now - created).total_seconds() / 86400)
                     # Linear penalty: 0 for new messages, up to recency_max_penalty for old
-                    penalty = min(recency_max_penalty, (age_days / recency_decay_days) * recency_max_penalty)
+                    penalty = min(
+                        recency_max_penalty,
+                        (age_days / recency_decay_days) * recency_max_penalty,
+                    )
                     c["score"] = c.get("score", 0) * (1.0 - penalty)
                 except (ValueError, TypeError):
                     pass
@@ -463,22 +480,20 @@ async def rerank_results(state: MessageSearchState) -> dict:
             pairs = [(query, c.get("content") or "") for c in candidates]
 
             loop = asyncio.get_running_loop()
-            scores = await loop.run_in_executor(
-                None, lambda: reranker.predict(pairs)
-            )
+            scores = await loop.run_in_executor(None, lambda: reranker.predict(pairs))
 
             for i, candidate in enumerate(candidates):
                 candidate["rerank_score"] = float(scores[i])
 
-            reranked = sorted(candidates, key=lambda x: x.get("rerank_score", 0), reverse=True)
+            reranked = sorted(
+                candidates, key=lambda x: x.get("rerank_score", 0), reverse=True
+            )
             return {"reranked_results": reranked[:limit]}
 
         except (OSError, RuntimeError, ValueError, ImportError) as exc:
             # R6-M19: ImportError catches model-loading failures (missing
             # sentence_transformers or incompatible versions)
-            _log.warning(
-                "Cross-encoder reranking failed (degraded mode): %s", exc
-            )
+            _log.warning("Cross-encoder reranking failed (degraded mode): %s", exc)
             return {"reranked_results": candidates[:limit]}
 
     # Unknown provider — return top candidates by RRF score

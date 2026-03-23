@@ -68,14 +68,14 @@ class TestVersionPinning:
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
-            assert "==" in line, (
-                f"requirements.txt line {lineno} is not pinned with '==': {line}"
-            )
+            assert (
+                "==" in line
+            ), f"requirements.txt line {lineno} is not pinned with '==': {line}"
             # Must not use loose specifiers alongside ==
             for op in (">=", "<=", "~=", "!="):
-                assert op not in line, (
-                    f"requirements.txt line {lineno} uses '{op}' instead of strict '==': {line}"
-                )
+                assert (
+                    op not in line
+                ), f"requirements.txt line {lineno} uses '{op}' instead of strict '==': {line}"
 
     def test_dockerfile_from_pinned(self, dockerfile: str):
         """Every FROM directive uses a specific version tag, not :latest or bare."""
@@ -89,13 +89,11 @@ class TestVersionPinning:
         for line in from_lines:
             # Ignore "FROM ... AS ..." alias portion
             image_ref = line.split()[1]
-            assert ":" in image_ref, (
-                f"FROM uses untagged image (implicit :latest): {line}"
-            )
+            assert (
+                ":" in image_ref
+            ), f"FROM uses untagged image (implicit :latest): {line}"
             tag = image_ref.split(":", 1)[1]
-            assert tag.lower() != "latest", (
-                f"FROM explicitly uses :latest: {line}"
-            )
+            assert tag.lower() != "latest", f"FROM explicitly uses :latest: {line}"
 
 
 # ===================================================================
@@ -109,16 +107,12 @@ class TestCredentialFiles:
     def test_env_example_exists(self, project_root: Path):
         """.env.example exists in config/credentials/."""
         env_example = project_root / "config" / "credentials" / ".env.example"
-        assert env_example.is_file(), (
-            f"Expected credential template at {env_example}"
-        )
+        assert env_example.is_file(), f"Expected credential template at {env_example}"
 
     def test_gitignore_excludes_env(self, gitignore: str):
         """.gitignore contains a rule for .env files."""
         lines = [ln.strip() for ln in gitignore.splitlines()]
-        has_env_rule = any(
-            ".env" in ln and not ln.startswith("#") for ln in lines
-        )
+        has_env_rule = any(".env" in ln and not ln.startswith("#") for ln in lines)
         assert has_env_rule, ".gitignore does not contain a .env exclusion rule"
 
 
@@ -138,9 +132,9 @@ class TestOTSBackingServices:
         """Backing service uses 'image:' and not 'build:'."""
         svc = compose["services"][service_name]
         assert "image" in svc, f"{service_name} is missing 'image:' key"
-        assert "build" not in svc, (
-            f"{service_name} should not use 'build:' — OTS services must use pre-built images"
-        )
+        assert (
+            "build" not in svc
+        ), f"{service_name} should not use 'build:' — OTS services must use pre-built images"
 
 
 # ===================================================================
@@ -164,12 +158,8 @@ class TestDockerfileUserDirective:
                 break
 
         assert useradd_line is not None, "Dockerfile does not contain useradd"
-        assert user_line is not None, (
-            "Dockerfile has no USER directive after useradd"
-        )
-        assert user_line > useradd_line, (
-            "USER directive must appear after useradd"
-        )
+        assert user_line is not None, "Dockerfile has no USER directive after useradd"
+        assert user_line > useradd_line, "USER directive must appear after useradd"
 
 
 # ===================================================================
@@ -182,8 +172,7 @@ class TestDockerfileHealthcheck:
 
     def test_healthcheck_present(self, dockerfile: str):
         has_healthcheck = any(
-            line.strip().startswith("HEALTHCHECK")
-            for line in dockerfile.splitlines()
+            line.strip().startswith("HEALTHCHECK") for line in dockerfile.splitlines()
         )
         assert has_healthcheck, "Dockerfile is missing a HEALTHCHECK directive"
 
@@ -210,9 +199,9 @@ class TestTwoNetworkTopology:
     def test_gateway_on_both_networks(self, compose: dict):
         nets = self._get_networks(compose, "context-broker")
         assert "default" in nets, "Gateway must be on 'default' network"
-        assert "context-broker-net" in nets, (
-            "Gateway must be on 'context-broker-net' network"
-        )
+        assert (
+            "context-broker-net" in nets
+        ), "Gateway must be on 'context-broker-net' network"
 
     @pytest.mark.parametrize(
         "service_name",
@@ -227,23 +216,23 @@ class TestTwoNetworkTopology:
         self, compose: dict, service_name: str
     ):
         nets = self._get_networks(compose, service_name)
-        assert nets == {"context-broker-net"}, (
-            f"{service_name} should only be on context-broker-net, got {nets}"
-        )
+        assert nets == {
+            "context-broker-net"
+        }, f"{service_name} should only be on context-broker-net, got {nets}"
 
     def test_ollama_on_both_networks(self, compose: dict):
         nets = self._get_networks(compose, "context-broker-ollama")
         assert "default" in nets, "Ollama must be on 'default' for model pulls"
-        assert "context-broker-net" in nets, (
-            "Ollama must be on 'context-broker-net' for internal serving"
-        )
+        assert (
+            "context-broker-net" in nets
+        ), "Ollama must be on 'context-broker-net' for internal serving"
 
     def test_internal_network_is_internal(self, compose: dict):
         """context-broker-net must be declared as internal: true."""
         net_def = compose.get("networks", {}).get("context-broker-net", {})
-        assert net_def.get("internal") is True, (
-            "context-broker-net must be declared with 'internal: true'"
-        )
+        assert (
+            net_def.get("internal") is True
+        ), "context-broker-net must be declared with 'internal: true'"
 
 
 # ===================================================================
@@ -265,34 +254,34 @@ class TestThinGateway:
             r"\blua_package_path",
         ]
         for pattern in lua_patterns:
-            assert not re.search(pattern, nginx_conf), (
-                f"nginx.conf contains Lua directive matching '{pattern}'"
-            )
+            assert not re.search(
+                pattern, nginx_conf
+            ), f"nginx.conf contains Lua directive matching '{pattern}'"
 
     def test_no_application_logic(self, nginx_conf: str):
         """No embedded scripting, templating, or processing directives."""
         banned = [
             r"\bperl_",
-            r"\bjs_",       # njs module
+            r"\bjs_",  # njs module
             r"\bsub_filter",
             r"\badd_header\s+X-Custom-Logic",
         ]
         for pattern in banned:
-            assert not re.search(pattern, nginx_conf), (
-                f"nginx.conf contains application-logic directive matching '{pattern}'"
-            )
+            assert not re.search(
+                pattern, nginx_conf
+            ), f"nginx.conf contains application-logic directive matching '{pattern}'"
 
     def test_has_proxy_pass(self, nginx_conf: str):
         """Gateway must actually proxy traffic (sanity check)."""
-        assert "proxy_pass" in nginx_conf, (
-            "nginx.conf does not contain any proxy_pass directives"
-        )
+        assert (
+            "proxy_pass" in nginx_conf
+        ), "nginx.conf does not contain any proxy_pass directives"
 
     def test_has_location_blocks(self, nginx_conf: str):
         """Gateway must define location blocks for routing."""
-        assert re.search(r"\blocation\s+", nginx_conf), (
-            "nginx.conf does not contain any location blocks"
-        )
+        assert re.search(
+            r"\blocation\s+", nginx_conf
+        ), "nginx.conf does not contain any location blocks"
 
 
 # ===================================================================
@@ -303,9 +292,7 @@ class TestThinGateway:
 class TestServiceNameDNS:
     """Environment variables in docker-compose.yml reference service names, not IPs."""
 
-    _IP_PATTERN = re.compile(
-        r"=\s*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"
-    )
+    _IP_PATTERN = re.compile(r"=\s*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
 
     def test_no_hardcoded_ips_in_environment(self, compose: dict):
         """No environment variable values contain raw IP addresses."""
@@ -334,9 +321,9 @@ class TestServiceNameDNS:
             entry_str = str(entry)
             if "_HOST=" in entry_str:
                 value = entry_str.split("=", 1)[1].strip()
-                assert value in known_service_names, (
-                    f"_HOST value '{value}' is not a known docker-compose service name"
-                )
+                assert (
+                    value in known_service_names
+                ), f"_HOST value '{value}' is not a known docker-compose service name"
 
 
 # ===================================================================
@@ -356,13 +343,20 @@ class TestNoHardcodedSecrets:
         (r'(?i)password\s*=\s*["\'][A-Za-z0-9/+]{8,}', "password assignment"),
         (r'(?i)secret\s*=\s*["\'][A-Za-z0-9/+]{16,}', "secret assignment"),
         # Bearer tokens
-        (r'(?i)bearer\s+[A-Za-z0-9_\-\.]{20,}', "bearer token"),
+        (r"(?i)bearer\s+[A-Za-z0-9_\-\.]{20,}", "bearer token"),
         # AWS-style keys
-        (r'AKIA[0-9A-Z]{16}', "AWS access key"),
+        (r"AKIA[0-9A-Z]{16}", "AWS access key"),
     ]
 
     # Directories and files to skip
-    _SKIP_DIRS = {"__pycache__", ".git", "data", ".pytest_cache", "node_modules", "docs"}
+    _SKIP_DIRS = {
+        "__pycache__",
+        ".git",
+        "data",
+        ".pytest_cache",
+        "node_modules",
+        "docs",
+    }
     _SKIP_SUFFIXES = {".pyc", ".pyo", ".egg-info", ".whl", ".tar.gz"}
 
     def _scan_files(self, project_root: Path):
@@ -376,9 +370,20 @@ class TestNoHardcodedSecrets:
                 continue
             # Only scan text-like files
             if filepath.suffix not in {
-                ".py", ".yml", ".yaml", ".toml", ".cfg", ".ini",
-                ".conf", ".sh", ".bash", ".env.example", ".txt", ".md",
-                ".json", ".sql",
+                ".py",
+                ".yml",
+                ".yaml",
+                ".toml",
+                ".cfg",
+                ".ini",
+                ".conf",
+                ".sh",
+                ".bash",
+                ".env.example",
+                ".txt",
+                ".md",
+                ".json",
+                ".sql",
             }:
                 continue
             try:
@@ -392,7 +397,7 @@ class TestNoHardcodedSecrets:
                 if stripped.startswith("#") or stripped.startswith("//"):
                     continue
                 # Skip lines that are env-var references
-                if re.search(r'\$\{?\w+\}?', line):
+                if re.search(r"\$\{?\w+\}?", line):
                     continue
                 # Skip lines that use os.environ or os.getenv
                 if "os.environ" in line or "os.getenv" in line or "getenv" in line:
@@ -423,21 +428,22 @@ class TestNoHardcodedSecrets:
 
 class TestStateGraphMandate:
     """Route handlers delegate to StateGraph flows.
-    They must not contain application logic beyond request parsing and flow invocation."""
+    They must not contain application logic beyond request parsing and flow invocation.
+    """
 
     _ROUTE_DIR = PROJECT_ROOT / "app" / "routes"
 
     # Patterns indicating business logic that belongs in a flow, not a handler
     _FORBIDDEN_PATTERNS = [
-        (r'\bSELECT\b', "raw SQL query"),
-        (r'\bINSERT\b', "raw SQL query"),
-        (r'\bUPDATE\b', "raw SQL query"),
-        (r'\bDELETE\s+FROM\b', "raw SQL query"),
-        (r'\.execute\s*\(', "direct DB execute"),
-        (r'redis\.\w+\s*\(', "direct Redis call"),
-        (r'neo4j.*session', "direct Neo4j session"),
-        (r'ChatOpenAI|OllamaLLM|BaseLLM', "direct LLM instantiation"),
-        (r'\.predict\s*\(|\.invoke\s*\((?!.*flow|.*_flow)', "direct model invocation"),
+        (r"\bSELECT\b", "raw SQL query"),
+        (r"\bINSERT\b", "raw SQL query"),
+        (r"\bUPDATE\b", "raw SQL query"),
+        (r"\bDELETE\s+FROM\b", "raw SQL query"),
+        (r"\.execute\s*\(", "direct DB execute"),
+        (r"redis\.\w+\s*\(", "direct Redis call"),
+        (r"neo4j.*session", "direct Neo4j session"),
+        (r"ChatOpenAI|OllamaLLM|BaseLLM", "direct LLM instantiation"),
+        (r"\.predict\s*\(|\.invoke\s*\((?!.*flow|.*_flow)", "direct model invocation"),
     ]
 
     @pytest.mark.parametrize(
@@ -463,8 +469,7 @@ class TestStateGraphMandate:
 
         if violations:
             report = "\n".join(
-                f"  {route_file}:{ln} [{desc}]: {text}"
-                for ln, desc, text in violations
+                f"  {route_file}:{ln} [{desc}]: {text}" for ln, desc, text in violations
             )
             pytest.fail(
                 f"Route handler contains application logic that belongs in a StateGraph:\n{report}"
@@ -478,9 +483,9 @@ class TestStateGraphMandate:
         """Each route handler must import from app.flows (StateGraph delegation)."""
         filepath = self._ROUTE_DIR / route_file
         text = filepath.read_text(encoding="utf-8")
-        assert re.search(r"from app\.flows\.", text), (
-            f"{route_file} does not import any StateGraph flow from app.flows"
-        )
+        assert re.search(
+            r"from app\.flows\.", text
+        ), f"{route_file} does not import any StateGraph flow from app.flows"
 
 
 # ===================================================================
@@ -496,25 +501,25 @@ class TestStructuredLogging:
         assert filepath.is_file(), "app/logging_setup.py not found"
         text = filepath.read_text(encoding="utf-8")
 
-        assert "JsonFormatter" in text or "json" in text.lower(), (
-            "logging_setup.py does not reference JSON formatting"
-        )
+        assert (
+            "JsonFormatter" in text or "json" in text.lower()
+        ), "logging_setup.py does not reference JSON formatting"
 
     def test_json_formatter_class_defined(self, project_root: Path):
         """A JsonFormatter class is defined (not just imported)."""
         filepath = project_root / "app" / "logging_setup.py"
         text = filepath.read_text(encoding="utf-8")
-        assert re.search(r"class\s+JsonFormatter", text), (
-            "logging_setup.py does not define a JsonFormatter class"
-        )
+        assert re.search(
+            r"class\s+JsonFormatter", text
+        ), "logging_setup.py does not define a JsonFormatter class"
 
     def test_json_dumps_in_formatter(self, project_root: Path):
         """The formatter serialises log records with json.dumps."""
         filepath = project_root / "app" / "logging_setup.py"
         text = filepath.read_text(encoding="utf-8")
-        assert "json.dumps" in text, (
-            "logging_setup.py does not call json.dumps — logs may not be structured JSON"
-        )
+        assert (
+            "json.dumps" in text
+        ), "logging_setup.py does not call json.dumps — logs may not be structured JSON"
 
 
 # ===================================================================
@@ -532,8 +537,16 @@ class TestBuildTypeRegistry:
         bt_dir = project_root / "app" / "flows" / "build_types"
         assert bt_dir.is_dir(), "app/flows/build_types/ directory not found"
 
-        expected_modules = {"passthrough.py", "standard_tiered.py", "knowledge_enriched.py"}
-        actual_modules = {f.name for f in bt_dir.iterdir() if f.suffix == ".py" and f.name != "__init__.py"}
+        expected_modules = {
+            "passthrough.py",
+            "standard_tiered.py",
+            "knowledge_enriched.py",
+        }
+        actual_modules = {
+            f.name
+            for f in bt_dir.iterdir()
+            if f.suffix == ".py" and f.name != "__init__.py"
+        }
 
         missing = expected_modules - actual_modules
         assert not missing, f"Missing build type modules: {missing}"
@@ -561,9 +574,9 @@ class TestBuildTypeRegistry:
 
         for name, path in modules.items():
             text = path.read_text(encoding="utf-8")
-            assert "register_build_type" in text, (
-                f"{name}.py does not call register_build_type()"
-            )
+            assert (
+                "register_build_type" in text
+            ), f"{name}.py does not call register_build_type()"
 
     def test_registry_names_match(self, project_root: Path):
         """Each module registers with the correct hyphenated name string."""
@@ -580,6 +593,4 @@ class TestBuildTypeRegistry:
             assert re.search(
                 rf'register_build_type\(\s*["\']{re.escape(expected_name)}["\']',
                 text,
-            ), (
-                f"{path.name} does not register with name '{expected_name}'"
-            )
+            ), f"{path.name} does not register with name '{expected_name}'"

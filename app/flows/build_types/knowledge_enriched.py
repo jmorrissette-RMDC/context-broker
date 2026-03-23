@@ -24,14 +24,18 @@ import openai
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
-from app.config import get_build_type_config, get_embeddings_model, get_tuning, verbose_log
+from app.config import (
+    get_build_type_config,
+    get_embeddings_model,
+    get_tuning,
+    verbose_log,
+)
 from app.flows.memory_scoring import filter_and_rank_memories
 from app.database import get_pg_pool, get_redis
 from app.flows.build_type_registry import register_build_type
 from app.flows.build_types.standard_tiered import (
     build_standard_tiered_assembly,
     _estimate_tokens,
-    _resolve_llm_config,
 )
 from app.flows.build_types.tier_scaling import scale_tier_percentages
 
@@ -82,7 +86,12 @@ async def ke_load_window(state: KnowledgeEnrichedRetrievalState) -> dict:
         )
         return {"error": "Invalid UUID in retrieval input", "assembly_status": "error"}
 
-    verbose_log(state["config"], _log, "knowledge_enriched.retrieval.load_window ENTER window=%s", state["context_window_id"])
+    verbose_log(
+        state["config"],
+        _log,
+        "knowledge_enriched.retrieval.load_window ENTER window=%s",
+        state["context_window_id"],
+    )
     pool = get_pg_pool()
 
     window = await pool.fetchrow(
@@ -104,7 +113,9 @@ async def ke_load_window(state: KnowledgeEnrichedRetrievalState) -> dict:
     window_dict = dict(window)
 
     try:
-        build_type_config = get_build_type_config(state["config"], window_dict["build_type"])
+        build_type_config = get_build_type_config(
+            state["config"], window_dict["build_type"]
+        )
     except ValueError as exc:
         return {"error": str(exc), "assembly_status": "error"}
 
@@ -286,7 +297,9 @@ async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -
 
     # Build query from recent messages
     query_trunc = get_tuning(config, "query_truncation_chars", 200)
-    recent_text = " ".join((m.get("content") or "")[:query_trunc] for m in state["recent_messages"][-3:])
+    recent_text = " ".join(
+        (m.get("content") or "")[:query_trunc] for m in state["recent_messages"][-3:]
+    )
 
     try:
         embeddings_model = get_embeddings_model(config)
@@ -353,7 +366,9 @@ async def ke_inject_knowledge_graph(state: KnowledgeEnrichedRetrievalState) -> d
 
     config = state["config"]
 
-    recent_text = " ".join((m.get("content") or "")[:500] for m in state["recent_messages"][-5:])
+    recent_text = " ".join(
+        (m.get("content") or "")[:500] for m in state["recent_messages"][-5:]
+    )
 
     try:
         from app.memory.mem0_client import get_mem0_client
@@ -393,10 +408,15 @@ async def ke_inject_knowledge_graph(state: KnowledgeEnrichedRetrievalState) -> d
         )
         return {"knowledge_graph_facts": facts}
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:  # EX-CB-001: broad catch for Mem0
-        _log.warning(
-            "Knowledge graph retrieval failed (degraded mode): %s", exc
-        )
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:  # EX-CB-001: broad catch for Mem0
+        _log.warning("Knowledge graph retrieval failed (degraded mode): %s", exc)
         return {"knowledge_graph_facts": []}
 
 
@@ -423,7 +443,9 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
 
     # Semantic retrieval — budget-aware (M-07)
     if state.get("semantic_messages"):
-        remaining = max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        remaining = (
+            max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        )
         semantic_lines = []
         semantic_tokens = 0
         for m in state["semantic_messages"]:
@@ -440,7 +462,9 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
 
     # Knowledge graph facts — budget-aware (M-07)
     if state.get("knowledge_graph_facts"):
-        remaining = max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        remaining = (
+            max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        )
         fact_lines = []
         fact_tokens = 0
         for f in state["knowledge_graph_facts"]:
@@ -458,7 +482,9 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
     # Tier 3: Recent verbatim messages (M-08: newest first truncation)
     truncated_recent_messages: list[dict] = []
     if state.get("recent_messages"):
-        remaining = max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        remaining = (
+            max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        )
         msg_tokens = 0
         for m in reversed(state["recent_messages"]):
             msg_content = m.get("content", "")

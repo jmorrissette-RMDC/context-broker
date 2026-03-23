@@ -52,7 +52,14 @@ async def add_memory(state: MemAddState) -> dict:
 
         return {"result": result, "degraded": False}
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         _log.warning("mem_add failed: %s", exc)
         return {"error": str(exc), "degraded": True}
@@ -110,7 +117,14 @@ async def list_memories(state: MemListState) -> dict:
 
         return {"memories": memories, "degraded": False}
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         _log.warning("mem_list failed: %s", exc)
         return {"memories": [], "error": str(exc), "degraded": True}
@@ -160,7 +174,14 @@ async def delete_memory(state: MemDeleteState) -> dict:
 
         return {"deleted": True, "degraded": False}
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         _log.warning("mem_delete failed: %s", exc)
         return {"deleted": False, "error": str(exc), "degraded": True}

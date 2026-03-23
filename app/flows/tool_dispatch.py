@@ -85,7 +85,6 @@ def _get_store_message_flow():
     return _store_message_flow
 
 
-
 def _get_create_context_window_flow():
     global _create_context_window_flow
     if _create_context_window_flow is None:
@@ -187,7 +186,11 @@ async def dispatch_tool(
         validated = CreateConversationInput(**arguments)
         result = await _get_create_conversation_flow().ainvoke(
             {
-                "conversation_id": str(validated.conversation_id) if validated.conversation_id else None,
+                "conversation_id": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
                 "title": validated.title,
                 "flow_id": validated.flow_id,
                 "user_id": validated.user_id,
@@ -202,8 +205,16 @@ async def dispatch_tool(
         validated = StoreMessageInput(**arguments)
         result = await _get_store_message_flow().ainvoke(
             {
-                "context_window_id": str(validated.context_window_id) if validated.context_window_id else None,
-                "conversation_id_input": str(validated.conversation_id) if validated.conversation_id else None,
+                "context_window_id": (
+                    str(validated.context_window_id)
+                    if validated.context_window_id
+                    else None
+                ),
+                "conversation_id_input": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
                 "role": validated.role,
                 "sender": validated.sender,
                 "recipient": validated.recipient,
@@ -331,7 +342,11 @@ async def dispatch_tool(
         result = await _get_search_messages_flow().ainvoke(
             {
                 "query": validated.query,
-                "conversation_id": str(validated.conversation_id) if validated.conversation_id else None,
+                "conversation_id": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
                 "sender": validated.sender,
                 "role": validated.role,
                 "date_from": validated.date_from,
@@ -374,8 +389,16 @@ async def dispatch_tool(
         validated = SearchContextWindowsInput(**arguments)
         result = await _get_search_context_windows_flow().ainvoke(
             {
-                "context_window_id": str(validated.context_window_id) if validated.context_window_id else None,
-                "conversation_id": str(validated.conversation_id) if validated.conversation_id else None,
+                "context_window_id": (
+                    str(validated.context_window_id)
+                    if validated.context_window_id
+                    else None
+                ),
+                "conversation_id": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
                 "participant_id": validated.participant_id,
                 "build_type": validated.build_type,
                 "limit": validated.limit,
@@ -434,12 +457,20 @@ async def dispatch_tool(
         validated = ImperatorChatInput(**arguments)
         from langchain_core.messages import HumanMessage
 
-        thread_id = str(validated.context_window_id) if validated.context_window_id else "imperator-default"
+        thread_id = (
+            str(validated.context_window_id)
+            if validated.context_window_id
+            else "imperator-default"
+        )
 
         result = await _get_imperator_flow().ainvoke(
             {
                 "messages": [HumanMessage(content=validated.message)],
-                "context_window_id": str(validated.context_window_id) if validated.context_window_id else None,
+                "context_window_id": (
+                    str(validated.context_window_id)
+                    if validated.context_window_id
+                    else None
+                ),
                 "config": config,
                 "response_text": None,
                 "error": None,
