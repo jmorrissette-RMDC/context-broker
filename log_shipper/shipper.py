@@ -261,27 +261,28 @@ class LogShipper:
         """Find all containers currently on our network and start tailing them."""
         logger.info("Scanning for existing containers on network...")
         try:
-            # We filter by network ID
             containers = await self.docker.containers.list()
             count = 0
-            
+
             for c in containers:
-                networks = c.get("NetworkSettings", {}).get("Networks", {})
-                
+                # aiodocker returns DockerContainer objects — inspect to get network info
+                c_info = await c.show()
+                networks = c_info.get("NetworkSettings", {}).get("Networks", {})
+
                 # Check if this container is on our network
                 on_our_network = False
                 for net_info in networks.values():
                     if net_info.get("NetworkID") == self.network_id:
                         on_our_network = True
                         break
-                        
+
                 if on_our_network:
-                    c_id = c["Id"]
+                    c_id = c_info["Id"]
                     if c_id not in self.active_tasks:
                         task = asyncio.create_task(self.tail_container(c_id))
                         self.active_tasks[c_id] = task
                         count += 1
-                        
+
             logger.info(f"Started tailing {count} existing containers")
         except Exception as e:
             logger.error(f"Failed to scan existing containers: {e}")
@@ -382,17 +383,15 @@ def handle_sigterm(shipper, main_task):
 
 if __name__ == "__main__":
     shipper = LogShipper()
-    
-    loop = asyncio.get_event_loop()
-    main_task = loop.create_task(shipper.run())
-    
-    # Register signal handlers for graceful shutdown
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, lambda: handle_sigterm(shipper, main_task))
-        
+
+    async def main():
+        task = asyncio.ensure_future(shipper.run())
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, lambda: handle_sigterm(shipper, task))
+        await task
+
     try:
-        loop.run_until_complete(main_task)
-    except asyncio.CancelledError:
+        asyncio.run(main())
+    except (asyncio.CancelledError, KeyboardInterrupt):
         pass
-    finally:
-        loop.close()
