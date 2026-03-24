@@ -42,11 +42,12 @@ def sonnet_evaluate(prompt: str) -> str:
     """Call Claude Sonnet via CLI for quality evaluation."""
     result = subprocess.run(
         ["claude", "--model", SONNET_MODEL, "--print", "-p", prompt],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, timeout=120,
     )
     if result.returncode != 0:
-        return f"Sonnet CLI error: {result.stderr[:200]}"
-    return result.stdout.strip()
+        stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+        return f"Sonnet CLI error: {stderr[:200]}"
+    return (result.stdout or b"").decode("utf-8", errors="replace").strip()
 
 
 def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
@@ -68,13 +69,14 @@ def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
     tiers = ctx.get("context_tiers", {})
 
     # Get some original messages for comparison
-    rows = subprocess.run(
+    rows_result = subprocess.run(
         ["ssh", SSH_TARGET,
          f"docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c "
-         f"\"SELECT content FROM conversation_messages WHERE conversation_id='{conv_id}' "
+         f"\"SELECT LEFT(content, 200) FROM conversation_messages WHERE conversation_id='{conv_id}' "
          f"AND role='user' AND LENGTH(content) > 50 ORDER BY sequence_number LIMIT 10\""],
-        capture_output=True, text=True, timeout=15,
-    ).stdout[:5000]
+        capture_output=True, timeout=15,
+    )
+    rows = (rows_result.stdout or b"").decode("utf-8", errors="replace")[:5000]
 
     eval_prompt = f"""You are evaluating the quality of a context assembly system.
 
@@ -110,7 +112,7 @@ def main():
     results = []
 
     for conv_id in CONV_IDS:
-        for bt in ["passthrough", "standard-tiered"]:
+        for bt in ["standard-tiered", "knowledge-enriched"]:
             result = evaluate_context_assembly(conv_id, bt)
             results.append({
                 "conversation": conv_id[:8],

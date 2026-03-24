@@ -241,6 +241,13 @@ async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
             state["conversation_id"],
             exc,
         )
+        # PG-49: Reset Mem0 client on error so next retry gets a fresh
+        # connection. Prevents poisoned transaction state from cascading.
+        try:
+            from context_broker_ae.memory.mem0_client import reset_mem0_client
+            reset_mem0_client()
+        except ImportError:
+            pass
         return {"error": str(exc)}
 
 

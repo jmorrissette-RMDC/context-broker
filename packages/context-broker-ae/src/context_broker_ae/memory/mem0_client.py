@@ -39,6 +39,18 @@ def _compute_config_hash(config: dict) -> str:
     return hashlib.sha256(config_str.encode()).hexdigest()
 
 
+def reset_mem0_client() -> None:
+    """Invalidate the Mem0 client so next call creates a fresh one.
+
+    Called when extraction hits a connection/transaction error to ensure
+    the next retry gets a clean connection (PG-49).
+    """
+    global _mem0_instance, _mem0_config_hash
+    _mem0_instance = None
+    _mem0_config_hash = ""
+    _log.info("Mem0 client invalidated — will recreate on next call")
+
+
 async def get_mem0_client(config: dict) -> Optional[object]:
     """Return the Mem0 Memory instance (lazy singleton, async-safe).
 
