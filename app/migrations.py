@@ -285,6 +285,37 @@ async def _migration_012(conn) -> None:
     _log.info("Migration 012 complete — schema aligned with v4 design")
 
 
+async def _migration_013(conn) -> None:
+    """Migration 13: Update context_windows unique constraint (D-03).
+
+    Window identity changes from (conversation_id, participant_id, build_type)
+    to (conversation_id, build_type, max_token_budget). participant_id is no
+    longer part of window identity — windows are shared by conversation +
+    build strategy + budget bucket.
+    """
+    # Drop old unique constraint (may be named differently depending on how it was created)
+    await conn.execute("""
+        DO $$
+        BEGIN
+            -- Drop the unique index created by migration 010
+            DROP INDEX IF EXISTS idx_context_windows_unique;
+            -- Also try the constraint form in case it was created as a constraint
+            ALTER TABLE context_windows
+                DROP CONSTRAINT IF EXISTS idx_context_windows_unique;
+        EXCEPTION WHEN undefined_object THEN
+            NULL;
+        END $$
+    """)
+
+    # Create new unique constraint on (conversation_id, build_type, max_token_budget)
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_context_windows_identity
+        ON context_windows (conversation_id, build_type, max_token_budget)
+    """)
+
+    _log.info("Migration 013 complete — context_windows unique constraint updated for D-03")
+
+
 # Migration registry: version -> (description, migration_function)
 # Add new migrations here. Never modify existing entries.
 # IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
@@ -312,6 +343,11 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
         12,
         "Schema alignment: renames, tool_calls, drops, constraints (ARCH-01/08/09/12/13)",
         _migration_012,
+    ),
+    (
+        13,
+        "Update context_windows unique constraint: (conversation_id, build_type, max_token_budget) (D-03)",
+        _migration_013,
     ),
 ]
 
