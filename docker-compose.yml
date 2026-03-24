@@ -189,6 +189,7 @@ services:
     networks:
       - context-broker-net
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/lib/docker/containers:/var/log/docker-containers:ro
       - ./fluentbit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
       - ./fluentbit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
