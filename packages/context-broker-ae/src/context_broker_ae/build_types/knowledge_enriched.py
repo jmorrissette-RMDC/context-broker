@@ -30,14 +30,14 @@ from app.config import (
     get_tuning,
     verbose_log,
 )
-from app.flows.memory_scoring import filter_and_rank_memories
+from context_broker_ae.memory_scoring import filter_and_rank_memories
 from app.database import get_pg_pool, get_redis
-from app.flows.build_type_registry import register_build_type
-from app.flows.build_types.standard_tiered import (
+# Registration handled by register.py — no module-scope side effects
+from context_broker_ae.build_types.standard_tiered import (
     build_standard_tiered_assembly,
     _estimate_tokens,
 )
-from app.flows.build_types.tier_scaling import scale_tier_percentages
+from context_broker_ae.build_types.tier_scaling import scale_tier_percentages
 
 _log = logging.getLogger("context_broker.flows.build_types.knowledge_enriched")
 
@@ -380,7 +380,7 @@ async def ke_inject_knowledge_graph(state: KnowledgeEnrichedRetrievalState) -> d
     )
 
     try:
-        from app.memory.mem0_client import get_mem0_client
+        from context_broker_ae.memory.mem0_client import get_mem0_client
 
         mem0 = await get_mem0_client(config)
         if mem0 is None:
@@ -642,8 +642,4 @@ def build_knowledge_enriched_retrieval():
 # The build_type label in the assembly state is set by the caller (arq_worker),
 # so metrics are correctly attributed.
 
-register_build_type(
-    "knowledge-enriched",
-    build_standard_tiered_assembly,
-    build_knowledge_enriched_retrieval,
-)
+# Registration handled by context_broker_ae.register — no module-scope side effects.

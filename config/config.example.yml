@@ -75,13 +75,19 @@ build_types:
     initial_lookback_multiplier: 3
 
 # ============================================================
-# Package Source
+# Package Source (build-time only)
 # ============================================================
+# These settings control where pip installs dependencies at container startup
+# (via entrypoint.sh). Changing these values after the container is running
+# has no effect — the container must be rebuilt.
 
 packages:
-  source: pypi
+  source: local
   local_path: /app/packages
   devpi_url: null
+  stategraph_packages:             # REQ-001 §10: packages installed at startup
+    - context-broker-ae
+    - context-broker-te
 
 # ============================================================
 # Tuning Parameters (AE pipeline behavior)
@@ -118,6 +124,13 @@ tuning:
   search_candidate_limit: 100
   recency_decay_days: 90
   recency_max_penalty: 0.2
+
+  # LLM client
+  llm_timeout_seconds: 1800          # timeout for LLM API calls (30 minutes — covers long summarization)
+
+  # Worker resilience
+  failure_backoff_threshold: 3       # consecutive failures before backoff
+  failure_backoff_seconds: 5         # seconds to wait during backoff
 
 # ============================================================
 # Workers (infrastructure — queue processing)

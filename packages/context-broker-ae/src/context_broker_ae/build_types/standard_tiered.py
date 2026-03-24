@@ -29,8 +29,8 @@ from typing_extensions import TypedDict
 
 from app.config import get_build_type_config, get_chat_model, get_tuning, verbose_log
 from app.database import get_pg_pool, get_redis
-from app.flows.build_type_registry import register_build_type
-from app.flows.build_types.tier_scaling import scale_tier_percentages
+# Registration handled by register.py — no module-scope side effects
+from context_broker_ae.build_types.tier_scaling import scale_tier_percentages
 from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
 from app.prompt_loader import async_load_prompt
 
@@ -1128,10 +1128,4 @@ def build_standard_tiered_retrieval():
     return workflow.compile()
 
 
-# ============================================================
-# Registration
-# ============================================================
-
-register_build_type(
-    "standard-tiered", build_standard_tiered_assembly, build_standard_tiered_retrieval
-)
+# Registration handled by context_broker_ae.register — no module-scope side effects.

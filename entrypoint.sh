@@ -72,5 +72,37 @@ else
     echo "Config file not found at $CONFIG_FILE — using build-time packages"
 fi
 
+# ── REQ-001 §10: Install StateGraph packages (AE + TE) ──────────────
+# Read the stategraph_packages list from config, defaulting to both standard packages.
+SG_PACKAGES=$(python3 -c "
+import yaml
+try:
+    with open('$CONFIG_FILE') as f:
+        cfg = yaml.safe_load(f)
+    pkgs = cfg.get('packages', {})
+    sg_list = pkgs.get('stategraph_packages', ['context-broker-ae', 'context-broker-te'])
+    print(' '.join(sg_list))
+except Exception:
+    print('context-broker-ae context-broker-te')
+" 2>/dev/null || echo "context-broker-ae context-broker-te")
+
+echo "Installing StateGraph packages: $SG_PACKAGES"
+
+for pkg in $SG_PACKAGES; do
+    case "$PKG_SOURCE" in
+        local)
+            pip install --user --no-cache-dir --no-index --find-links="$PKG_LOCAL_PATH" "$pkg" || echo "Warning: failed to install $pkg from local"
+            ;;
+        devpi)
+            if [ -n "$PKG_DEVPI_URL" ]; then
+                pip install --user --no-cache-dir --index-url "$PKG_DEVPI_URL" "$pkg" || echo "Warning: failed to install $pkg from devpi"
+            fi
+            ;;
+        pypi)
+            pip install --user --no-cache-dir "$pkg" || echo "Warning: failed to install $pkg from pypi"
+            ;;
+    esac
+done
+
 # Start the application
 exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000

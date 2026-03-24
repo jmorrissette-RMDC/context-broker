@@ -32,10 +32,6 @@ from pydantic import ValidationError
 
 from app.config import async_load_config, get_tuning
 from app.flows.tool_dispatch import dispatch_tool
-from app.metrics_registry import (
-    MCP_REQUEST_DURATION,
-    MCP_REQUESTS,
-)
 from app.models import MCPToolCall
 
 _log = logging.getLogger("context_broker.routes.mcp")
@@ -167,9 +163,7 @@ async def mcp_tool_call(
     Supports both sessionless mode (no sessionId) and session mode.
     All tool calls are routed through StateGraph flows.
     """
-    start_time = time.monotonic()
     tool_name = "unknown"
-    status = "error"
 
     try:
         body = await request.json()
@@ -199,7 +193,6 @@ async def mcp_tool_call(
 
     if mcp_request.method == "initialize":
         tool_name = "initialize"
-        status = "success"
         return JSONResponse(
             content={
                 "jsonrpc": "2.0",
@@ -217,7 +210,6 @@ async def mcp_tool_call(
 
     if mcp_request.method == "tools/list":
         tool_name = "tools_list"
-        status = "success"
         return JSONResponse(
             content={
                 "jsonrpc": "2.0",
@@ -260,7 +252,6 @@ async def mcp_tool_call(
         result = await dispatch_tool(
             tool_name, tool_arguments, config, request.app.state
         )
-        status = "success"
 
         response_content = {
             "jsonrpc": "2.0",
@@ -338,7 +329,6 @@ async def mcp_tool_call(
         return JSONResponse(content=response_content)
 
     except (ValueError, ValidationError) as exc:
-        status = "validation_error"
         _log.warning("MCP tool '%s' validation error: %s", tool_name, exc)
         return JSONResponse(
             status_code=400,
@@ -349,7 +339,6 @@ async def mcp_tool_call(
             },
         )
     except (RuntimeError, ConnectionError, OSError) as exc:
-        status = "internal_error"
         _log.error("MCP tool '%s' failed: %s", tool_name, exc, exc_info=True)
         return JSONResponse(
             status_code=500,
@@ -359,10 +348,8 @@ async def mcp_tool_call(
                 "error": {"code": -32000, "message": str(exc)},
             },
         )
-    finally:
-        duration = time.monotonic() - start_time
-        MCP_REQUESTS.labels(tool=tool_name, status=status).inc()
-        MCP_REQUEST_DURATION.labels(tool=tool_name).observe(duration)
+    # Metrics (MCP_REQUESTS, MCP_REQUEST_DURATION) are recorded inside
+    # dispatch_tool() per REQ-001 §6.4 (metrics in flows, not route handlers).
 
 
 def _get_tool_list() -> list[dict]:
@@ -376,12 +363,12 @@ def _get_tool_list() -> list[dict]:
     try:
         from app.config import load_te_config
         te_config = load_te_config()
-    except Exception:
+    except (FileNotFoundError, RuntimeError, OSError, ValueError):
         te_config = {}
     try:
         from app.config import load_config
         ae_config = load_config()
-    except Exception:
+    except (FileNotFoundError, RuntimeError, OSError, ValueError):
         ae_config = {}
     build_type_names = list(ae_config.get("build_types", {}).keys()) or [
         "passthrough", "standard-tiered", "knowledge-enriched"
@@ -730,6 +717,24 @@ def _get_tool_list() -> list[dict]:
             "inputSchema": {
                 "type": "object",
                 "properties": {},
+            },
+        },
+        {
+            "name": "install_stategraph",
+            "description": "Install or upgrade a StateGraph package at runtime without container restart (REQ-001 §10)",
+            "inputSchema": {
+                "type": "object",
+                "required": ["package_name"],
+                "properties": {
+                    "package_name": {
+                        "type": "string",
+                        "description": "Python package name (e.g., 'context-broker-te', 'context-broker-ae')",
+                    },
+                    "version": {
+                        "type": "string",
+                        "description": "Specific version to install (e.g., '0.2.0'). Omit for latest.",
+                    },
+                },
             },
         },
     ]

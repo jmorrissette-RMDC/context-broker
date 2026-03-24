@@ -411,7 +411,7 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | PG-06 | Post | minor | Gateway healthcheck false negative — Alpine wget resolves localhost to IPv6 | `docker-compose.yml` | FIXED | Changed to `http://127.0.0.1:8080/health`. |
 | PG-07 | Post | blocker | REQ-001 missing AE/TE separation requirements (§9-13) | `draft-REQ-001-mad-requirements.md` | FIXED | Added §9 AE/TE Separation, §10 Dynamic Loading, §11 Imperator, §12 TE Package, §13 Base Contract. |
 | PG-08 | Post | blocker | REQ-002 missing TE configuration separation (§7) | `draft-REQ-002-pmad-requirements.md` | FIXED | Added §7 TE Configuration with per-use inference. |
-| PG-09 | Post | blocker | REQ-context-broker says "single config.yml" — contradicts AE/TE separation | `REQ-context-broker.md` | FIXED | Split into AE config (config.yml) and TE config (imperator.yml). |
+| PG-09 | Post | blocker | REQ-context-broker says "single config.yml" — contradicts AE/TE separation | `REQ-context-broker.md` | FIXED | Split into AE config (config.yml) and TE config (te.yml). |
 | PG-10 | Post | major | Single global `llm` config — no per-use inference configuration | `app/config.py`, `config/config.example.yml` | FIXED | Per-role inference slots: `imperator` in te.yml, `summarization`/`extraction` in config.yml. `get_chat_model(config, role)` resolves from merged config. |
 | PG-11 | Post | major | No Anthropic provider support — `get_chat_model()` only creates `ChatOpenAI` | `app/config.py` | FIXED | Tested: Anthropic's OpenAI-compatible endpoint works for chat + tool calling. No `ChatAnthropic` needed. All providers use `ChatOpenAI` with `base_url`. Removed `langchain-anthropic` dependency. |
 | PG-12 | Post | major | No TE config file — Imperator config embedded in AE's config.yml | `config/` | FIXED | Split: AE in `config.yml` (infrastructure, pipeline LLMs, embeddings, reranker, build types, tuning), TE in `te.yml` (Imperator model, system prompt, cognitive settings). `async_load_config()` merges both for backward compat. |
@@ -431,17 +431,27 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | PG-26 | Post | major | Fluent Bit cannot resolve Docker container hashes to names | N/A (removed) | WONTFIX | Fluent Bit has no Docker metadata filter. Replaced by custom Python log shipper that uses Docker API for network-based container discovery. |
 | PG-27 | Post | major | Log shipper: custom Python container for MAD log collection | `log_shipper/` | FIXED | Discovers containers on context-broker-net via Docker API. Tails via API (preserves docker logs). Resolves names. Writes to Postgres. Event-driven (watches connect/disconnect). |
 | PG-28 | Post | major | Imperator diagnostic tools implemented | `app/flows/imperator_flow.py` | FIXED | 3 diagnostic (log query, context introspection, pipeline status) + 2 admin (config write, verbose toggle). Diagnostic always available, admin gated by admin_tools. |
+| PG-29 | Post | major | REQ §3.4 api_key_env text contradicted implementation | `docs/REQ-context-broker.md`, `docs/HLD-context-broker.md` | FIXED | REQ said "No api_key_env indirection" but D-06 uses api_key_env. Updated REQ and HLD to match implementation. |
+| PG-30 | Post | major | TE config filename inconsistent (te.yml vs imperator.yml) | `docs/REQ-context-broker.md`, `docs/HLD-context-broker.md`, `app/config.py` | FIXED | Standardized all references to te.yml. |
+| PG-31 | Post | major | 7 blanket except Exception blocks (REQ-001 §4.5) | `app/workers/arq_worker.py`, `app/routes/mcp.py`, `app/flows/imperator_flow.py` | FIXED | Replaced with specific exception types. |
+| PG-32 | Post | major | Metrics recorded in route handlers not flows (REQ-001 §6.4) | `app/routes/chat.py`, `app/routes/mcp.py` | FIXED | Moved into tool_dispatch.py and imperator_wrapper.py (flow layer). |
+| PG-33 | Post | minor | REQ §7.3 idempotency unclear for message store | `docs/REQ-context-broker.md` | FIXED | Added §7.3 clarifying F-04 consecutive duplicate detection approach. |
+| PG-34 | Post | minor | Hardcoded timeout and backoff thresholds (REQ-001 §8.2) | `app/config.py`, `app/workers/arq_worker.py` | FIXED | Externalized to config tuning section. |
+| PG-35 | Post | minor | No early build type config validation at startup | `app/main.py` | FIXED | Added validation in lifespan after config load. |
+| PG-36 | Post | minor | Silent failure in verbose_log_auto | `app/config.py` | FIXED | Now logs at DEBUG instead of silent pass. |
+| PG-37 | Post | minor | packages.source is build-time only, undocumented | `config/config.example.yml` | FIXED | Added clarifying comment. |
+| PG-38 | Post | blocker | Dynamic StateGraph loading NOT implemented (REQ-001 §10) | entire codebase | FIXED | Bootstrap kernel + AE package (context-broker-ae) + TE package (context-broker-te). Entry_points discovery via importlib.metadata, install_stategraph() MCP tool, base contract (§13), migration 015 for stategraph_packages table. 293 tests passing. |
 
 ---
 
 ## Summary
 
-Updated 2026-03-24. All Round 7 OPEN items fixed.
+Updated 2026-03-24. All compliance audit items fixed. Dynamic StateGraph loading implemented.
 
 | Status | Count |
 |--------|-------|
 | OPEN | 0 |
-| FIXED | 208 |
+| FIXED | 219 |
 | WONTFIX | 36 |
 | FALSE_POSITIVE | 1 |
 | REMOVED | 1 |
@@ -449,4 +459,4 @@ Updated 2026-03-24. All Round 7 OPEN items fixed.
 
 ### Open Items
 
-22 items to fix: 11 majors (R7-M2, M5, M6, M7, M8, M9, M10, M11, M12, M17, M19) + 11 minors (R7-m3, m5, m10, m14, m15, m19, m20, m21, m24, m26, m27).
+None.

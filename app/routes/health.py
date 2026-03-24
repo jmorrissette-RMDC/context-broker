@@ -12,21 +12,22 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.config import async_load_config
-from app.flows.health_flow import build_health_check_flow
+from app.stategraph_registry import get_flow_builder
 
 _log = logging.getLogger("context_broker.routes.health")
 
 router = APIRouter()
 
-# R6-m1: Lazy-initialized flow singleton — compiled on first use instead of
-# at import time, so module import doesn't trigger graph compilation.
 _health_flow = None
 
 
 def _get_health_flow():
     global _health_flow
     if _health_flow is None:
-        _health_flow = build_health_check_flow()
+        builder = get_flow_builder("health_check")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: health_check flow unavailable")
+        _health_flow = builder()
     return _health_flow
 
 

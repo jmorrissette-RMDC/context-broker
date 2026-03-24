@@ -175,7 +175,7 @@ packages:
 
 -   All credentials stored in `/config/credentials/.env` as key-value pairs (e.g., `OPENAI_API_KEY=sk-...`).
 -   The `.env` file is loaded into the container environment via `env_file` in `docker-compose.yml`.
--   Application code reads credentials from standard platform environment variables at runtime. LangChain reads provider-standard variables automatically (e.g., `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). No `api_key_env` indirection in `config.yml` — the standard env var names are used directly.
+-   Application code reads credentials from environment variables at runtime. Each inference provider slot in configuration includes an `api_key_env` field that names the environment variable holding its API key (e.g., `api_key_env: OPENAI_API_KEY`). This explicit indirection ensures no magic defaults or LangChain auto-detection — every provider's key source is visible in config. For keyless providers (Ollama, Infinity), `api_key_env` is set to `""` (empty string).
 -   No credentials in Dockerfiles, application code, or committed files. The `.env` file is gitignored. The repository ships a `.env.example` listing required variable names without values.
 -   Verification: grep codebase for hardcoded secrets — must find none. The only place real secrets exist is the user's local `.env` file.
 
@@ -328,7 +328,7 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 
 -   Configuration is split into two files:
     -   **AE configuration** (`/config/config.yml`): Infrastructure settings (database connections, ports, network), queue configuration, package source, operational settings (log level, health check intervals). Read at startup; changes require restart.
-    -   **TE configuration** (`/config/imperator.yml`): Imperator settings (Identity, Purpose, Persona), inference provider assignments per cognitive function, build type definitions, cognitive parameters (token budgets, tier percentages, tuning). Hot-reloadable; changes take effect without restart.
+    -   **TE configuration** (`/config/te.yml`): Imperator settings (Identity, Purpose, Persona), inference provider assignments per cognitive function, build type definitions, cognitive parameters (token budgets, tier percentages, tuning). Hot-reloadable; changes take effect without restart.
 -   The TE configuration is conceptually part of the TE package. When the TE is upgraded or replaced, its configuration changes without touching AE infrastructure settings.
 
 **5.2 Inference Provider Configuration**
@@ -338,7 +338,7 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 -   Embedding and reranker slots are independent of LLM slots.
 
 ```yaml
-# TE configuration (imperator.yml)
+# TE configuration (te.yml)
 inference:
   imperator:
     provider: anthropic          # "openai" (default) or "anthropic"
@@ -528,7 +528,14 @@ imperator:
 -   Dependency unavailability handled at request time (degradation, retry).
 -   Allows parallel startup and faster recovery.
 
-**7.3 Network Topology**
+**7.3 Idempotency**
+
+-   Per REQ-001 §7.3, operations that may be retried must be safe to execute more than once.
+-   Conversation creation uses `ON CONFLICT DO NOTHING` — fully idempotent with a caller-supplied ID.
+-   Message storage does not use an idempotency key (§3.5.1 — `idempotency_key` is not in the schema). Instead, consecutive duplicate detection (same role, content, and sender as the immediately preceding message) collapses duplicates on ingestion. This provides practical idempotency for the common retry case (network timeout → client resends the same message) without requiring callers to generate and track idempotency tokens.
+-   Background jobs (embedding, assembly, extraction) are safe to re-execute: embedding is an overwrite, assembly holds a distributed lock (duplicate jobs wait and skip), and extraction via Mem0 is additive and deduplicated at the graph level.
+
+**7.4 Network Topology**
 
 -   Two Docker networks per deployment:
     -   **External** (`default`) — the host-exposed network. Only the gateway connects here and publishes ports for inbound access.

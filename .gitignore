@@ -8,3 +8,9 @@ data/
 # Python bytecode
 *.pyc
 __pycache__/
+
+# Package build artifacts
+*.egg-info/
+build/
+dist/
+*.whl

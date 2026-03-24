@@ -17,8 +17,9 @@ F-22:    Messages stored through conv_store_message pipeline.
 import copy
 import logging
 import re
+import time
 import uuid
-from typing import Annotated, Optional
+from typing import Annotated, AsyncGenerator, Optional
 
 import asyncpg
 import httpx
@@ -67,18 +68,24 @@ _mem_search_flow_singleton = None
 def _get_conv_search_flow():
     global _conv_search_flow_singleton
     if _conv_search_flow_singleton is None:
-        from app.flows.search_flow import build_conversation_search_flow
+        from app.stategraph_registry import get_flow_builder
 
-        _conv_search_flow_singleton = build_conversation_search_flow()
+        builder = get_flow_builder("conversation_search")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: conversation_search flow unavailable")
+        _conv_search_flow_singleton = builder()
     return _conv_search_flow_singleton
 
 
 def _get_mem_search_flow():
     global _mem_search_flow_singleton
     if _mem_search_flow_singleton is None:
-        from app.flows.memory_search_flow import build_memory_search_flow
+        from app.stategraph_registry import get_flow_builder
 
-        _mem_search_flow_singleton = build_memory_search_flow()
+        builder = get_flow_builder("memory_search")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: memory_search flow unavailable")
+        _mem_search_flow_singleton = builder()
     return _mem_search_flow_singleton
 
 
@@ -323,7 +330,7 @@ async def _log_query_tool(container: str = "", level: str = "", search: str = ""
             msg = row["message"] or str(data)[:200]
             lines.append(f"[{ts}] [{row['container_name']}] [{lvl}] {msg}")
         return "\n".join(lines)
-    except Exception as exc:
+    except (asyncpg.PostgresError, OSError, KeyError) as exc:
         return f"Log query error: {exc}"
 
 
@@ -389,7 +396,7 @@ async def _context_introspection_tool(conversation_id: str, build_type: str = "s
             f"Created: {window['created_at'].isoformat() if window['created_at'] else '?'}",
         ]
         return "\n".join(lines)
-    except Exception as exc:
+    except (asyncpg.PostgresError, OSError, KeyError) as exc:
         return f"Introspection error: {exc}"
 
 
@@ -443,7 +450,7 @@ async def _pipeline_status_tool() -> str:
             f"  Messages embedded: {recent_embeddings}",
         ]
         return "\n".join(lines)
-    except Exception as exc:
+    except (asyncpg.PostgresError, OSError, KeyError) as exc:
         return f"Pipeline status error: {exc}"
 
 
@@ -544,9 +551,12 @@ def _get_message_pipeline():
     """Lazy-init the standard message pipeline flow."""
     global _message_pipeline_singleton
     if _message_pipeline_singleton is None:
-        from app.flows.message_pipeline import build_message_pipeline
+        from app.stategraph_registry import get_flow_builder
 
-        _message_pipeline_singleton = build_message_pipeline()
+        builder = get_flow_builder("message_pipeline")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: message_pipeline flow unavailable")
+        _message_pipeline_singleton = builder()
     return _message_pipeline_singleton
 
 
@@ -889,3 +899,8 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
     from langgraph.checkpoint.memory import MemorySaver
 
     return workflow.compile(checkpointer=MemorySaver())
+
+
+# Metrics wrappers (invoke_with_metrics, astream_events_with_metrics) live
+# in the kernel at app/flows/imperator_wrapper.py — they are AE-side
+# instrumentation concerns, not TE logic.

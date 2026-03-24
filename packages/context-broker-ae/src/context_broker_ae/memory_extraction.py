@@ -197,7 +197,7 @@ async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
     config = state["config"]
 
     try:
-        from app.memory.mem0_client import get_mem0_client
+        from context_broker_ae.memory.mem0_client import get_mem0_client
 
         mem0 = await get_mem0_client(config)
         if mem0 is None:

@@ -343,6 +343,24 @@ async def _migration_014(conn) -> None:
     _log.info("Migration 014 complete — system_logs table for Fluent Bit")
 
 
+async def _migration_015(conn) -> None:
+    """Migration 15: Add stategraph_packages table for dynamic loading (REQ-001 §10).
+
+    Tracks which StateGraph packages are installed and their versions.
+    Used by install_stategraph() to record installations.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS stategraph_packages (
+            package_name  VARCHAR(255) PRIMARY KEY,
+            version       VARCHAR(100) NOT NULL,
+            installed_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            entry_point_group VARCHAR(100),
+            metadata      JSONB
+        )
+    """)
+    _log.info("Migration 015 complete — stategraph_packages table")
+
+
 # Migration registry: version -> (description, migration_function)
 # Add new migrations here. Never modify existing entries.
 # IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
@@ -380,6 +398,11 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
         14,
         "Add system_logs table for Fluent Bit log collection",
         _migration_014,
+    ),
+    (
+        15,
+        "Add stategraph_packages table for dynamic loading (REQ-001 §10)",
+        _migration_015,
     ),
 ]
 

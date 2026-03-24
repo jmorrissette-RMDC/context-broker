@@ -11,7 +11,7 @@ from typing import Optional
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
-from app.flows.memory_scoring import filter_and_rank_memories
+from context_broker_ae.memory_scoring import filter_and_rank_memories
 
 _log = logging.getLogger("context_broker.flows.memory_search")
 
@@ -38,7 +38,7 @@ async def search_memory_graph(state: MemorySearchState) -> dict:
     config = state["config"]
 
     try:
-        from app.memory.mem0_client import get_mem0_client
+        from context_broker_ae.memory.mem0_client import get_mem0_client
 
         mem0 = await get_mem0_client(config)
         if mem0 is None:
@@ -125,7 +125,7 @@ async def retrieve_memory_context(state: MemoryContextState) -> dict:
     config = state["config"]
 
     try:
-        from app.memory.mem0_client import get_mem0_client
+        from context_broker_ae.memory.mem0_client import get_mem0_client
 
         mem0 = await get_mem0_client(config)
         if mem0 is None:

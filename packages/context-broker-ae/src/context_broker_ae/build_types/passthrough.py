@@ -19,7 +19,7 @@ from typing_extensions import TypedDict
 
 from app.config import get_tuning, verbose_log
 from app.database import get_pg_pool, get_redis
-from app.flows.build_type_registry import register_build_type
+# Registration handled by register.py — no module-scope side effects
 from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
 
 _log = logging.getLogger("context_broker.flows.build_types.passthrough")
@@ -351,10 +351,4 @@ def build_passthrough_retrieval():
     return workflow.compile()
 
 
-# ============================================================
-# Registration
-# ============================================================
-
-register_build_type(
-    "passthrough", build_passthrough_assembly, build_passthrough_retrieval
-)
+# Registration handled by context_broker_ae.register — no module-scope side effects.

@@ -95,3 +95,15 @@ def get_retrieval_graph(name: str) -> Any:
 def list_build_types() -> list[str]:
     """Return a list of all registered build type names."""
     return list(_registry.keys())
+
+
+def clear_compiled_cache() -> None:
+    """Clear all compiled graph caches.
+
+    Called after install_stategraph() to ensure next invocation
+    uses freshly compiled graphs from updated packages.
+    """
+    with _lock:
+        _compiled_cache.clear()
+        _registry.clear()
+    _log.info("Build type registry and compiled graph caches cleared")

@@ -1,39 +1,19 @@
 """
 Tool dispatch — routes MCP tool calls to compiled StateGraph flows.
 
-All tool logic lives in StateGraph flows. This module is the thin
-routing layer that maps tool names to their flows.
+All tool logic lives in StateGraph flows loaded dynamically from AE/TE
+packages via entry_points (REQ-001 §10). This module is the thin
+kernel-side routing layer that maps tool names to their flows using
+the stategraph_registry.
 """
 
 import logging
+import time
 from typing import Any
 
-# ARCH-18: Import build_types package to trigger registration of all build types
-import app.flows.build_types  # noqa: F401
 from app.flows.build_type_registry import get_retrieval_graph
-from app.flows.conversation_ops_flow import (
-    build_create_conversation_flow,
-    build_create_context_window_flow,
-    build_get_context_flow,
-    build_get_history_flow,
-    build_search_context_windows_flow,
-)
-from app.flows.imperator_flow import build_imperator_flow
-from app.flows.memory_admin_flow import (
-    build_mem_add_flow,
-    build_mem_delete_flow,
-    build_mem_list_flow,
-)
-from app.flows.memory_search_flow import (
-    build_memory_context_flow,
-    build_memory_search_flow,
-)
-from app.flows.message_pipeline import build_message_pipeline
-from app.flows.metrics_flow import build_metrics_flow
-from app.flows.search_flow import (
-    build_conversation_search_flow,
-    build_message_search_flow,
-)
+from app.metrics_registry import MCP_REQUESTS, MCP_REQUEST_DURATION
+from app.stategraph_registry import get_flow_builder, get_imperator_builder
 from app.models import (
     GetContextInput,
     ImperatorChatInput,
@@ -57,128 +37,40 @@ from app.models import (
 
 _log = logging.getLogger("context_broker.flows.tool_dispatch")
 
-# Lazy-initialized flow singletons — compiled on first use to avoid
-# import-time side effects and allow graceful startup ordering.
-_create_conversation_flow = None
-_store_message_flow = None
-_create_context_window_flow = None
-_search_conversations_flow = None
-_search_messages_flow = None
-_get_history_flow = None
-_search_context_windows_flow = None
-_mem_search_flow = None
-_mem_context_flow = None
-_mem_add_flow = None
-_mem_list_flow = None
-_mem_delete_flow = None
-_metrics_flow = None
-_imperator_flow = None
-_get_context_flow = None
+# Lazy-initialized flow singletons — compiled on first use from
+# dynamically loaded packages via the stategraph_registry.
+_flow_cache: dict[str, Any] = {}
 
 
-def _get_create_conversation_flow():
-    global _create_conversation_flow
-    if _create_conversation_flow is None:
-        _create_conversation_flow = build_create_conversation_flow()
-    return _create_conversation_flow
+def _get_flow(name: str) -> Any:
+    """Get a compiled flow by registry name (lazy singleton)."""
+    if name not in _flow_cache:
+        builder = get_flow_builder(name)
+        if builder is None:
+            raise RuntimeError(
+                f"Flow '{name}' not available. Is the AE package installed?"
+            )
+        _flow_cache[name] = builder()
+    return _flow_cache[name]
 
 
-def _get_store_message_flow():
-    global _store_message_flow
-    if _store_message_flow is None:
-        _store_message_flow = build_message_pipeline()
-    return _store_message_flow
+def _get_imperator_flow() -> Any:
+    """Get the compiled Imperator flow from the TE registry."""
+    if "imperator" not in _flow_cache:
+        builder = get_imperator_builder()
+        if builder is None:
+            raise RuntimeError(
+                "No TE package registered. Install a TE package with "
+                "install_stategraph or ensure one is installed at startup."
+            )
+        _flow_cache["imperator"] = builder()
+    return _flow_cache["imperator"]
 
 
-def _get_create_context_window_flow():
-    global _create_context_window_flow
-    if _create_context_window_flow is None:
-        _create_context_window_flow = build_create_context_window_flow()
-    return _create_context_window_flow
-
-
-def _get_search_conversations_flow():
-    global _search_conversations_flow
-    if _search_conversations_flow is None:
-        _search_conversations_flow = build_conversation_search_flow()
-    return _search_conversations_flow
-
-
-def _get_search_messages_flow():
-    global _search_messages_flow
-    if _search_messages_flow is None:
-        _search_messages_flow = build_message_search_flow()
-    return _search_messages_flow
-
-
-def _get_get_history_flow():
-    global _get_history_flow
-    if _get_history_flow is None:
-        _get_history_flow = build_get_history_flow()
-    return _get_history_flow
-
-
-def _get_search_context_windows_flow():
-    global _search_context_windows_flow
-    if _search_context_windows_flow is None:
-        _search_context_windows_flow = build_search_context_windows_flow()
-    return _search_context_windows_flow
-
-
-def _get_mem_search_flow():
-    global _mem_search_flow
-    if _mem_search_flow is None:
-        _mem_search_flow = build_memory_search_flow()
-    return _mem_search_flow
-
-
-def _get_mem_context_flow():
-    global _mem_context_flow
-    if _mem_context_flow is None:
-        _mem_context_flow = build_memory_context_flow()
-    return _mem_context_flow
-
-
-def _get_mem_add_flow():
-    global _mem_add_flow
-    if _mem_add_flow is None:
-        _mem_add_flow = build_mem_add_flow()
-    return _mem_add_flow
-
-
-def _get_mem_list_flow():
-    global _mem_list_flow
-    if _mem_list_flow is None:
-        _mem_list_flow = build_mem_list_flow()
-    return _mem_list_flow
-
-
-def _get_mem_delete_flow():
-    global _mem_delete_flow
-    if _mem_delete_flow is None:
-        _mem_delete_flow = build_mem_delete_flow()
-    return _mem_delete_flow
-
-
-def _get_metrics_flow():
-    global _metrics_flow
-    if _metrics_flow is None:
-        _metrics_flow = build_metrics_flow()
-    return _metrics_flow
-
-
-def _get_imperator_flow():
-    global _imperator_flow
-    if _imperator_flow is None:
-        _imperator_flow = build_imperator_flow()
-    return _imperator_flow
-
-
-def _get_get_context_flow():
-    global _get_context_flow
-    if _get_context_flow is None:
-        _get_context_flow = build_get_context_flow()
-    return _get_context_flow
+def invalidate_flow_cache() -> None:
+    """Clear all cached flows. Called after install_stategraph()."""
+    _flow_cache.clear()
+    _log.info("Flow dispatch cache cleared")
 
 
 async def dispatch_tool(
@@ -193,6 +85,26 @@ async def dispatch_tool(
     Raises ValueError for unknown tools or validation errors.
     """
     _log.info("Dispatching tool: %s", tool_name)
+    _start_time = time.monotonic()
+    _status = "error"
+
+    try:
+        result = await _dispatch_tool_inner(tool_name, arguments, config, app_state)
+        _status = "success"
+        return result
+    finally:
+        _duration = time.monotonic() - _start_time
+        MCP_REQUESTS.labels(tool=tool_name, status=_status).inc()
+        MCP_REQUEST_DURATION.labels(tool=tool_name).observe(_duration)
+
+
+async def _dispatch_tool_inner(
+    tool_name: str,
+    arguments: dict[str, Any],
+    config: dict[str, Any],
+    app_state: Any,
+) -> dict[str, Any]:
+    """Inner dispatch — routes tool calls to their StateGraph flows."""
 
     # ============================================================
     # Core tools (D-02)
@@ -200,7 +112,7 @@ async def dispatch_tool(
 
     if tool_name == "get_context":
         validated = GetContextInput(**arguments)
-        result = await _get_get_context_flow().ainvoke(
+        result = await _get_flow("get_context").ainvoke(
             {
                 "build_type": validated.build_type,
                 "budget": validated.budget,
@@ -235,7 +147,7 @@ async def dispatch_tool(
 
     elif tool_name == "store_message":
         validated = StoreMessageCoreInput(**arguments)
-        result = await _get_store_message_flow().ainvoke(
+        result = await _get_flow("message_pipeline").ainvoke(
             {
                 "context_window_id": None,
                 "conversation_id_input": str(validated.conversation_id),
@@ -262,7 +174,7 @@ async def dispatch_tool(
 
     elif tool_name == "search_messages":
         validated = SearchMessagesInput(**arguments)
-        result = await _get_search_messages_flow().ainvoke(
+        result = await _get_flow("message_search").ainvoke(
             {
                 "query": validated.query,
                 "conversation_id": (
@@ -292,7 +204,7 @@ async def dispatch_tool(
 
     elif tool_name == "search_knowledge":
         validated = SearchKnowledgeInput(**arguments)
-        result = await _get_mem_search_flow().ainvoke(
+        result = await _get_flow("memory_search").ainvoke(
             {
                 "query": validated.query,
                 "user_id": validated.user_id,
@@ -318,7 +230,7 @@ async def dispatch_tool(
 
     elif tool_name == "conv_create_conversation":
         validated = CreateConversationInput(**arguments)
-        result = await _get_create_conversation_flow().ainvoke(
+        result = await _get_flow("create_conversation").ainvoke(
             {
                 "conversation_id": (
                     str(validated.conversation_id)
@@ -337,7 +249,7 @@ async def dispatch_tool(
 
     elif tool_name == "conv_store_message":
         validated = StoreMessageInput(**arguments)
-        result = await _get_store_message_flow().ainvoke(
+        result = await _get_flow("message_pipeline").ainvoke(
             {
                 "context_window_id": (
                     str(validated.context_window_id)
@@ -431,7 +343,7 @@ async def dispatch_tool(
 
     elif tool_name == "conv_create_context_window":
         validated = CreateContextWindowInput(**arguments)
-        result = await _get_create_context_window_flow().ainvoke(
+        result = await _get_flow("create_context_window").ainvoke(
             {
                 "conversation_id": str(validated.conversation_id),
                 "participant_id": validated.participant_id,
@@ -452,7 +364,7 @@ async def dispatch_tool(
 
     elif tool_name == "conv_search":
         validated = SearchConversationsInput(**arguments)
-        result = await _get_search_conversations_flow().ainvoke(
+        result = await _get_flow("conversation_search").ainvoke(
             {
                 "query": validated.query,
                 "limit": validated.limit,
@@ -478,7 +390,7 @@ async def dispatch_tool(
 
     elif tool_name == "conv_search_messages":
         validated = SearchMessagesInput(**arguments)
-        result = await _get_search_messages_flow().ainvoke(
+        result = await _get_flow("message_search").ainvoke(
             {
                 "query": validated.query,
                 "conversation_id": (
@@ -508,7 +420,7 @@ async def dispatch_tool(
 
     elif tool_name == "conv_get_history":
         validated = GetHistoryInput(**arguments)
-        result = await _get_get_history_flow().ainvoke(
+        result = await _get_flow("get_history").ainvoke(
             {
                 "conversation_id": str(validated.conversation_id),
                 "limit": validated.limit,
@@ -526,7 +438,7 @@ async def dispatch_tool(
 
     elif tool_name == "conv_search_context_windows":
         validated = SearchContextWindowsInput(**arguments)
-        result = await _get_search_context_windows_flow().ainvoke(
+        result = await _get_flow("search_context_windows").ainvoke(
             {
                 "context_window_id": (
                     str(validated.context_window_id)
@@ -551,7 +463,7 @@ async def dispatch_tool(
 
     elif tool_name == "mem_search":
         validated = MemSearchInput(**arguments)
-        result = await _get_mem_search_flow().ainvoke(
+        result = await _get_flow("memory_search").ainvoke(
             {
                 "query": validated.query,
                 "user_id": validated.user_id,
@@ -573,7 +485,7 @@ async def dispatch_tool(
 
     elif tool_name == "mem_get_context":
         validated = MemGetContextInput(**arguments)
-        result = await _get_mem_context_flow().ainvoke(
+        result = await _get_flow("memory_context").ainvoke(
             {
                 "query": validated.query,
                 "user_id": validated.user_id,
@@ -626,7 +538,7 @@ async def dispatch_tool(
     elif tool_name == "mem_add":
         # M-18: Routed through StateGraph flow instead of direct Mem0 call
         validated = MemAddInput(**arguments)
-        result = await _get_mem_add_flow().ainvoke(
+        result = await _get_flow("mem_add").ainvoke(
             {
                 "content": validated.content,
                 "user_id": validated.user_id,
@@ -643,7 +555,7 @@ async def dispatch_tool(
     elif tool_name == "mem_list":
         # M-18: Routed through StateGraph flow instead of direct Mem0 call
         validated = MemListInput(**arguments)
-        result = await _get_mem_list_flow().ainvoke(
+        result = await _get_flow("mem_list").ainvoke(
             {
                 "user_id": validated.user_id,
                 "limit": validated.limit,
@@ -660,7 +572,7 @@ async def dispatch_tool(
     elif tool_name == "mem_delete":
         # M-18: Routed through StateGraph flow instead of direct Mem0 call
         validated = MemDeleteInput(**arguments)
-        result = await _get_mem_delete_flow().ainvoke(
+        result = await _get_flow("mem_delete").ainvoke(
             {
                 "memory_id": validated.memory_id,
                 "config": config,
@@ -675,7 +587,7 @@ async def dispatch_tool(
 
     elif tool_name == "metrics_get":
         MetricsGetInput(**arguments)
-        result = await _get_metrics_flow().ainvoke(
+        result = await _get_flow("metrics").ainvoke(
             {
                 "action": "collect",
                 "metrics_output": "",
@@ -685,6 +597,21 @@ async def dispatch_tool(
         if result.get("error"):
             raise ValueError(result["error"])
         return {"metrics": result.get("metrics_output", "")}
+
+    elif tool_name == "install_stategraph":
+        package_name = arguments.get("package_name", "")
+        version = arguments.get("version")
+        if not package_name:
+            raise ValueError("package_name is required")
+        from app.flows.install_stategraph import install_stategraph
+
+        result = await install_stategraph(package_name, version)
+        # Invalidate all cached flows so next call uses new package
+        invalidate_flow_cache()
+        from app.flows.imperator_wrapper import invalidate as invalidate_imperator
+
+        invalidate_imperator()
+        return result
 
     else:
         raise ValueError(f"Unknown tool: {tool_name}")

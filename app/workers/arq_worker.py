@@ -25,12 +25,8 @@ import redis.exceptions as redis_exc
 
 from app.config import async_load_config, get_tuning
 from app.database import get_redis
-from app.flows.embed_pipeline import build_embed_pipeline
-from app.flows.memory_extraction import build_memory_extraction
-
-# ARCH-18: Import build_types package to trigger registration of all build types
-import app.flows.build_types  # noqa: F401
 from app.flows.build_type_registry import get_assembly_graph
+from app.stategraph_registry import get_flow_builder
 from app.metrics_registry import (
     ASSEMBLY_QUEUE_DEPTH,
     EMBEDDING_QUEUE_DEPTH,
@@ -56,14 +52,20 @@ _extraction_flow = None
 def _get_embed_flow():
     global _embed_flow
     if _embed_flow is None:
-        _embed_flow = build_embed_pipeline()
+        builder = get_flow_builder("embed_pipeline")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: embed_pipeline unavailable")
+        _embed_flow = builder()
     return _embed_flow
 
 
 def _get_extraction_flow():
     global _extraction_flow
     if _extraction_flow is None:
-        _extraction_flow = build_memory_extraction()
+        builder = get_flow_builder("memory_extraction")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: memory_extraction unavailable")
+        _extraction_flow = builder()
     return _extraction_flow
 
 
@@ -157,13 +159,14 @@ async def process_assembly_job(job: dict) -> None:
                 "config": config,
             }
         )
-    except Exception:
+    except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
         # R6-M5: Don't delete the lock unconditionally — that could release
         # another worker's lock. The lock has a TTL; let it expire naturally.
         _log.warning(
-            "Assembly graph crashed for window=%s; lock %s will expire via TTL",
+            "Assembly graph crashed for window=%s; lock %s will expire via TTL: %s",
             context_window_id,
             lock_key,
+            exc,
         )
         raise
 
@@ -219,13 +222,14 @@ async def process_extraction_job(job: dict) -> None:
                 "error": None,
             }
         )
-    except Exception:
+    except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
         # R6-M5: Don't delete the lock unconditionally — that could release
         # another worker's lock. The lock has a TTL; let it expire naturally.
         _log.warning(
-            "Extraction graph crashed for conversation=%s; lock %s will expire via TTL",
+            "Extraction graph crashed for conversation=%s; lock %s will expire via TTL: %s",
             conversation_id,
             lock_key,
+            exc,
         )
         raise
 
@@ -313,8 +317,8 @@ async def _consume_queue(
     poll_timeout = get_tuning(config, "worker_poll_interval_seconds", 2)
     # G5-33: Track consecutive failures for backoff
     consecutive_failures = 0
-    _FAILURE_BACKOFF_THRESHOLD = 3
-    _FAILURE_BACKOFF_SECONDS = 5
+    _FAILURE_BACKOFF_THRESHOLD = get_tuning(config, "failure_backoff_threshold", 3)
+    _FAILURE_BACKOFF_SECONDS = get_tuning(config, "failure_backoff_seconds", 5)
 
     while True:
         raw_job = None

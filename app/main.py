@@ -17,7 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.config import load_config, get_tuning
+from app.config import load_config, get_build_type_config, get_tuning
 from app.database import init_postgres, init_redis, close_all_connections
 from app.logging_setup import setup_logging, update_log_level
 from app.migrations import run_migrations
@@ -130,6 +130,32 @@ async def lifespan(application: FastAPI):
     # Apply configured log level now that config is available
     configured_level = config.get("log_level", "INFO")
     update_log_level(configured_level)
+
+    # REQ-001 §10.2: Scan for StateGraph packages via entry_points
+    from app.stategraph_registry import scan as scan_stategraph_packages
+
+    discovered = scan_stategraph_packages()
+    _log.info("StateGraph packages discovered: %s", discovered)
+    if not discovered.get("ae"):
+        _log.warning(
+            "No AE packages found. Infrastructure flows will not be available "
+            "until an AE package is installed via install_stategraph."
+        )
+    if not discovered.get("te"):
+        _log.warning(
+            "No TE packages found. The Imperator will not be available "
+            "until a TE package is installed via install_stategraph."
+        )
+
+    # REQ-001 §7.4 Fail Fast: Validate build type configs at startup
+    for bt_name in config.get("build_types", {}):
+        try:
+            get_build_type_config(config, bt_name)
+        except (ValueError, KeyError) as exc:
+            _log.error("Invalid build type config '%s': %s", bt_name, exc)
+            raise RuntimeError(
+                f"Invalid build type config '{bt_name}': {exc}"
+            ) from exc
 
     # Initialize database connections — Postgres failure is non-fatal
     pg_retry_task = None

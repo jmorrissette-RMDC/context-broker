@@ -8,7 +8,7 @@ boundary conditions, and input immutability.
 import copy
 
 
-from app.flows.build_types.tier_scaling import (
+from context_broker_ae.build_types.tier_scaling import (
     _LONG_CONVERSATION,
     _SHORT_CONVERSATION,
     scale_tier_percentages,

@@ -14,7 +14,7 @@ handled all build types including semantic/KG).
 """
 
 # Re-export from the knowledge-enriched build type (superset of all features)
-from app.flows.build_types.knowledge_enriched import (  # noqa: F401
+from context_broker_ae.build_types.knowledge_enriched import (  # noqa: F401
     KnowledgeEnrichedRetrievalState as RetrievalState,
     ke_load_window as load_window,
     ke_wait_for_assembly as wait_for_assembly,

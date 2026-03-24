@@ -10,7 +10,7 @@ for backward compatibility.
 """
 
 # Re-export from the new location
-from app.flows.build_types.standard_tiered import (  # noqa: F401
+from context_broker_ae.build_types.standard_tiered import (  # noqa: F401
     StandardTieredAssemblyState as ContextAssemblyState,
     acquire_assembly_lock,
     calculate_tier_boundaries,

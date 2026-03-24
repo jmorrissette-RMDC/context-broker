@@ -485,12 +485,14 @@ class TestStateGraphMandate:
         ["health.py", "mcp.py", "chat.py", "metrics.py"],
     )
     def test_handler_imports_a_flow(self, route_file: str):
-        """Each route handler must import from app.flows (StateGraph delegation)."""
+        """Each route handler must delegate to StateGraph flows (not inline logic)."""
         filepath = self._ROUTE_DIR / route_file
         text = filepath.read_text(encoding="utf-8")
+        # Route handlers must import from app.flows (direct) or app.stategraph_registry
+        # (dynamic loading via REQ-001 §10). Either pattern satisfies delegation.
         assert re.search(
-            r"from app\.flows\.", text
-        ), f"{route_file} does not import any StateGraph flow from app.flows"
+            r"from app\.(flows\.|stategraph_registry)", text
+        ), f"{route_file} does not import any StateGraph flow or registry"
 
 
 # ===================================================================
@@ -538,9 +540,9 @@ class TestBuildTypeRegistry:
     _EXPECTED_BUILD_TYPES = {"passthrough", "standard-tiered", "knowledge-enriched"}
 
     def test_build_type_modules_exist(self, project_root: Path):
-        """Each build type has a corresponding module in app/flows/build_types/."""
-        bt_dir = project_root / "app" / "flows" / "build_types"
-        assert bt_dir.is_dir(), "app/flows/build_types/ directory not found"
+        """Each build type has a corresponding module in the AE package."""
+        bt_dir = project_root / "packages" / "context-broker-ae" / "src" / "context_broker_ae" / "build_types"
+        assert bt_dir.is_dir(), "AE package build_types/ directory not found"
 
         expected_modules = {
             "passthrough.py",
@@ -554,48 +556,27 @@ class TestBuildTypeRegistry:
         }
 
         missing = expected_modules - actual_modules
-        assert not missing, f"Missing build type modules: {missing}"
+        assert not missing, f"Missing build type modules in AE package: {missing}"
 
-    def test_build_types_registered_in_init(self, project_root: Path):
-        """__init__.py imports all three build type modules to trigger registration."""
-        init_path = project_root / "app" / "flows" / "build_types" / "__init__.py"
-        assert init_path.is_file(), "build_types __init__.py not found"
-        text = init_path.read_text(encoding="utf-8")
+    def test_build_types_registered_via_entry_points(self):
+        """AE package registers build types via entry_points (REQ-001 §10)."""
+        from importlib.metadata import entry_points
 
-        for module in ("passthrough", "standard_tiered", "knowledge_enriched"):
-            assert module in text, (
-                f"build_types/__init__.py does not import '{module}' — "
-                f"build type will not be registered"
+        ae_eps = entry_points(group="context_broker.ae")
+        assert len(list(ae_eps)) > 0, (
+            "No AE entry points found — context-broker-ae package not installed"
+        )
+
+    def test_ae_register_provides_build_types(self):
+        """AE register() returns all three build types."""
+        from context_broker_ae.register import register
+
+        registration = register()
+        assert "build_types" in registration, "register() must return build_types"
+        for bt_name in self._EXPECTED_BUILD_TYPES:
+            assert bt_name in registration["build_types"], (
+                f"Build type '{bt_name}' not in AE registration"
             )
-
-    def test_each_module_calls_register(self, project_root: Path):
-        """Each build type module calls register_build_type()."""
-        bt_dir = project_root / "app" / "flows" / "build_types"
-        modules = {
-            "passthrough": bt_dir / "passthrough.py",
-            "standard_tiered": bt_dir / "standard_tiered.py",
-            "knowledge_enriched": bt_dir / "knowledge_enriched.py",
-        }
-
-        for name, path in modules.items():
-            text = path.read_text(encoding="utf-8")
-            assert (
-                "register_build_type" in text
-            ), f"{name}.py does not call register_build_type()"
-
-    def test_registry_names_match(self, project_root: Path):
-        """Each module registers with the correct hyphenated name string."""
-        bt_dir = project_root / "app" / "flows" / "build_types"
-        files = {
-            "passthrough": bt_dir / "passthrough.py",
-            "standard-tiered": bt_dir / "standard_tiered.py",
-            "knowledge-enriched": bt_dir / "knowledge_enriched.py",
-        }
-
-        for expected_name, path in files.items():
-            text = path.read_text(encoding="utf-8")
-            # Look for register_build_type("name", ...) or register_build_type('name', ...)
-            assert re.search(
-                rf'register_build_type\(\s*["\']{re.escape(expected_name)}["\']',
-                text,
-            ), f"{path.name} does not register with name '{expected_name}'"
+            asm, ret = registration["build_types"][bt_name]
+            assert callable(asm), f"{bt_name} assembly builder not callable"
+            assert callable(ret), f"{bt_name} retrieval builder not callable"

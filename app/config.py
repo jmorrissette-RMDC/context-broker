@@ -3,7 +3,7 @@ Configuration management for the Context Broker.
 
 Two config files per REQ-002 §7 (TE Configuration Separation):
 - AE config (/config/config.yml): infrastructure settings (database, workers, locks)
-- TE config (/config/imperator.yml): cognitive settings (inference, build types, tuning)
+- TE config (/config/te.yml): cognitive settings (inference, build types, tuning)
 
 AE config is read once at startup (cached, restart required for changes).
 TE config is read on each operation (hot-reloadable, no restart needed).
@@ -217,7 +217,7 @@ def _apply_te_config(
 
 
 def load_te_config() -> dict[str, Any]:
-    """Load and return the TE configuration from /config/imperator.yml.
+    """Load and return the TE configuration from /config/te.yml.
 
     Uses mtime-based caching with content hash invalidation.
     Hot-reloadable — changes take effect without restart.
@@ -358,10 +358,13 @@ def verbose_log_auto(logger: Any, message: str, *args: Any) -> None:
         cfg = load_config()
         if get_tuning(cfg, "verbose_logging", False):
             logger.info(message, *args)
-    except (RuntimeError, OSError, ValueError, TypeError):
+    except (RuntimeError, OSError, ValueError, TypeError) as exc:
         # R6-m6: Broadened to catch bad YAML structure (ValueError/TypeError)
-        # in addition to file-level errors. Verbose logging must never crash.
-        pass
+        # in addition to file-level errors. Verbose logging must never crash
+        # the operation, but log the failure at DEBUG for diagnosability.
+        logging.getLogger("context_broker.config").debug(
+            "verbose_log_auto: config load failed: %s", exc
+        )
 
 
 # ============================================================
@@ -413,7 +416,7 @@ def get_chat_model(config: dict, role: str = "imperator") -> Any:
                 "base_url": llm_config.get("base_url"),
                 "model": llm_config.get("model", "gpt-4o-mini"),
                 "api_key": api_key or "not-needed",
-                "timeout": 1800,
+                "timeout": get_tuning(config, "llm_timeout_seconds", 1800),
             }
             _llm_cache[cache_key] = ChatOpenAI(**kwargs)
         return _llm_cache[cache_key]

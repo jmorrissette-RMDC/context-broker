@@ -18,23 +18,15 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from pydantic import ValidationError
 
 from app.config import async_load_config
-from app.flows.imperator_flow import build_imperator_flow
-from app.metrics_registry import CHAT_REQUESTS, CHAT_REQUEST_DURATION
+from app.flows.imperator_wrapper import (
+    astream_events_with_metrics,
+    invoke_with_metrics,
+)
 from app.models import ChatCompletionRequest
 
 _log = logging.getLogger("context_broker.routes.chat")
 
 router = APIRouter()
-
-# Lazy-initialized Imperator flow — compiled on first use
-_imperator_flow = None
-
-
-def _get_imperator_flow():
-    global _imperator_flow
-    if _imperator_flow is None:
-        _imperator_flow = build_imperator_flow()
-    return _imperator_flow
 
 
 @router.post("/v1/chat/completions", response_model=None)
@@ -42,11 +34,8 @@ async def chat_completions(request: Request):
     """Handle OpenAI-compatible chat completion requests.
 
     Routes to the Imperator StateGraph. Supports streaming and non-streaming.
+    Metrics are recorded inside the flow layer per REQ-001 §6.4.
     """
-    start_time = time.monotonic()
-    status = "error"
-    is_streaming = False
-
     try:
         body = await request.json()
     except (ValueError, UnicodeDecodeError) as exc:
@@ -71,8 +60,6 @@ async def chat_completions(request: Request):
                 }
             },
         )
-
-    is_streaming = chat_request.stream
 
     # R7-M9: Wrap config load in try/except with error response
     try:
@@ -148,24 +135,17 @@ async def chat_completions(request: Request):
 
     try:
         if chat_request.stream:
-            # For streaming, metrics are tracked inside the generator after
-            # the stream completes, not here in the route handler.
             return StreamingResponse(
-                _stream_imperator_response(initial_state, chat_request, start_time),
+                _stream_imperator_response(initial_state, chat_request),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         else:
-            # D-01: MemorySaver requires thread_id in configurable
-            thread_id = str(context_window_id) if context_window_id else "chat-default"
-            result = await _get_imperator_flow().ainvoke(
-                initial_state,
-                config={"configurable": {"thread_id": thread_id}},
-            )
+            # Metrics recorded inside invoke_with_metrics (flow layer)
+            result = await invoke_with_metrics(initial_state)
 
             if result.get("error"):
                 _log.error("Imperator flow error: %s", result["error"])
-                status = "error"
                 return JSONResponse(
                     status_code=500,
                     content={
@@ -177,7 +157,6 @@ async def chat_completions(request: Request):
                 )
 
             response_text = result.get("response_text", "")
-            status = "success"
 
             return JSONResponse(
                 content=_build_completion_response(response_text, chat_request.model)
@@ -194,48 +173,28 @@ async def chat_completions(request: Request):
                 }
             },
         )
-    finally:
-        # Only record metrics for non-streaming requests here.
-        # Streaming metrics are recorded in the generator.
-        if not is_streaming:
-            duration = time.monotonic() - start_time
-            CHAT_REQUESTS.labels(status=status).inc()
-            CHAT_REQUEST_DURATION.observe(duration)
 
 
 async def _stream_imperator_response(
     initial_state: dict,
     chat_request: ChatCompletionRequest,
-    start_time: float,
 ) -> AsyncGenerator[str, None]:
     """Stream the Imperator response as SSE tokens.
 
     M-22: astream_events(version="v2") captures on_chat_model_stream events
     from nested ainvoke() calls within the LangGraph runtime, so real token
     streaming works without requiring the agent to use astream() internally.
-    If a provider/model does not emit streaming tokens via ainvoke (e.g. some
-    local models), true per-token streaming would require the Imperator's
-    final non-tool-call LLM invocation to use llm.astream() instead. This is
-    a known limitation; the current implementation works correctly with
-    OpenAI-compatible providers that support streaming under the hood.
+    Metrics are recorded inside astream_events_with_metrics (flow layer).
     """
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
-    stream_status = "success"
 
     try:
         # G5-29: Known limitation — when the ReAct agent processes tool calls,
         # astream_events may emit no content tokens for those intermediate LLM
         # turns (only the final non-tool-call turn produces streamable tokens).
-        # This is inherent to how LangGraph processes tool calls and is not a bug.
-        # D-01: MemorySaver requires thread_id
-        _cw_id = initial_state.get("context_window_id")
-        _thread_id = str(_cw_id) if _cw_id else "chat-stream-default"
-        async for event in _get_imperator_flow().astream_events(
-            initial_state,
-            version="v2",
-            config={"configurable": {"thread_id": _thread_id}},
-        ):
+        # Metrics recorded inside the flow wrapper per REQ-001 §6.4.
+        async for event in astream_events_with_metrics(initial_state):
             if event["event"] == "on_chat_model_stream":
                 token = event["data"]["chunk"].content
                 if token:
@@ -273,7 +232,6 @@ async def _stream_imperator_response(
 
     except (RuntimeError, ConnectionError, OSError) as exc:
         _log.error("Streaming imperator response failed: %s", exc, exc_info=True)
-        stream_status = "error"
         error_chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -289,12 +247,6 @@ async def _stream_imperator_response(
         }
         yield f"data: {json.dumps(error_chunk)}\n\n"
         yield "data: [DONE]\n\n"
-
-    finally:
-        # Record streaming metrics after the stream completes
-        duration = time.monotonic() - start_time
-        CHAT_REQUESTS.labels(status=stream_status).inc()
-        CHAT_REQUEST_DURATION.observe(duration)
 
 
 def _build_completion_response(response_text: str, model: str) -> dict:

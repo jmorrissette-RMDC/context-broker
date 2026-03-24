@@ -119,10 +119,11 @@ class TestShippedBuildTypes:
     """Verify the three shipped build types are registered at import."""
 
     def test_three_shipped_types_registered(self):
-        """Importing build_types package registers passthrough, standard-tiered, knowledge-enriched."""
-        # Trigger registration by importing the package
-        import app.flows.build_types  # noqa: F401
+        """Scanning entry_points registers passthrough, standard-tiered, knowledge-enriched."""
+        # REQ-001 §10: Build types registered via entry_points, not static imports
+        from app.stategraph_registry import scan
 
+        scan()
         types = list_build_types()
         assert "passthrough" in types
         assert "standard-tiered" in types
@@ -130,9 +131,9 @@ class TestShippedBuildTypes:
 
     def test_shipped_assembly_graphs_compile(self):
         """Each shipped build type's assembly builder produces a graph without error."""
-        import app.flows.build_types  # noqa: F401
+        from app.stategraph_registry import scan
 
-        # Clear cache to force fresh compilation
+        scan()
         saved = dict(_compiled_cache)
         _compiled_cache.clear()
         try:
@@ -145,8 +146,9 @@ class TestShippedBuildTypes:
 
     def test_shipped_retrieval_graphs_compile(self):
         """Each shipped build type's retrieval builder produces a graph without error."""
-        import app.flows.build_types  # noqa: F401
+        from app.stategraph_registry import scan
 
+        scan()
         saved = dict(_compiled_cache)
         _compiled_cache.clear()
         try:

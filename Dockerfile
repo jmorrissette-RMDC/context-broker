@@ -22,6 +22,10 @@ RUN apt-get update && \
 USER ${USER_NAME}
 WORKDIR /app
 
+# REQ-001 §10: Enable --user pip installs for runtime StateGraph packages
+ENV PYTHONUSERBASE=/home/${USER_NAME}/.local
+ENV PATH="/home/${USER_NAME}/.local/bin:${PATH}"
+
 # Copy requirements and install dependencies
 COPY --chown=${USER_NAME}:${USER_NAME} requirements.txt ./
 

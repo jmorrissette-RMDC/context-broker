@@ -10,7 +10,7 @@ import math
 from datetime import datetime, timedelta, timezone
 
 
-from app.flows.memory_scoring import (
+from context_broker_ae.memory_scoring import (
     DEFAULT_HALF_LIVES,
     filter_and_rank_memories,
     score_memory,
