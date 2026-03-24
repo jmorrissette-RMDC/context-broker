@@ -508,11 +508,10 @@ async def _dispatch_tool_inner(
         validated = ImperatorChatInput(**arguments)
         from langchain_core.messages import HumanMessage
 
-        thread_id = (
-            str(validated.context_window_id)
-            if validated.context_window_id
-            else "imperator-default"
-        )
+        # Unique thread_id per invocation — MemorySaver persists within
+        # a single ReAct execution, not across user turns.
+        import uuid as _uuid
+        thread_id = str(_uuid.uuid4())
 
         result = await _get_imperator_flow().ainvoke(
             {
