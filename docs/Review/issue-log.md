@@ -474,5 +474,14 @@ Updated 2026-03-24. Component tests 28/28 PASS. Cross-provider 3/3 PASS. State 4
 
 ### Open Items
 
-2 open: PG-43 (Imperator conversation resilience), PG-49 (extraction at scale silently failing).
+| PG-54 | Post | minor | Phase 2 turn 6: Imperator doesn't mention "Joshua26" when summarizing projects | N/A | NOTE | Quality issue — the Imperator found relevant topics but didn't use the exact term "Joshua26". Context assembly may not surface the system name prominently enough. |
+| PG-55 | Post | minor | Phase 2 turn 7: Imperator can't find "AE/TE separation" via search | N/A | NOTE | Either the term wasn't extracted to the knowledge graph, or search doesn't match partial concepts. Related to PG-49 (extraction quality). |
+| PG-51 | Post | major | Imperator log_query tool returns empty response | `imperator_flow.py` | OPEN | Phase 3 test: "Show me log entries" returned 0 chars. Either the tool wasn't called, the system_logs table is empty after container restart, or the tool errored silently. |
+| PG-52 | Post | minor | Imperator context_introspection response doesn't contain expected keywords | `imperator_flow.py` | OPEN | Phase 3 test: response missing "tier" and "tokens". The tool may not have been called, or the response format doesn't match expected keywords. Needs investigation. |
+| PG-53 | Post | major | admin_tools config change requires container restart (not hot-reloadable) | `imperator_flow.py` | OPEN | admin_tools=true/false is read at graph compilation time. Changing te.yml doesn't take effect because the Imperator graph is a lazy singleton compiled once. Need to invalidate the compiled graph on TE config change. |
+
+### Open Items
+
+4 open: PG-43 (Imperator conversation resilience), PG-49 (extraction at scale), PG-51 (log query empty), PG-53 (admin_tools not hot-loadable).
+2 minor: PG-52 (introspection keywords).
 PG-50 FIXED — unique thread_id per invocation. Phase 2: 8/10, Phase 3: 6/9.
