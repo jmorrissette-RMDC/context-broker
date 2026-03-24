@@ -468,6 +468,10 @@ Updated 2026-03-24. Component tests 28/28 PASS. Cross-provider 3/3 PASS. State 4
 | PG-47 | Post | major | Embed pipeline processes one message per API call — 40 min for 10K | `arq_worker.py` | FIXED | Added batch embedding (embedding_batch_size=50, embedding_concurrency=3). 50/batch at 2.5s = ~60 emb/s. Embeddings keep pace with ingestion. |
 | PG-48 | Post | minor | Bulk load doesn't create context windows — assembly never triggers | `tests/integration/bulk_load.py` | NOTE | By design: get_context auto-creates windows (D-03). Bulk load must call get_context after loading, then store one trigger message per conversation to kick off assembly. |
 
+| PG-49 | Post | major | Bulk extraction logs extracted=N but Neo4j has few nodes | `memory_extraction.py`, `mem0_client.py` | OPEN | Extraction flow reports extracted=208 for conv-2 but Neo4j only has 12 nodes (from a manual test). Either Mem0 add() is silently failing at scale, or the extracted count is misleading. Needs investigation. |
+
+| PG-50 | Post | blocker | Imperator returns cached/stale responses across turns | `imperator_flow.py`, `imperator_wrapper.py` | OPEN | MemorySaver reuses same thread_id for all calls to /v1/chat/completions. After the first tool-use turn completes, subsequent calls return the same cached response instead of processing the new message. Each HTTP request needs a unique invocation or MemorySaver state must be handled correctly for multi-turn. |
+
 ### Open Items
 
-1 major: PG-43 (Imperator crashes if its conversation is deleted from DB while running).
+3 open: PG-43 (Imperator conversation resilience), PG-49 (extraction at scale), PG-50 (Imperator caching stale responses — BLOCKER).
