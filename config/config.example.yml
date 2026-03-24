@@ -128,6 +128,13 @@ tuning:
   # LLM client
   llm_timeout_seconds: 1800          # timeout for LLM API calls (30 minutes — covers long summarization)
 
+  # Embedding pipeline performance
+  embedding_batch_size: 50           # texts per embedding API call (APIs accept arrays)
+  embedding_concurrency: 3           # concurrent batch requests to embedding provider
+
+  # LLM pipeline concurrency
+  llm_concurrency: 2                 # concurrent LLM calls for summarization/extraction
+
   # Worker resilience
   failure_backoff_threshold: 3       # consecutive failures before backoff
   failure_backoff_seconds: 5         # seconds to wait during backoff

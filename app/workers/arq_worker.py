@@ -70,12 +70,14 @@ def _get_extraction_flow():
 
 
 async def process_embedding_job(job: dict) -> None:
-    """Process a single embedding job using the embed pipeline StateGraph."""
+    """Process a single embedding job using the embed pipeline StateGraph.
+
+    Used as fallback when batch processing is not possible.
+    """
     config = await async_load_config()
     message_id = job.get("message_id", "")
     conversation_id = job.get("conversation_id", "")
 
-    # M-25: Validate UUIDs from Redis job data before passing to flows
     try:
         if message_id:
             uuid.UUID(message_id)
@@ -117,6 +119,114 @@ async def process_embedding_job(job: dict) -> None:
     )
     JOB_DURATION.labels(job_type="embed_message").observe(duration)
     JOBS_COMPLETED.labels(job_type="embed_message", status="success").inc()
+
+
+async def process_embedding_batch(jobs: list[dict]) -> None:
+    """Process a batch of embedding jobs using batch embedding API.
+
+    Fetches all messages, calls aembed_documents (batch), stores all
+    vectors, and enqueues assembly jobs. Much faster than one-at-a-time
+    because the embedding API accepts arrays of texts.
+    """
+    if not jobs:
+        return
+
+    config = await async_load_config()
+    from app.config import get_embeddings_model, get_tuning
+    from app.database import get_pg_pool
+
+    pool = get_pg_pool()
+    batch_start = time.monotonic()
+    batch_size = len(jobs)
+
+    # Step 1: Fetch all messages in one query
+    msg_ids = []
+    conv_ids = {}
+    for job in jobs:
+        mid = job.get("message_id", "")
+        cid = job.get("conversation_id", "")
+        try:
+            msg_ids.append(uuid.UUID(mid))
+            conv_ids[mid] = cid
+        except ValueError:
+            _log.warning("Skipping malformed UUID in batch: %s", mid)
+
+    if not msg_ids:
+        return
+
+    rows = await pool.fetch(
+        "SELECT id, conversation_id, content, sequence_number, role "
+        "FROM conversation_messages WHERE id = ANY($1)",
+        msg_ids,
+    )
+    row_map = {str(r["id"]): r for r in rows}
+
+    # Step 2: Build texts for embedding (skip null content)
+    texts = []
+    text_msg_ids = []
+    for mid_uuid in msg_ids:
+        mid = str(mid_uuid)
+        row = row_map.get(mid)
+        if row is None or not row.get("content"):
+            continue
+        texts.append(row["content"])
+        text_msg_ids.append(mid)
+
+    if not texts:
+        _log.info("Batch of %d jobs had no embeddable content", batch_size)
+        return
+
+    # Step 3: Batch embed
+    embeddings_model = get_embeddings_model(config)
+    try:
+        vectors = await embeddings_model.aembed_documents(texts)
+    except (OSError, ValueError, RuntimeError) as exc:
+        _log.error("Batch embedding failed (%d texts): %s", len(texts), exc)
+        raise RuntimeError(f"Batch embedding failed: {exc}") from exc
+
+    # Step 4: Store all vectors
+    for mid, vector in zip(text_msg_ids, vectors):
+        vec_str = "[" + ",".join(str(v) for v in vector) + "]"
+        await pool.execute(
+            "UPDATE conversation_messages SET embedding = $1::vector WHERE id = $2",
+            vec_str,
+            uuid.UUID(mid),
+        )
+
+    duration = time.monotonic() - batch_start
+    _log.info(
+        "Batch embedding complete: %d/%d texts in %dms",
+        len(texts), batch_size, int(duration * 1000),
+    )
+    JOB_DURATION.labels(job_type="embed_batch").observe(duration)
+    JOBS_COMPLETED.labels(job_type="embed_message", status="success").inc(len(texts))
+
+    # Step 5: Enqueue assembly for affected conversations
+    # (delegate to the embed pipeline's assembly logic for each unique conversation)
+    unique_convs = set()
+    for mid in text_msg_ids:
+        cid = conv_ids.get(mid)
+        if cid:
+            unique_convs.add(cid)
+
+    for cid in unique_convs:
+        # Use the single-message flow to trigger assembly logic for this conversation
+        # Pick any message from this conversation for the assembly trigger
+        sample_mid = next(m for m in text_msg_ids if conv_ids.get(m) == cid)
+        try:
+            await _get_embed_flow().ainvoke(
+                {
+                    "message_id": sample_mid,
+                    "conversation_id": cid,
+                    "config": config,
+                    "message": row_map.get(sample_mid),
+                    "embedding": None,  # Already stored above
+                    "assembly_jobs_queued": [],
+                    "error": None,
+                }
+            )
+        except (RuntimeError, ValueError) as exc:
+            _log.warning("Assembly trigger failed for conv %s: %s", cid, exc)
 
 
 async def process_assembly_job(job: dict) -> None:
@@ -621,6 +731,98 @@ async def _sweep_stranded_processing_jobs() -> None:
         _log.info("Startup sweep: recovered %d stranded job(s)", total_recovered)
 
 
+async def _consume_queue_batched(
+    queue_name: str,
+    batch_processor: Any,
+    config: dict,
+    batch_size: int = 50,
+    concurrency: int = 3,
+) -> None:
+    """Consume jobs from a Redis list in batches with concurrency.
+
+    Pops up to batch_size jobs per round, dispatches to batch_processor.
+    Runs up to `concurrency` batches concurrently via asyncio.Semaphore.
+    """
+    _log.info(
+        "Batch queue consumer started: %s (batch_size=%d, concurrency=%d)",
+        queue_name, batch_size, concurrency,
+    )
+    processing_queue = f"{queue_name}:processing"
+    poll_timeout = get_tuning(config, "worker_poll_interval_seconds", 2)
+    semaphore = asyncio.Semaphore(concurrency)
+    consecutive_failures = 0
+    _FAILURE_BACKOFF_THRESHOLD = get_tuning(config, "failure_backoff_threshold", 3)
+    _FAILURE_BACKOFF_SECONDS = get_tuning(config, "failure_backoff_seconds", 5)
+
+    async def _run_batch(raw_jobs: list[str], jobs: list[dict]) -> None:
+        async with semaphore:
+            try:
+                await batch_processor(jobs)
+                # Success — remove all from processing queue
+                redis = get_redis()
+                for raw in raw_jobs:
+                    await redis.lrem(processing_queue, 1, raw)
+            except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
+                _log.error("Batch processing error in %s: %s", queue_name, exc)
+                # Move failed jobs to dead letter
+                redis = get_redis()
+                dl_key = f"dead_letter:{queue_name}"
+                for raw in raw_jobs:
+                    await redis.lpush(dl_key, raw)
+                    await redis.lrem(processing_queue, 1, raw)
+
+    while True:
+        try:
+            redis = get_redis()
+
+            # Update queue depth gauge
+            depth_gauge = _QUEUE_DEPTH_GAUGES.get(queue_name)
+            if depth_gauge is not None:
+                queue_len = await redis.llen(queue_name)
+                depth_gauge.set(queue_len)
+
+            # Pop up to batch_size jobs
+            raw_jobs = []
+            jobs = []
+            for _ in range(batch_size):
+                raw = await redis.lmove(
+                    queue_name, processing_queue, "RIGHT", "LEFT",
+                )
+                if raw is None:
+                    break
+                raw_jobs.append(raw)
+                try:
+                    job = json.loads(raw)
+                    job.pop("retry_after", None)
+                    jobs.append(job)
+                except json.JSONDecodeError:
+                    _log.warning("Unparseable job in %s, moving to dead letter", queue_name)
+                    await redis.lpush(f"dead_letter_unparseable:{queue_name}", raw)
+                    await redis.lrem(processing_queue, 1, raw)
+
+            if not jobs:
+                await asyncio.sleep(poll_timeout)
+                continue
+
+            _log.info("Processing batch of %d jobs from %s", len(jobs), queue_name)
+            # Fire and forget with semaphore for concurrency control
+            asyncio.create_task(_run_batch(raw_jobs, jobs))
+            consecutive_failures = 0
+
+        except asyncio.CancelledError:
+            _log.info("Batch queue consumer cancelled: %s", queue_name)
+            raise
+        except (ConnectionError, OSError, redis_exc.RedisError) as exc:
+            consecutive_failures += 1
+            _log.error("Batch consumer %s error: %s", queue_name, exc)
+            if consecutive_failures >= _FAILURE_BACKOFF_THRESHOLD:
+                _log.warning(
+                    "Batch consumer %s hit %d failures, backing off %ds",
+                    queue_name, consecutive_failures, _FAILURE_BACKOFF_SECONDS,
+                )
+                await asyncio.sleep(_FAILURE_BACKOFF_SECONDS)
+
+
 async def start_background_worker(config: dict) -> None:
     """Start all queue consumer loops concurrently.
 
@@ -634,8 +836,15 @@ async def start_background_worker(config: dict) -> None:
     except (ConnectionError, OSError) as exc:
         _log.error("Startup sweep failed (non-fatal): %s", exc)
 
+    embedding_batch_size = get_tuning(config, "embedding_batch_size", 50)
+    embedding_concurrency = get_tuning(config, "embedding_concurrency", 3)
+    llm_concurrency = get_tuning(config, "llm_concurrency", 2)
+
     await asyncio.gather(
-        _consume_queue("embedding_jobs", process_embedding_job, config),
+        _consume_queue_batched(
+            "embedding_jobs", process_embedding_batch, config,
+            batch_size=embedding_batch_size, concurrency=embedding_concurrency,
+        ),
         _consume_queue("context_assembly_jobs", process_assembly_job, config),
         _consume_queue(
             "memory_extraction_jobs",
