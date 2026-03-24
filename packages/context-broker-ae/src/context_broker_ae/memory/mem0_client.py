@@ -160,19 +160,19 @@ def _build_mem0_instance(config: dict) -> object:
 
 
 def _neo4j_config(password: str) -> dict:
-    """Build Neo4j connection config, omitting credentials when AUTH=none.
+    """Build Neo4j connection config.
 
-    R2-F20: When NEO4J_PASSWORD is empty (the default), credentials are
-    intentionally omitted from the config. This matches the NEO4J_AUTH=none
-    setting in docker-compose.yml where Neo4j runs without authentication
-    on the internal Docker network.
+    Mem0's GraphStoreConfig requires url, username, and password fields
+    even when Neo4j runs with NEO4J_AUTH=none. When password is empty,
+    we pass "neo4j"/"neo4j" as dummy credentials — Neo4j ignores them
+    when auth is disabled.
     """
     url = f"bolt://{os.environ.get('NEO4J_HOST', 'context-broker-neo4j')}:{os.environ.get('NEO4J_PORT', '7687')}"
-    cfg: dict = {"url": url}
-    if password:
-        cfg["username"] = "neo4j"
-        cfg["password"] = password
-    return cfg
+    return {
+        "url": url,
+        "username": "neo4j",
+        "password": password or "neo4j",
+    }
 
 
 def _get_embedding_dims(config: dict, embeddings_config: dict) -> int:
