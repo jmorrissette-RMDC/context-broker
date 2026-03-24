@@ -173,6 +173,10 @@ Combines episodic layers with semantically retrieved messages and knowledge grap
 
 **Dynamic Tier Scaling:** Tier percentages define target allocations, but actual content may not fill a tier (e.g., a new conversation has no archival summary). Unused budget from under-filled tiers is redistributed to lower tiers (Tier 3 absorbs unused Tier 1/2 budget), ensuring the full token budget is utilized.
 
+**Effective Utilization:** The token budget represents the model's full context size. Build types calculate tier allocations against an effective budget (budget × utilization percentage, default 85%). Models degrade in quality past approximately 85% context fill — the build type enforces this threshold, not the caller.
+
+**Initial Assembly on Long Conversations:** When a new window is created on an existing long conversation, the assembly does not summarize the entire history. It looks back a configurable multiple (e.g., 3×) of the effective budget into the raw messages, summarizes that range into tier 2 and tier 1, and ignores everything older. Older messages remain in the database and are reachable via `search_messages` and `search_knowledge`. Subsequent assemblies are incremental — new messages push into tier 3, displaced messages are summarized into tier 2, and accumulated tier 2 summaries consolidate into tier 1. The pipeline never re-reads raw messages that have already been summarized.
+
 **Memory Confidence Scoring:** Extracted memories carry a confidence score that decays over time via a configurable half-life. Memories re-confirmed by new conversation evidence have their confidence refreshed. Low-confidence memories are deprioritized during knowledge graph retrieval.
 
 ## 9. Async Processing Model

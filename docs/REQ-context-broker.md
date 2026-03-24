@@ -416,6 +416,13 @@ build_types:
 -   `fallback_tokens` in build type config is used when the caller doesn't specify a budget and auto-resolution from the provider fails.
 -   Budget is resolved once at window creation and stored. Changes do not retroactively affect existing windows.
 
+**5.4.1 Initial Assembly on New Windows**
+
+-   When a new context window is created on a long-running conversation, the assembly pipeline does not attempt to summarize the entire conversation history. Instead, it looks back a configurable multiple of the window budget (e.g., 3× the effective budget) into the raw message history.
+-   That lookback range is chunked and summarized into tier 2, then consolidated into tier 1. Everything older than the lookback is not included in the assembled context — it remains in the database and is searchable via `search_messages` and `search_knowledge`.
+-   The lookback multiplier is a tuning parameter in the build type config (e.g., `initial_lookback_multiplier: 3`).
+-   Subsequent assemblies are incremental: new messages enter tier 3, displaced messages are summarized into tier 2, and accumulated tier 2 summaries consolidate into tier 1. The assembly never re-reads raw messages that have already been summarized.
+
 **5.5 Imperator Configuration**
 
 ```yaml
