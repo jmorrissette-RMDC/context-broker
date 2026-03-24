@@ -142,7 +142,12 @@ async def chat_completions(request: Request):
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         else:
-            result = await _get_imperator_flow().ainvoke(initial_state)
+            # D-01: MemorySaver requires thread_id in configurable
+            thread_id = str(context_window_id) if context_window_id else "chat-default"
+            result = await _get_imperator_flow().ainvoke(
+                initial_state,
+                config={"configurable": {"thread_id": thread_id}},
+            )
 
             if result.get("error"):
                 _log.error("Imperator flow error: %s", result["error"])
@@ -209,8 +214,13 @@ async def _stream_imperator_response(
         # astream_events may emit no content tokens for those intermediate LLM
         # turns (only the final non-tool-call turn produces streamable tokens).
         # This is inherent to how LangGraph processes tool calls and is not a bug.
+        # D-01: MemorySaver requires thread_id
+        _cw_id = initial_state.get("context_window_id")
+        _thread_id = str(_cw_id) if _cw_id else "chat-stream-default"
         async for event in _get_imperator_flow().astream_events(
-            initial_state, version="v2"
+            initial_state,
+            version="v2",
+            config={"configurable": {"thread_id": _thread_id}},
         ):
             if event["event"] == "on_chat_model_stream":
                 token = event["data"]["chunk"].content
