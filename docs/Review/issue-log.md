@@ -428,22 +428,25 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | PG-23 | Post | major | Imperator still uses internal calls, not MCP tools (D-07) | `app/flows/imperator_flow.py` | FIXED | Imperator now uses dispatch_tool("get_context") and dispatch_tool("store_message"). Self-consumption via same tool interface. |
 | PG-24 | Post | major | Initial lookback multiplier not implemented (D-09) | `app/flows/build_types/standard_tiered.py` | FIXED | load_messages checks for existing summaries. On first assembly, looks back budget * multiplier tokens. |
 | PG-25 | Post | minor | Imperator state file stores context_window_id (obsolete) | `app/imperator/state_manager.py` | FIXED | State manager simplified to conversation_id only. get_context_window_id() returns conversation_id for backward compat. |
+| PG-26 | Post | major | Fluent Bit cannot resolve Docker container hashes to names | `fluentbit/` | WONTFIX | Fluent Bit has no Docker metadata filter. Replaced by custom Python log shipper that uses Docker API for network-based container discovery. |
+| PG-27 | Post | major | Log shipper: custom Python container for MAD log collection | `log_shipper/` | FIXED | Discovers containers on context-broker-net via Docker API. Tails via API (preserves docker logs). Resolves names. Writes to Postgres. Event-driven (watches connect/disconnect). |
+| PG-28 | Post | major | Imperator diagnostic tools implemented | `app/flows/imperator_flow.py` | FIXED | 3 diagnostic (log query, context introspection, pipeline status) + 2 admin (config write, verbose toggle). Diagnostic always available, admin gated by admin_tools. |
 
 ---
 
 ## Summary
 
-Updated 2026-03-23 after cross-provider regression.
+Updated 2026-03-24 after log shipper implementation.
 
 | Status | Count |
 |--------|-------|
-| OPEN | 51 |
-| FIXED | 179 |
-| WONTFIX | 13 |
+| OPEN | 50 |
+| FIXED | 180 |
+| WONTFIX | 14 |
 | FALSE_POSITIVE | 1 |
 | REMOVED | 1 |
 | NOTE | 1 |
 
 ### Open Items
 
-50 items from Round 7 (all deferred to deployment phase) + 1 new (PG-21: StateGraph mandate for config resolution logic).
+50 items from Round 7 (all deferred to deployment phase) + 1 (PG-21: StateGraph mandate for config resolution logic). Fluent Bit approach abandoned (PG-26 WONTFIX), replaced by custom log shipper.
