@@ -424,7 +424,7 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | PG-19 | Post | major | HLD-context-broker §7 and §10 didn't reflect AE/TE separation | `HLD-context-broker.md` | FIXED | Updated configuration system and Imperator design sections. |
 | PG-20 | Post | minor | Cross-provider tests: clear embeddings between runs when switching embedding providers | `tests/` | NOTE | Dimension mismatch (e.g., 768 vs 1024) is expected when switching embedding models — not a bug. Clear old embeddings before each cross-provider run. |
 | PG-21 | Post | minor | `get_chat_model()` contains application logic (role→config resolution) outside StateGraph | `app/config.py` | WONTFIX | Role→config resolution is borderline substrate. Factory/cache pattern is standard. Refactor complexity not justified. |
-| PG-22 | Post | blocker | Cross-provider tests did NOT test through Context Broker pipeline | `tests/test_cross_provider.py` | OPEN | Tests were direct API calls to each provider, bypassing the Context Broker entirely. State 4 promise NOT validated. Must rewrite as full-pipeline tests: configure CB → store_message → embedding → get_context → verify. |
+| PG-22 | Post | blocker | Cross-provider tests did NOT test through Context Broker pipeline | `tests/integration/test_cross_provider.py` | FIXED | Old fake tests deleted. New full-pipeline tests: hot-reload config → store_message → embedding → get_context → search. 3/3 PASS (Google, OpenAI, Ollama). Together/xAI skipped (no serverless embeddings, PG-14). State 4 validated. |
 | PG-23 | Post | major | Imperator still uses internal calls, not MCP tools (D-07) | `app/flows/imperator_flow.py` | FIXED | Imperator now uses dispatch_tool("get_context") and dispatch_tool("store_message"). Self-consumption via same tool interface. |
 | PG-24 | Post | major | Initial lookback multiplier not implemented (D-09) | `app/flows/build_types/standard_tiered.py` | FIXED | load_messages checks for existing summaries. On first assembly, looks back budget * multiplier tokens. |
 | PG-25 | Post | minor | Imperator state file stores context_window_id (obsolete) | `app/imperator/state_manager.py` | FIXED | State manager simplified to conversation_id only. get_context_window_id() returns conversation_id for backward compat. |
@@ -441,28 +441,33 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | PG-36 | Post | minor | Silent failure in verbose_log_auto | `app/config.py` | FIXED | Now logs at DEBUG instead of silent pass. |
 | PG-37 | Post | minor | packages.source is build-time only, undocumented | `config/config.example.yml` | FIXED | Added clarifying comment. |
 | PG-38 | Post | blocker | Dynamic StateGraph loading NOT implemented (REQ-001 §10) | entire codebase | FIXED | Bootstrap kernel + AE package (context-broker-ae) + TE package (context-broker-te). Entry_points discovery via importlib.metadata, install_stategraph() MCP tool, base contract (§13), migration 015 for stategraph_packages table. 292 tests passing. |
-| PG-39 | Post | blocker | Credentials not hot-reloadable — require container recreation | `app/config.py`, `.env` | OPEN | API keys loaded from Docker env_file at container creation. Adding/changing a key requires `docker compose up -d`. REQ-001 §8.3 requires inference providers to be changeable without restart. Fix: read keys from mounted credential file at runtime, not from env vars. |
-| PG-40 | Post | blocker | Inference provider config (embeddings, reranker) not hot-reloadable | `app/config.py` | OPEN | Embeddings/reranker config is in config.yml (AE) which is cached at startup. REQ-001 §8.3 says inference providers must be read per operation. Must move inference settings to hot-reloadable path or make AE config detect changes per-operation for inference sections. |
-| PG-41 | Post | blocker | Hot-reload never tested | N/A | OPEN | No test exists that verifies: change a config value → next operation uses the new value without restart. Must add functional tests for: (a) switch LLM model via te.yml → Imperator uses new model, (b) switch embedding provider via config → new embeddings use new provider, (c) add API key → usable without restart. |
-| PG-42 | Post | blocker | Provider keys not provisioned on irina | `.env` on irina | OPEN | Only Ollama keys were in the .env. All provider keys (OpenAI, Anthropic, Google, Together, xAI) must be pre-provisioned from Z:\credentials\model-providers.json. |
+| PG-39 | Post | blocker | Credentials not hot-reloadable — require container recreation | `app/config.py` | FIXED | get_api_key() now reads from mounted /config/credentials/.env file first (hot-reloadable), falls back to os.environ for HuggingFace Spaces etc. |
+| PG-40 | Post | blocker | Inference provider config not hot-reloadable | `app/config.py` | FIXED | Was already mtime-based — AE config re-reads on every operation. The actual blocker was PG-39 (credentials). |
+| PG-41 | Post | blocker | Hot-reload never tested | `tests/integration/test_components.py` | FIXED | Component tests verify: changed Imperator from Ollama to Gemini 2.5 Flash via te.yml edit on disk, no restart, next call used new model. 28/28 component tests pass. |
+| PG-42 | Post | blocker | Provider keys not provisioned on irina | `.env` on irina | FIXED | All 5 provider keys provisioned from Z:\credentials\model-providers.json. |
+| PG-43 | Post | major | Imperator crashes if its conversation is deleted from DB | `app/imperator/state_manager.py` | OPEN | If conversations table is truncated while Imperator holds old conversation_id in memory, get_context crashes with ForeignKeyViolationError. Should detect missing conversation and create a new one. |
+| PG-44 | Post | blocker | Mem0 Neo4j config rejected credentials when auth=none | `mem0_client.py` | FIXED | Mem0 GraphStoreConfig requires url+username+password. Was omitting credentials when NEO4J_AUTH=none. Now passes dummy "neo4j"/"neo4j". |
+| PG-45 | Post | blocker | rank-bm25 missing from requirements.txt | `requirements.txt` | FIXED | Mem0 imports rank_bm25 at init. Missing dependency caused silent extraction failure. |
+| PG-46 | Post | blocker | Neo4j APOC plugin not installed | `docker-compose.yml` | FIXED | Mem0 uses apoc.meta.data() for graph operations. Added NEO4J_PLUGINS=["apoc"] to container env. |
 
 ---
 
 ## Summary
 
-Updated 2026-03-24. Critical test and config gaps found during integration testing.
+Updated 2026-03-24. Component tests 28/28 PASS. Cross-provider 3/3 PASS. State 4 validated.
 
 | Status | Count |
 |--------|-------|
-| OPEN | 5 |
-| FIXED | 218 |
+| OPEN | 1 |
+| FIXED | 223 |
 | WONTFIX | 36 |
 | FALSE_POSITIVE | 1 |
 | REMOVED | 1 |
 | NOTE | 1 |
 
+| PG-47 | Post | major | Embed pipeline processes one message per API call — 40 min for 10K | `arq_worker.py` | FIXED | Added batch embedding (embedding_batch_size=50, embedding_concurrency=3). 50/batch at 2.5s = ~60 emb/s. Embeddings keep pace with ingestion. |
+| PG-48 | Post | minor | Bulk load doesn't create context windows — assembly never triggers | `tests/integration/bulk_load.py` | NOTE | By design: get_context auto-creates windows (D-03). Bulk load must call get_context after loading, then store one trigger message per conversation to kick off assembly. |
+
 ### Open Items
 
-5 blockers: PG-22 (cross-provider tests bypass CB), PG-39 (credentials not hot-reloadable), PG-40 (inference config not hot-reloadable), PG-41 (hot-reload never tested), PG-42 (provider keys not provisioned).
-
-None.
+1 major: PG-43 (Imperator crashes if its conversation is deleted from DB while running).
