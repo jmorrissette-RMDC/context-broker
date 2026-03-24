@@ -174,6 +174,13 @@ services:
   # Optional: log collection for Imperator diagnostics.
   # Collects logs from all MAD containers and writes to Postgres.
   # Remove or comment out if deployment environment has its own log collector.
+  #
+  # Optional: log collection for Imperator diagnostics.
+  # Tails Docker log files from all containers, writes to Postgres.
+  # Remove or comment out if deployment has its own log collector.
+  #
+  # The Docker log directory path varies by host. Default: /var/lib/docker/containers.
+  # Override the host-side path in docker-compose.override.yml if different.
   context-broker-fluentbit:
     image: fluent/fluent-bit:3.2
     container_name: context-broker-fluentbit
@@ -182,7 +189,7 @@ services:
     networks:
       - context-broker-net
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/log/docker-containers:ro
       - ./fluentbit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
       - ./fluentbit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
     env_file:

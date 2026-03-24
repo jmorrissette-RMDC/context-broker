@@ -321,23 +321,22 @@ async def _migration_014(conn) -> None:
 
     Enables the Imperator to query logs from all MAD containers via SQL.
     """
+    # Fluent Bit's native pgsql output schema
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS system_logs (
             id              BIGSERIAL PRIMARY KEY,
-            container_name  VARCHAR(255) NOT NULL,
-            log_timestamp   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-            level           VARCHAR(10),
-            message         TEXT,
-            raw_json        JSONB
+            tag             VARCHAR(255),
+            time            TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            data            JSONB
         )
     """)
     await conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_system_logs_container_time
-        ON system_logs (container_name, log_timestamp DESC)
+        CREATE INDEX IF NOT EXISTS idx_system_logs_tag_time
+        ON system_logs (tag, time DESC)
     """)
     await conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_system_logs_level
-        ON system_logs (level, log_timestamp DESC)
+        CREATE INDEX IF NOT EXISTS idx_system_logs_time
+        ON system_logs (time DESC)
     """)
     _log.info("Migration 014 complete — system_logs table for Fluent Bit")
 
