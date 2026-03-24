@@ -108,7 +108,7 @@ class SearchContextWindowsInput(BaseModel):
 
 
 class MemSearchInput(BaseModel):
-    """Input for mem_search."""
+    """Input for mem_search (management tool)."""
 
     query: str = Field(..., min_length=1, max_length=2000)
     user_id: str = Field(..., min_length=1, max_length=255)
@@ -116,11 +116,49 @@ class MemSearchInput(BaseModel):
 
 
 class MemGetContextInput(BaseModel):
-    """Input for mem_get_context."""
+    """Input for mem_get_context (management tool — superseded by search_knowledge)."""
 
     query: str = Field(..., min_length=1, max_length=2000)
     user_id: str = Field(..., min_length=1, max_length=255)
     limit: int = Field(5, ge=1, le=50)
+
+
+# ============================================================
+# Core Tool Input Models (D-02)
+# ============================================================
+
+
+class GetContextInput(BaseModel):
+    """Input for get_context — retrieve assembled context, auto-creating
+    conversation and window as needed."""
+
+    build_type: str = Field(..., min_length=1, max_length=100,
+                            description="Context assembly strategy (e.g., 'passthrough', 'standard-tiered', 'knowledge-enriched')")
+    budget: int = Field(..., ge=1,
+                        description="Token budget — snapped to nearest bucket (4K-2M)")
+    conversation_id: Optional[UUID] = Field(
+        None, description="Existing conversation ID. Omit to create a new conversation.")
+
+
+class StoreMessageCoreInput(BaseModel):
+    """Input for store_message — store a message in a conversation."""
+
+    conversation_id: UUID = Field(..., description="Conversation to store message in")
+    role: str = Field(..., pattern="^(user|assistant|system|tool)$")
+    content: Optional[str] = Field(None)
+    sender: str = Field(..., min_length=1, max_length=255)
+    recipient: Optional[str] = Field(None, max_length=255)
+    model_name: Optional[str] = Field(None, max_length=255)
+    tool_calls: Optional[list[dict]] = None
+    tool_call_id: Optional[str] = Field(None, max_length=255)
+
+
+class SearchKnowledgeInput(BaseModel):
+    """Input for search_knowledge — search extracted facts and relationships."""
+
+    query: str = Field(..., min_length=1, max_length=2000)
+    user_id: str = Field(..., min_length=1, max_length=255)
+    limit: int = Field(10, ge=1, le=100)
 
 
 class MemAddInput(BaseModel):
