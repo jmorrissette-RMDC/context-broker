@@ -58,17 +58,22 @@ _MAX_TOTAL_QUEUED = 10000
 _session_lock = asyncio.Lock()
 
 
-def _evict_stale_sessions() -> None:
+def _evict_stale_sessions(
+    session_ttl: int = _SESSION_TTL_SECONDS,
+    max_sessions: int = _MAX_SESSIONS,
+    max_total_queued: int = _MAX_TOTAL_QUEUED,
+) -> None:
     """Remove sessions older than TTL and enforce the max sessions cap.
 
     R5-M25: Also evict oldest sessions when total queued messages exceed the cap.
+    R7-m15: Accepts parameters instead of reading module globals on every call.
     """
     global _total_queued_messages
     now = time.monotonic()
     stale_ids = [
         sid
         for sid, info in _sessions.items()
-        if now - info["created_at"] > _SESSION_TTL_SECONDS
+        if now - info["created_at"] > session_ttl
     ]
     for sid in stale_ids:
         info = _sessions.pop(sid, None)
@@ -77,13 +82,13 @@ def _evict_stale_sessions() -> None:
         _log.info("MCP SSE session evicted (TTL): %s", sid)
 
     # Evict oldest if over cap
-    while len(_sessions) > _MAX_SESSIONS:
+    while len(_sessions) > max_sessions:
         evicted_id, info = _sessions.popitem(last=False)
         _total_queued_messages -= info["queue"].qsize()
         _log.info("MCP SSE session evicted (cap): %s", evicted_id)
 
     # R5-M25: Evict oldest sessions if total queued messages exceed threshold
-    while _total_queued_messages > _MAX_TOTAL_QUEUED and _sessions:
+    while _total_queued_messages > max_total_queued and _sessions:
         evicted_id, info = _sessions.popitem(last=False)
         _total_queued_messages -= info["queue"].qsize()
         _log.warning("MCP SSE session evicted (total queue pressure): %s", evicted_id)
@@ -96,18 +101,18 @@ async def mcp_sse_session(request: Request) -> StreamingResponse:
     Returns an SSE stream. The client sends tool calls via
     POST /mcp?sessionId=<id>.
     """
-    # Evict stale/over-cap sessions before creating a new one
+    # R7-m15: Read config limits but don't mutate module globals on every request.
+    # Use local variables for this request's session creation.
     config = await async_load_config()
-    global _MAX_SESSIONS, _SESSION_TTL_SECONDS, _MAX_TOTAL_QUEUED
-    _MAX_SESSIONS = get_tuning(config, "mcp_max_sessions", 1000)
-    _SESSION_TTL_SECONDS = get_tuning(config, "mcp_session_ttl_seconds", 3600)
-    _MAX_TOTAL_QUEUED = get_tuning(config, "mcp_max_total_queued", 10000)
+    max_sessions = get_tuning(config, "mcp_max_sessions", _MAX_SESSIONS)
+    session_ttl = get_tuning(config, "mcp_session_ttl_seconds", _SESSION_TTL_SECONDS)
+    max_total_queued = get_tuning(config, "mcp_max_total_queued", _MAX_TOTAL_QUEUED)
 
     session_id = str(uuid.uuid4())
 
     # R6-M3: Protect session dict mutations with asyncio.Lock
     async with _session_lock:
-        _evict_stale_sessions()
+        _evict_stale_sessions(session_ttl, max_sessions, max_total_queued)
         # G5-26: Bound the per-session queue to prevent memory growth from slow clients
         message_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
         _sessions[session_id] = {"queue": message_queue, "created_at": time.monotonic()}
@@ -237,7 +242,19 @@ async def mcp_tool_call(
     tool_name = mcp_request.params.get("name", "unknown")
     tool_arguments = mcp_request.params.get("arguments", {})
 
-    config = await async_load_config()
+    # R7-M9: Wrap config load in try/except with error response
+    try:
+        config = await async_load_config()
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log.error("MCP: config load failed: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "jsonrpc": "2.0",
+                "id": mcp_request.id,
+                "error": {"code": -32000, "message": f"Configuration unavailable: {exc}"},
+            },
+        )
 
     try:
         result = await dispatch_tool(
@@ -516,7 +533,7 @@ def _get_tool_list() -> list[dict]:
                     "content": {"type": "string"},
                     "priority": {"type": "integer", "default": 0},
                     "model_name": {"type": "string"},
-                    "tool_calls": {"type": "object"},
+                    "tool_calls": {"type": "array", "items": {"type": "object"}},
                     "tool_call_id": {"type": "string"},
                 },
             },

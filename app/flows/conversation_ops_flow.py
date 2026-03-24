@@ -243,11 +243,12 @@ async def load_conversation_and_messages(state: GetHistoryState) -> dict:
     if limit:
         # G5-09: Use a subquery to get the most recent N messages (not oldest N),
         # then re-sort in chronological order for the caller.
+        # R7-M19: Added tool_calls and tool_call_id to SELECT
         rows = await pool.fetch(
             """
             SELECT * FROM (
                 SELECT id, role, sender, recipient, content, sequence_number,
-                       token_count, model_name, created_at
+                       token_count, model_name, tool_calls, tool_call_id, created_at
                 FROM conversation_messages
                 WHERE conversation_id = $1
                 ORDER BY sequence_number DESC
@@ -259,10 +260,11 @@ async def load_conversation_and_messages(state: GetHistoryState) -> dict:
             limit,
         )
     else:
+        # R7-M19: Added tool_calls and tool_call_id to SELECT
         rows = await pool.fetch(
             """
             SELECT id, role, sender, recipient, content, sequence_number,
-                   token_count, model_name, created_at
+                   token_count, model_name, tool_calls, tool_call_id, created_at
             FROM conversation_messages
             WHERE conversation_id = $1
             ORDER BY sequence_number ASC
@@ -321,7 +323,7 @@ async def search_context_windows_node(state: SearchContextWindowsState) -> dict:
         row = await pool.fetchrow(
             """
             SELECT id, conversation_id, participant_id, build_type,
-                   max_token_budget, last_assembled_at, created_at
+                   max_token_budget, last_assembled_at, last_accessed_at, created_at
             FROM context_windows
             WHERE id = $1
             """,
@@ -334,6 +336,9 @@ async def search_context_windows_node(state: SearchContextWindowsState) -> dict:
         r["conversation_id"] = str(r["conversation_id"])
         if r.get("last_assembled_at"):
             r["last_assembled_at"] = r["last_assembled_at"].isoformat()
+        # R7-m21: Include last_accessed_at
+        if r.get("last_accessed_at"):
+            r["last_accessed_at"] = r["last_accessed_at"].isoformat()
         if r.get("created_at"):
             r["created_at"] = r["created_at"].isoformat()
         return {"results": [r]}
@@ -361,12 +366,13 @@ async def search_context_windows_node(state: SearchContextWindowsState) -> dict:
     # (never from user input), so f-string interpolation is safe here.
     # The actual filter values are passed as bind parameters ($1, $2, etc.).
     where_clause = " AND ".join(conditions) if conditions else "1=1"
-    args.append(state["limit"])
+    # R7-m5: Cap the limit to prevent unbounded queries
+    args.append(min(state["limit"], 100))
 
     rows = await pool.fetch(
         f"""
         SELECT id, conversation_id, participant_id, build_type,
-               max_token_budget, last_assembled_at, created_at
+               max_token_budget, last_assembled_at, last_accessed_at, created_at
         FROM context_windows
         WHERE {where_clause}
         ORDER BY created_at DESC
@@ -382,6 +388,9 @@ async def search_context_windows_node(state: SearchContextWindowsState) -> dict:
         r["conversation_id"] = str(r["conversation_id"])
         if r.get("last_assembled_at"):
             r["last_assembled_at"] = r["last_assembled_at"].isoformat()
+        # R7-m21: Include last_accessed_at
+        if r.get("last_accessed_at"):
+            r["last_accessed_at"] = r["last_accessed_at"].isoformat()
         if r.get("created_at"):
             r["created_at"] = r["created_at"].isoformat()
         results.append(r)

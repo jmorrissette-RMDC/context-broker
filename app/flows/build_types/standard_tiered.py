@@ -104,14 +104,22 @@ async def acquire_assembly_lock(state: StandardTieredAssemblyState) -> dict:
     )
     lock_key = f"assembly_in_progress:{state['context_window_id']}"
     lock_token = str(uuid.uuid4())
-    redis = get_redis()
 
-    acquired = await redis.set(
-        lock_key,
-        lock_token,
-        ex=get_tuning(state["config"], "assembly_lock_ttl_seconds", 300),
-        nx=True,
-    )
+    # R7-M5: Wrap Redis calls in try/except — return error state if unavailable
+    try:
+        redis = get_redis()
+        acquired = await redis.set(
+            lock_key,
+            lock_token,
+            ex=get_tuning(state["config"], "assembly_lock_ttl_seconds", 300),
+            nx=True,
+        )
+    except (RuntimeError, OSError, ConnectionError) as exc:
+        _log.error("Redis unavailable during lock acquisition for window=%s: %s",
+                    state["context_window_id"], exc)
+        return {"lock_key": lock_key, "lock_token": None, "lock_acquired": False,
+                "error": f"Redis unavailable: {exc}"}
+
     if not acquired:
         _log.info(
             "Context assembly: lock not acquired for window=%s — skipping",
@@ -367,11 +375,29 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
     # M-09: Track whether any chunk failed
     had_errors = any(summary_text is None for _, summary_text in llm_results)
 
+    # R7-M11: Budget guard — stop inserting summaries if cumulative tier1+tier2
+    # tokens would exceed their allocation within the max token budget.
+    max_budget = state.get("max_token_budget", 0)
+    scaled_config = scale_tier_percentages(build_type_config, len(state.get("all_messages", [])))
+    tier1_pct = scaled_config.get("tier1_pct", 0.08)
+    tier2_pct = scaled_config.get("tier2_pct", 0.20)
+    summary_budget = int(max_budget * (tier1_pct + tier2_pct))
+    cumulative_summary_tokens = 0
+
     # Insert summaries sequentially to preserve ordering
     new_summaries = []
     for chunk, summary_text in llm_results:
         if summary_text is None:
             continue
+
+        # R7-M11: Check cumulative token budget before inserting
+        summary_token_count = max(1, len(summary_text) // 4)
+        if summary_budget > 0 and cumulative_summary_tokens + summary_token_count > summary_budget:
+            _log.info(
+                "Budget guard: stopping tier 2 summarization at %d tokens (budget=%d) for window=%s",
+                cumulative_summary_tokens, summary_budget, state["context_window_id"],
+            )
+            break
 
         chunk_tokens = sum(
             m.get("token_count") or max(1, len(m.get("content") or "") // 4)
@@ -430,6 +456,7 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
             )
             continue
         new_summaries.append(summary_text)
+        cumulative_summary_tokens += summary_token_count
 
     _log.info(
         "Context assembly: wrote %d tier 2 summaries for window=%s",
@@ -511,6 +538,19 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
         SystemMessage(content=archival_prompt),
         HumanMessage(content=consolidation_text),
     ]
+
+    # R7-M12: Renew lock TTL before the LLM call (same pattern as _summarize_chunk)
+    lock_key = state.get("lock_key", "")
+    lock_token = state.get("lock_token")
+    if lock_key and lock_token:
+        try:
+            redis = get_redis()
+            current_val = await redis.get(lock_key)
+            if current_val == lock_token:
+                lock_ttl = get_tuning(config, "assembly_lock_ttl_seconds", 300)
+                await redis.expire(lock_key, lock_ttl)
+        except (RuntimeError, OSError, ConnectionError) as exc:
+            _log.warning("Failed to renew lock TTL for archival consolidation: %s", exc)
 
     try:
         response = await llm.ainvoke(messages)

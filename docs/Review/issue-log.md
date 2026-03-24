@@ -346,24 +346,24 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | ID | Round | Severity | Description | File(s) | Status | Notes |
 |----|-------|----------|-------------|---------|--------|-------|
 | R7-M1 | major | Singleton Imperator caching | imperator_flow.py, config.example.yml | FIXED | Documented admin_tools as restart-required in config. | 4/5. |
-| R7-M2 | R7 | major | Blocking file I/O in `_config_read_tool` | `app/flows/imperator_flow.py` | OPEN | 3/5. |
+| R7-M2 | R7 | major | Blocking file I/O in `_config_read_tool` | `app/flows/imperator_flow.py` | FIXED | Wrapped file read in `asyncio.get_running_loop().run_in_executor(None, ...)`. |
 | R7-M3 | major | MCP session unlocked path | mcp.py | FIXED | Extended _session_lock to cover put_nowait in tool_call handler. | 3/5. |
 | R7-M4 | R7 | major | `_total_queued_messages` counter unsafe mutation | `app/routes/mcp.py` | WONTFIX | Edge case: single-threaded asyncio + GIL, no real concurrency path. |
-| R7-M5 | R7 | major | Redis lock-acquisition nodes crash if Redis unavailable | `app/flows/build_types/` | OPEN | 2/5. |
-| R7-M6 | R7 | major | Passthrough lock-release crashes if Redis down | `app/flows/build_types/passthrough.py` | OPEN | 1/5. |
-| R7-M7 | R7 | major | `known_exception_handler` missing `asyncpg.PostgresError` | `app/main.py` | OPEN | 2/5. |
-| R7-M8 | R7 | major | Health endpoint fails hard on config load failure | `app/routes/health.py` | OPEN | 1/5. |
-| R7-M9 | R7 | major | Chat/MCP routes fail hard on config load failure | `app/routes/chat.py`, `app/routes/mcp.py` | OPEN | 1/5. |
-| R7-M10 | R7 | major | `ke_assemble_context` reports untruncated items in `context_tiers` | `app/flows/build_types/knowledge_enriched.py` | OPEN | 1/5. |
-| R7-M11 | R7 | major | Assembly summaries can exceed `max_token_budget` | `app/flows/build_types/standard_tiered.py` | OPEN | 1/5. |
-| R7-M12 | R7 | major | Lock TTL not renewed during archival consolidation | `app/flows/build_types/standard_tiered.py` | OPEN | 1/5. |
+| R7-M5 | R7 | major | Redis lock-acquisition nodes crash if Redis unavailable | `app/flows/build_types/` | FIXED | Wrapped `get_redis()` and `redis.set()` in try/except for (RuntimeError, OSError, ConnectionError); returns error state on failure. |
+| R7-M6 | R7 | major | Passthrough lock-release crashes if Redis down | `app/flows/build_types/passthrough.py` | FIXED | Wrapped Redis calls in try/except; logs warning on failure instead of crashing. |
+| R7-M7 | R7 | major | `known_exception_handler` missing `asyncpg.PostgresError` | `app/main.py` | FIXED | Added `@app.exception_handler(asyncpg.PostgresError)` decorator. `import asyncpg` already present. |
+| R7-M8 | R7 | major | Health endpoint fails hard on config load failure | `app/routes/health.py` | FIXED | Wrapped `async_load_config()` in try/except; returns 503 degraded status on failure. |
+| R7-M9 | R7 | major | Chat/MCP routes fail hard on config load failure | `app/routes/chat.py`, `app/routes/mcp.py` | FIXED | Wrapped `async_load_config()` in try/except with fallback error responses in both files. |
+| R7-M10 | R7 | major | `ke_assemble_context` reports untruncated items in `context_tiers` | `app/flows/build_types/knowledge_enriched.py` | FIXED | `context_tiers.semantic_messages` now built from `truncated_semantic_messages` tracked during budget-aware assembly. |
+| R7-M11 | R7 | major | Assembly summaries can exceed `max_token_budget` | `app/flows/build_types/standard_tiered.py` | FIXED | Added budget guard: stops inserting tier 2 summaries when cumulative tokens exceed tier1+tier2 allocation. |
+| R7-M12 | R7 | major | Lock TTL not renewed during archival consolidation | `app/flows/build_types/standard_tiered.py` | FIXED | Added lock TTL renewal before the LLM call, same pattern as `_summarize_chunk`. |
 | R7-M13 | R7 | major | Dead-letter requeue loses extraction priority | `app/workers/arq_worker.py` | WONTFIX | Priority recalculated from role on requeue. Fallback score 2 is the default. Dead-lettered jobs are already failed retries — ordering is not critical. |
 | R7-M14 | R7 | major | Assembly dedup key can permanently skip jobs | `app/flows/embed_pipeline.py` | WONTFIX | Edge case: 60s TTL expires naturally, assembly lock is 300s. No permanent skip. |
 | R7-M15 | R7 | major | Mem0 config hash ignores env vars | `app/memory/mem0_client.py` | WONTFIX | Mem0 rebuilt when config file changes. Env var changes require container restart. Not a practical issue. |
 | R7-M16 | R7 | major | `_db_query_tool` lacks table/statement constraints | `app/flows/imperator_flow.py` | WONTFIX | Edge case: SET TRANSACTION READ ONLY enforced at DB level. DML impossible regardless of SQL structure. |
-| R7-M17 | R7 | major | Malformed jobs create infinite poison-pill loop | `app/workers/arq_worker.py` | OPEN | 1/5. |
+| R7-M17 | R7 | major | Malformed jobs create infinite poison-pill loop | `app/workers/arq_worker.py` | FIXED | On JSONDecodeError, malformed raw_job moved to `dead_letter_unparseable` queue instead of staying in processing. |
 | R7-M18 | major | Recipient NOT NULL for system/tool | message_pipeline.py | FIXED | Added defaults: system->all, tool->assistant, else->all. | 1/5. |
-| R7-M19 | R7 | major | `conv_get_history` omits `tool_calls`/`tool_call_id` | `app/flows/conversation_ops_flow.py` | OPEN | 1/3 functional. |
+| R7-M19 | R7 | major | `conv_get_history` omits `tool_calls`/`tool_call_id` | `app/flows/conversation_ops_flow.py` | FIXED | Added `tool_calls` and `tool_call_id` to both SELECT queries in `load_conversation_and_messages`. |
 | R7-M20 | R7 | major | Caller-provided priority silently ignored | `app/flows/message_pipeline.py` | WONTFIX | Priority is internal by design (ARCH-14). Remove from MCP schema rather than implement. |
 | R7-M21 | R7 | major | Adaptive loading may miss older messages on first assembly | `app/flows/build_types/standard_tiered.py` | WONTFIX | Fixed by D-09: initial_lookback_multiplier (default 3x) implemented in load_messages. |
 
@@ -373,31 +373,31 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 |----|-------|----------|-------------|---------|--------|-------|
 | R7-m1 | R7 | minor | Config cache fast path racy | `app/config.py` | WONTFIX | Edge case: CPython GIL + single-threaded asyncio. Worst case is extra file read. |
 | R7-m2 | R7 | minor | Prompt cache not concurrency-safe | `app/prompt_loader.py` | WONTFIX | Edge case: same as m1 — GIL atomic dict ops, no corruption possible. |
-| R7-m3 | R7 | minor | `fetch_unextracted_messages` gets pool twice | `app/flows/memory_extraction.py` | OPEN | |
+| R7-m3 | R7 | minor | `fetch_unextracted_messages` gets pool twice | `app/flows/memory_extraction.py` | FIXED | Removed duplicate `get_pg_pool()` call; reuses existing `pool` variable. |
 | R7-m4 | R7 | minor | Conv search vector query expensive MIN scan | `app/flows/search_flow.py` | WONTFIX | Performance optimization. No measured problem. Optimize when it's a bottleneck. |
-| R7-m5 | R7 | minor | `search_context_windows` unbounded limit | `app/flows/conversation_ops_flow.py` | OPEN | |
+| R7-m5 | R7 | minor | `search_context_windows` unbounded limit | `app/flows/conversation_ops_flow.py` | FIXED | Added `min(state["limit"], 100)` cap. |
 | R7-m6 | R7 | minor | Recipient migration backfills 'unknown' vs runtime defaults | `app/migrations.py` | WONTFIX | Historical data. New rows get correct defaults. Old NULL rows don't cause errors. |
 | R7-m7 | R7 | minor | `setup_logging` doesn't update existing handlers | `app/logging_setup.py` | WONTFIX | Logging configured once at startup. Hot-reload changes level only, which works. |
 | R7-m8 | R7 | minor | `init_postgres`/`init_redis` double-init race | `app/main.py` | WONTFIX | Edge case: only called from single-threaded lifespan context. No real concurrency path. |
 | R7-m9 | R7 | minor | N+1 serial inserts after concurrent summarization | `app/flows/build_types/standard_tiered.py` | WONTFIX | Insert overhead negligible compared to LLM summarization calls. |
-| R7-m10 | R7 | minor | Broad `except Exception` in `pt_finalize` (non-Mem0) | `app/flows/build_types/passthrough.py` | OPEN | |
+| R7-m10 | R7 | minor | Broad `except Exception` in `pt_finalize` (non-Mem0) | `app/flows/build_types/passthrough.py` | FIXED | Replaced `(RuntimeError, OSError, Exception)` with `(RuntimeError, OSError, ValueError, ConnectionError)`. |
 | R7-m11 | R7 | minor | Shared SQL `extra_where` fragile across CTEs | `app/flows/search_flow.py` | WONTFIX | Works correctly now. Maintenance concern, not a bug. Revisit if query structure changes. |
 | R7-m12 | R7 | minor | N+1 duplicate `build_type` query in dispatch | `app/flows/tool_dispatch.py` | WONTFIX | One extra lightweight SELECT. Not worth the refactor. |
 | R7-m13 | R7 | minor | `store_and_end` skips persistence when no `context_window_id` | `app/flows/imperator_flow.py` | WONTFIX | By design — no context window means nowhere to persist. Imperator always has one. |
-| R7-m14 | R7 | minor | `bind_tools` called every `agent_node` invocation | `app/flows/imperator_flow.py` | OPEN | |
-| R7-m15 | R7 | minor | MCP global config vars mutated every request | `app/routes/mcp.py` | OPEN | |
+| R7-m14 | R7 | minor | `bind_tools` called every `agent_node` invocation | `app/flows/imperator_flow.py` | FIXED | Tool binding moved to `build_imperator_flow`; `agent_node` uses pre-bound `_prebound_llm`. |
+| R7-m15 | R7 | minor | MCP global config vars mutated every request | `app/routes/mcp.py` | FIXED | Config values read into local variables per request; `_evict_stale_sessions` accepts parameters. |
 | R7-m16 | R7 | minor | Dispatch initializes KE-specific state for all types | `app/flows/tool_dispatch.py` | WONTFIX | Extra dict keys are harmless. Retrieval graph ignores keys it doesn't use. |
 | R7-m17 | R7 | minor | Postgres retry exits prematurely on Imperator init fail | `app/main.py` | FIXED | Fixed by subsequent changes: uses `continue` instead of `return`. |
 | R7-m18 | R7 | minor | Entrypoint broad `except Exception` in YAML parsing | `entrypoint.sh` | WONTFIX | Edge case: shell bootstrap script with safe fallback default, not application code. |
-| R7-m19 | R7 | minor | Missing null check for `build_type` in dispatch retrieval | `app/flows/tool_dispatch.py` | OPEN | |
-| R7-m20 | R7 | minor | Passthrough retrieval doesn't update `last_accessed_at` | `app/flows/build_types/passthrough.py` | OPEN | |
-| R7-m21 | R7 | minor | `search_context_windows` doesn't return `last_accessed_at` | `app/flows/conversation_ops_flow.py` | OPEN | |
+| R7-m19 | R7 | minor | Missing null check for `build_type` in dispatch retrieval | `app/flows/tool_dispatch.py` | FIXED | Added `if not _build_type: raise ValueError(...)` before registry lookup. |
+| R7-m20 | R7 | minor | Passthrough retrieval doesn't update `last_accessed_at` | `app/flows/build_types/passthrough.py` | FIXED | Added `UPDATE context_windows SET last_accessed_at = NOW() WHERE id = $1` in `pt_load_window`. |
+| R7-m21 | R7 | minor | `search_context_windows` doesn't return `last_accessed_at` | `app/flows/conversation_ops_flow.py` | FIXED | Added `last_accessed_at` to both SELECT queries and result formatting. |
 | R7-m22 | R7 | minor | Dedup field rename `was_collapsed` (integration concern) | | WONTFIX | Internal field name. No external callers depend on it. |
 | R7-m23 | R7 | minor | Memory extraction `user_id` from window not caller | `app/flows/memory_extraction.py` | WONTFIX | Background pipeline. Window participant is the correct user context for Mem0. |
-| R7-m24 | R7 | minor | Memory confidence boost/archive threshold hardcoded | `app/flows/memory_scoring.py` | OPEN | |
+| R7-m24 | R7 | minor | Memory confidence boost/archive threshold hardcoded | `app/flows/memory_scoring.py` | FIXED | Recency window and boost factor now read from `config.tuning.memory_recency_window_days` and `memory_recency_boost_factor`. |
 | R7-m25 | R7 | minor | Memory half-life categories differ from Rogers | `app/flows/memory_scoring.py` | WONTFIX | Intentional State 4 redesign. Rogers categories are not the standard. |
-| R7-m26 | R7 | minor | MCP schema `tool_calls` type "object" not "array" | `app/routes/mcp.py` | OPEN | |
-| R7-m27 | R7 | minor | Imperator conversation has no `flow_id`/`user_id` | `app/imperator/state_manager.py` | OPEN | |
+| R7-m26 | R7 | minor | MCP schema `tool_calls` type "object" not "array" | `app/routes/mcp.py` | FIXED | Changed to `{"type": "array", "items": {"type": "object"}}`. |
+| R7-m27 | R7 | minor | Imperator conversation has no `flow_id`/`user_id` | `app/imperator/state_manager.py` | FIXED | Added `flow_id='imperator'` and `user_id='system'` to the INSERT. |
 
 ### Post-Gate Findings (deployment and testing)
 
@@ -436,12 +436,12 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 
 ## Summary
 
-Updated 2026-03-24 after log shipper implementation.
+Updated 2026-03-24. All Round 7 OPEN items fixed.
 
 | Status | Count |
 |--------|-------|
-| OPEN | 22 |
-| FIXED | 186 |
+| OPEN | 0 |
+| FIXED | 208 |
 | WONTFIX | 36 |
 | FALSE_POSITIVE | 1 |
 | REMOVED | 1 |

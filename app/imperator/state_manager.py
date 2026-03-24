@@ -115,9 +115,12 @@ class ImperatorStateManager:
         """
         pool = get_pg_pool()
         new_id = uuid.uuid4()
+        # R7-m27: Include flow_id and user_id in the INSERT
         await pool.execute(
-            "INSERT INTO conversations (id, title) VALUES ($1, $2)",
+            "INSERT INTO conversations (id, title, flow_id, user_id) VALUES ($1, $2, $3, $4)",
             new_id,
             "Imperator — System Conversation",
+            "imperator",
+            "system",
         )
         return new_id

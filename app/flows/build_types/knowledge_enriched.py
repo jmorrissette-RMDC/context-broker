@@ -451,6 +451,8 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
         messages.append({"role": "system", "content": content})
 
     # Semantic retrieval — budget-aware (M-07)
+    # R7-M10: Track which semantic messages survive truncation for context_tiers
+    truncated_semantic_messages: list[dict] = []
     if state.get("semantic_messages"):
         remaining = (
             max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
@@ -463,6 +465,7 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
             if semantic_tokens + line_tokens > remaining:
                 break
             semantic_lines.append(line)
+            truncated_semantic_messages.append(m)
             semantic_tokens += line_tokens
         if semantic_lines:
             content = "[Semantically relevant context]\n" + "\n".join(semantic_lines)
@@ -513,7 +516,8 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
             messages.append(msg)
             cumulative_tokens += _estimate_tokens(m.get("content", ""))
 
-    # M-15: Build context_tiers from truncated lists
+    # R7-M10: Build context_tiers using truncated lists — semantic_messages should
+    # only include the messages that actually made it into the context output.
     context_tiers = {
         "archival_summary": state.get("tier1_summary"),
         "chunk_summaries": state.get("tier2_summaries", []),
@@ -525,7 +529,7 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
                 "content": m["content"],
                 "sequence_number": m["sequence_number"],
             }
-            for m in state.get("semantic_messages", [])
+            for m in truncated_semantic_messages
         ],
         "knowledge_graph_facts": state.get("knowledge_graph_facts", []),
         "recent_messages": [

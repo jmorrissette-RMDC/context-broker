@@ -209,12 +209,19 @@ async def _config_read_tool() -> str:
 
     Admin-only tool. Returns the configuration as YAML text with credentials
     and API keys redacted for safety.
+
+    R7-M2: File read wrapped in run_in_executor to avoid blocking the event loop.
     """
+    import asyncio
     from app.config import CONFIG_PATH
 
-    try:
+    def _sync_read():
         with open(CONFIG_PATH, encoding="utf-8") as f:
-            raw = yaml.safe_load(f)
+            return yaml.safe_load(f)
+
+    try:
+        loop = asyncio.get_running_loop()
+        raw = await loop.run_in_executor(None, _sync_read)
         sanitized = _redact_config(raw)
         return yaml.dump(sanitized, default_flow_style=False)
     except (FileNotFoundError, OSError, yaml.YAMLError) as exc:
@@ -527,6 +534,9 @@ _admin_tools: list = [_config_read_tool, _db_query_tool, _config_write_tool, _ve
 
 # ── Message pipeline singleton ──────────────────────────────────────────
 
+# R7-m14: Pre-bound LLM with tools — set at graph compilation time
+_prebound_llm = None
+
 _message_pipeline_singleton = None
 
 
@@ -604,14 +614,16 @@ async def agent_node(state: ImperatorState) -> dict:
     """
     config = state["config"]
 
-    # Determine active tools (admin tools gated by config)
-    imperator_config = config.get("imperator", {})
-    active_tools = list(_imperator_tools)
-    if imperator_config.get("admin_tools", False):
-        active_tools.extend(_admin_tools)
-
-    llm = get_chat_model(config, role="imperator")
-    llm_with_tools = llm.bind_tools(active_tools)
+    # R7-m14: Use the pre-bound LLM from graph compilation (set by build_imperator_flow).
+    # Falls back to runtime binding if _prebound_llm is not available (e.g., tests).
+    llm_with_tools = _prebound_llm
+    if llm_with_tools is None:
+        imperator_config = config.get("imperator", {})
+        active_tools = list(_imperator_tools)
+        if imperator_config.get("admin_tools", False):
+            active_tools.extend(_admin_tools)
+        llm = get_chat_model(config, role="imperator")
+        llm_with_tools = llm.bind_tools(active_tools)
 
     messages = list(state["messages"])
 
@@ -839,6 +851,12 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
     if imperator_config.get("admin_tools", False):
         active_tools.extend(_admin_tools)
     tool_node_instance = ToolNode(active_tools)
+
+    # R7-m14: Pre-bind tools to the LLM at graph compilation time so
+    # agent_node doesn't call bind_tools on every invocation.
+    global _prebound_llm
+    llm = get_chat_model(config, role="imperator")
+    _prebound_llm = llm.bind_tools(active_tools)
 
     workflow = StateGraph(ImperatorState)
 

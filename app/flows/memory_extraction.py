@@ -127,8 +127,8 @@ async def fetch_unextracted_messages(state: MemoryExtractionState) -> dict:
         return {"messages": [], "extracted_count": 0}
 
     # Get user_id from conversation (use participant_id from first context window)
-    pool2 = get_pg_pool()
-    window = await pool2.fetchrow(
+    # R7-m3: Removed duplicate get_pg_pool() call — reuse existing pool variable
+    window = await pool.fetchrow(
         "SELECT participant_id FROM context_windows WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT 1",
         uuid.UUID(state["conversation_id"]),
     )

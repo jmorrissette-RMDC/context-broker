@@ -74,7 +74,21 @@ async def chat_completions(request: Request):
 
     is_streaming = chat_request.stream
 
-    config = await async_load_config()
+    # R7-M9: Wrap config load in try/except with error response
+    try:
+        config = await async_load_config()
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log.error("Chat: config load failed: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "message": "Configuration unavailable",
+                    "type": "internal_error",
+                }
+            },
+        )
+
     imperator_manager = getattr(request.app.state, "imperator_manager", None)
 
     # Extract the last user message as the primary input

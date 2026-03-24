@@ -283,10 +283,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 # our application code. Covers runtime failures, OS/network errors, DB errors,
 # and stdlib value errors. This is NOT a blanket Exception catch — each type
 # is explicitly listed. (CB-R3-01 / G5-22)
+# R7-M7: Added asyncpg.PostgresError to catch unhandled DB errors
 @app.exception_handler(RuntimeError)
 @app.exception_handler(ValueError)
 @app.exception_handler(OSError)
 @app.exception_handler(ConnectionError)
+@app.exception_handler(asyncpg.PostgresError)
 async def known_exception_handler(request: Request, exc):
     """Return structured error for known unhandled exception families."""
     _log.error(

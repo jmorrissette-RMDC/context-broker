@@ -388,6 +388,11 @@ async def dispatch_tool(
             raise ValueError(f"Context window {validated.context_window_id} not found")
 
         _build_type = _window_row["build_type"]
+        # R7-m19: Null check for build_type before registry lookup
+        if not _build_type:
+            raise ValueError(
+                f"Context window {validated.context_window_id} has no build_type set"
+            )
         retrieval_graph = get_retrieval_graph(_build_type)
 
         result = await retrieval_graph.ainvoke(

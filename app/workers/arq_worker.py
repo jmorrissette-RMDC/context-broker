@@ -397,7 +397,18 @@ async def _consume_queue(
             # M6: Wrap error handler Redis ops in their own try/except
             # to prevent crashes when Redis is unavailable during error handling
             try:
-                if job is not None and raw_job is not None:
+                # R7-M17: If JSON decode failed, job is None but raw_job exists.
+                # Move malformed raw_job to dead_letter_unparseable to prevent
+                # infinite poison-pill loops.
+                if job is None and raw_job is not None and isinstance(exc, json.JSONDecodeError):
+                    err_redis = get_redis()
+                    await err_redis.lrem(processing_queue, 1, raw_job)
+                    await err_redis.lpush("dead_letter_unparseable", raw_job)
+                    _log.warning(
+                        "Moved malformed job to dead_letter_unparseable: queue=%s",
+                        queue_name,
+                    )
+                elif job is not None and raw_job is not None:
                     # Remove from processing queue before retry/dead-letter
                     err_redis = get_redis()
                     await err_redis.lrem(processing_queue, 1, raw_job)

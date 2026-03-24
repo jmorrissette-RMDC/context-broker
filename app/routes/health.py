@@ -37,7 +37,21 @@ async def health_check(request: Request) -> JSONResponse:
     Returns 200 if all critical services are healthy.
     Returns 503 if any critical service is unhealthy.
     """
-    config = await async_load_config()
+    # R7-M8: Wrap config load in try/except — return degraded health instead of 500
+    try:
+        config = await async_load_config()
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log.warning("Health check: config load failed: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "error": f"Config load failed: {exc}",
+                "postgres": "unknown",
+                "redis": "unknown",
+                "neo4j": "unknown",
+            },
+        )
 
     result = await _get_health_flow().ainvoke(
         {

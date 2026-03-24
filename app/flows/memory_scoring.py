@@ -48,6 +48,11 @@ def score_memory(memory: dict, config: dict) -> float:
     # Exponential decay: score = 0.5 ^ (age / half_life)
     score = math.pow(0.5, age_days / half_life_days)
 
+    # R7-m24: Recency window and boost factor read from config tuning section
+    tuning = config.get("tuning", {})
+    recency_window_days = tuning.get("memory_recency_window_days", 7)
+    recency_boost_factor = tuning.get("memory_recency_boost_factor", 1.3)
+
     # Boost if recently accessed
     last_accessed = memory.get("last_accessed")
     if last_accessed:
@@ -56,8 +61,8 @@ def score_memory(memory: dict, config: dict) -> float:
         if last_accessed.tzinfo is None:
             last_accessed = last_accessed.replace(tzinfo=timezone.utc)
         access_age = max(0, (now - last_accessed).total_seconds() / 86400)
-        if access_age < 7:
-            score = min(1.0, score * 1.3)  # 30% boost for recently accessed
+        if access_age < recency_window_days:
+            score = min(1.0, score * recency_boost_factor)
 
     return score
 

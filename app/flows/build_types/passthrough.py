@@ -114,7 +114,7 @@ async def pt_finalize(state: PassthroughAssemblyState) -> dict:
             "Passthrough assembly complete for window=%s", state["context_window_id"]
         )
         return {}
-    except (RuntimeError, OSError, Exception) as exc:
+    except (RuntimeError, OSError, ValueError, ConnectionError) as exc:
         _log.error(
             "Passthrough finalize failed for window=%s: %s",
             state["context_window_id"],
@@ -124,19 +124,28 @@ async def pt_finalize(state: PassthroughAssemblyState) -> dict:
 
 
 async def pt_release_lock(state: PassthroughAssemblyState) -> dict:
-    """Release Redis assembly lock."""
+    """Release Redis assembly lock.
+
+    R7-M6: Wrapped in try/except — log warning on failure instead of crashing.
+    """
     lock_key = state.get("lock_key", "")
     lock_token = state.get("lock_token")
     if lock_key and state.get("lock_acquired") and lock_token:
-        redis = get_redis()
-        lua_script = """
-        if redis.call("GET", KEYS[1]) == ARGV[1] then
-            return redis.call("DEL", KEYS[1])
-        else
-            return 0
-        end
-        """
-        await redis.eval(lua_script, 1, lock_key, lock_token)
+        try:
+            redis = get_redis()
+            lua_script = """
+            if redis.call("GET", KEYS[1]) == ARGV[1] then
+                return redis.call("DEL", KEYS[1])
+            else
+                return 0
+            end
+            """
+            await redis.eval(lua_script, 1, lock_key, lock_token)
+        except (RuntimeError, OSError, ConnectionError) as exc:
+            _log.warning(
+                "Failed to release assembly lock for window=%s: %s",
+                state.get("context_window_id"), exc,
+            )
     return {}
 
 
@@ -227,6 +236,12 @@ async def pt_load_window(state: PassthroughRetrievalState) -> dict:
     )
     if window is None:
         return {"error": f"Context window {state['context_window_id']} not found"}
+
+    # R7-m20: Update last_accessed_at on every retrieval
+    await pool.execute(
+        "UPDATE context_windows SET last_accessed_at = NOW() WHERE id = $1",
+        uuid.UUID(state["context_window_id"]),
+    )
 
     window_dict = dict(window)
 
