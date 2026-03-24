@@ -11,21 +11,22 @@ from fastapi import APIRouter
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST
 
-from app.flows.metrics_flow import build_metrics_flow
+from app.stategraph_registry import get_flow_builder
 
 _log = logging.getLogger("context_broker.routes.metrics")
 
 router = APIRouter()
 
-# R6-m1: Lazy-initialized flow singleton — compiled on first use instead of
-# at import time, so module import doesn't trigger graph compilation.
 _metrics_flow = None
 
 
 def _get_metrics_flow():
     global _metrics_flow
     if _metrics_flow is None:
-        _metrics_flow = build_metrics_flow()
+        builder = get_flow_builder("metrics")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: metrics flow unavailable")
+        _metrics_flow = builder()
     return _metrics_flow
 
 
