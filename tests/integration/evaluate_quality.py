@@ -39,10 +39,14 @@ def mcp_call(tool_name: str, arguments: dict) -> dict:
 
 
 def sonnet_evaluate(prompt: str) -> str:
-    """Call Claude Sonnet via CLI for quality evaluation."""
+    """Call Claude Sonnet via CLI for quality evaluation.
+
+    Uses stdin to pass the prompt (avoids Windows command line length limit).
+    """
     result = subprocess.run(
-        ["claude", "--model", SONNET_MODEL, "--print", "-p", prompt],
-        capture_output=True, timeout=120,
+        ["claude", "--model", SONNET_MODEL, "--print", "-p", "-"],
+        input=prompt.encode("utf-8"),
+        capture_output=True, timeout=300,
     )
     if result.returncode != 0:
         stderr = (result.stderr or b"").decode("utf-8", errors="replace")
@@ -64,7 +68,7 @@ def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
     if not ctx.get("context"):
         return {"passed": False, "detail": "No context returned"}
 
-    context_text = json.dumps(ctx["context"])[:50000]  # Truncate for CLI
+    context_text = json.dumps(ctx["context"], ensure_ascii=False)[:15000]  # Truncate for eval
     total_tokens = ctx.get("total_tokens", 0)
     tiers = ctx.get("tiers", ctx.get("context_tiers", {}))
 
