@@ -47,6 +47,13 @@ COPY --chown=${USER_NAME}:${USER_NAME} app/ ./app/
 COPY --chown=${USER_NAME}:${USER_NAME} entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
+# REQ-001 §10: Copy and pre-build StateGraph packages as wheels.
+# entrypoint.sh installs them at startup via pip install --user.
+COPY --chown=${USER_NAME}:${USER_NAME} packages/context-broker-ae/ ./packages/context-broker-ae/
+COPY --chown=${USER_NAME}:${USER_NAME} packages/context-broker-te/ ./packages/context-broker-te/
+RUN pip wheel --no-deps -w ./packages/ ./packages/context-broker-ae/ && \
+    pip wheel --no-deps -w ./packages/ ./packages/context-broker-te/
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \

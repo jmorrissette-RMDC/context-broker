@@ -91,15 +91,8 @@ echo "Installing StateGraph packages: $SG_PACKAGES"
 for pkg in $SG_PACKAGES; do
     case "$PKG_SOURCE" in
         local)
-            # Install from source directory or wheel in the packages volume
-            pkg_dir="$PKG_LOCAL_PATH/$pkg"
-            if [ -d "$pkg_dir" ]; then
-                echo "Installing $pkg from source directory: $pkg_dir"
-                pip install --user --no-cache-dir "$pkg_dir" || echo "Warning: failed to install $pkg from source"
-            else
-                echo "Installing $pkg from wheels in: $PKG_LOCAL_PATH"
-                pip install --user --no-cache-dir --no-index --find-links="$PKG_LOCAL_PATH" "$pkg" || echo "Warning: failed to install $pkg from local"
-            fi
+            echo "Installing $pkg from local packages: $PKG_LOCAL_PATH"
+            pip install --user --no-cache-dir --no-index --find-links="$PKG_LOCAL_PATH" "$pkg" || echo "Warning: failed to install $pkg from local"
             ;;
         devpi)
             if [ -n "$PKG_DEVPI_URL" ]; then
