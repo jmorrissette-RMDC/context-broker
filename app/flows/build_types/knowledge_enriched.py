@@ -119,11 +119,20 @@ async def ke_load_window(state: KnowledgeEnrichedRetrievalState) -> dict:
     except ValueError as exc:
         return {"error": str(exc), "assembly_status": "error"}
 
+    # D-05/D-10: Apply effective utilization
+    from app.budget import EFFECTIVE_UTILIZATION_DEFAULT
+
+    raw_budget = window_dict["max_token_budget"]
+    utilization = build_type_config.get(
+        "effective_utilization", EFFECTIVE_UTILIZATION_DEFAULT
+    )
+    effective_budget = int(raw_budget * utilization)
+
     return {
         "window": window_dict,
         "build_type_config": build_type_config,
         "conversation_id": str(window_dict["conversation_id"]),
-        "max_token_budget": window_dict["max_token_budget"],
+        "max_token_budget": effective_budget,
     }
 
 

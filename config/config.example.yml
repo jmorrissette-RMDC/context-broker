@@ -52,6 +52,7 @@ build_types:
   passthrough:
     max_context_tokens: auto
     fallback_tokens: 8192
+    effective_utilization: 0.85     # D-10: models degrade past ~85% fill
 
   standard-tiered:
     tier1_pct: 0.08
@@ -59,6 +60,8 @@ build_types:
     tier3_pct: 0.72
     max_context_tokens: auto
     fallback_tokens: 8192
+    effective_utilization: 0.85     # D-10: models degrade past ~85% fill
+    initial_lookback_multiplier: 3  # D-09: how far back to look for initial assembly
 
   knowledge-enriched:
     tier1_pct: 0.05
@@ -68,6 +71,8 @@ build_types:
     semantic_retrieval_pct: 0.15
     max_context_tokens: auto
     fallback_tokens: 16000
+    effective_utilization: 0.85
+    initial_lookback_multiplier: 3
 
 # ============================================================
 # Package Source

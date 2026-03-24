@@ -229,10 +229,18 @@ async def pt_load_window(state: PassthroughRetrievalState) -> dict:
         return {"error": f"Context window {state['context_window_id']} not found"}
 
     window_dict = dict(window)
+
+    # D-05/D-10: Apply effective utilization
+    from app.budget import EFFECTIVE_UTILIZATION_DEFAULT
+
+    raw_budget = window_dict["max_token_budget"]
+    utilization = EFFECTIVE_UTILIZATION_DEFAULT
+    effective_budget = int(raw_budget * utilization)
+
     return {
         "window": window_dict,
         "conversation_id": str(window_dict["conversation_id"]),
-        "max_token_budget": window_dict["max_token_budget"],
+        "max_token_budget": effective_budget,
     }
 
 
