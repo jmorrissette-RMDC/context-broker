@@ -325,9 +325,9 @@ async def _log_query_tool(container: str = "", level: str = "", search: str = ""
         lines = []
         for row in rows:
             ts = row["log_timestamp"].isoformat() if row["log_timestamp"] else "?"
-            data = row["data"] or {}
-            lvl = data.get("level") or "?"
-            msg = row["message"] or str(data)[:200]
+            data = row["data"] if isinstance(row["data"], dict) else {}
+            lvl = data.get("level", "?")
+            msg = row["message"] or str(row["data"] or "")[:200]
             lines.append(f"[{ts}] [{row['container_name']}] [{lvl}] {msg}")
         return "\n".join(lines)
     except (asyncpg.PostgresError, OSError, KeyError) as exc:

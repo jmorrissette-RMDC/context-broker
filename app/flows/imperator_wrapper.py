@@ -16,13 +16,32 @@ from app.metrics_registry import CHAT_REQUESTS, CHAT_REQUEST_DURATION
 
 _log = logging.getLogger("context_broker.flows.imperator_wrapper")
 
-# Lazy singleton — rebuilt after install_stategraph()
+# Lazy singleton — rebuilt on install_stategraph() or TE config change.
 _imperator_flow = None
+_te_config_mtime: float = 0.0
 
 
 def _get_flow():
-    """Get the compiled Imperator flow from the TE registry."""
-    global _imperator_flow
+    """Get the compiled Imperator flow from the TE registry.
+
+    Recompiles when TE config changes (detects admin_tools toggle,
+    model changes, etc.) without requiring container restart.
+    """
+    global _imperator_flow, _te_config_mtime
+    import os
+
+    from app.config import TE_CONFIG_PATH
+
+    # Check if TE config changed since last compilation
+    try:
+        current_mtime = os.stat(TE_CONFIG_PATH).st_mtime
+    except (OSError, FileNotFoundError):
+        current_mtime = 0.0
+
+    if _imperator_flow is not None and current_mtime != _te_config_mtime:
+        _log.info("TE config changed — recompiling Imperator flow")
+        _imperator_flow = None
+
     if _imperator_flow is None:
         from app.stategraph_registry import get_imperator_builder
 
@@ -33,6 +52,7 @@ def _get_flow():
                 "install_stategraph or ensure one is installed at startup."
             )
         _imperator_flow = builder()
+        _te_config_mtime = current_mtime
     return _imperator_flow
 
 

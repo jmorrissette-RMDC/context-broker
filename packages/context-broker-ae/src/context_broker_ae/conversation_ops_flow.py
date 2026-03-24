@@ -496,6 +496,22 @@ async def find_or_create_window_node(state: GetContextState) -> dict:
         _log.info("get_context: reusing window %s", row["id"])
         return {"context_window_id": str(row["id"])}
 
+    # Ensure conversation exists (PG-43: handle deleted conversation gracefully)
+    conv_exists = await pool.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1)", conv_id
+    )
+    if not conv_exists:
+        _log.warning(
+            "get_context: conversation %s not found — recreating", conv_id
+        )
+        await pool.execute(
+            "INSERT INTO conversations (id, title, flow_id, user_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+            conv_id,
+            "Recovered conversation",
+            "auto",
+            "system",
+        )
+
     # Create new window
     window_id = uuid.uuid4()
     await pool.execute(
