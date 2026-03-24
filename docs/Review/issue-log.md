@@ -424,7 +424,7 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | PG-19 | Post | major | HLD-context-broker §7 and §10 didn't reflect AE/TE separation | `HLD-context-broker.md` | FIXED | Updated configuration system and Imperator design sections. |
 | PG-20 | Post | minor | Cross-provider tests: clear embeddings between runs when switching embedding providers | `tests/` | NOTE | Dimension mismatch (e.g., 768 vs 1024) is expected when switching embedding models — not a bug. Clear old embeddings before each cross-provider run. |
 | PG-21 | Post | minor | `get_chat_model()` contains application logic (role→config resolution) outside StateGraph | `app/config.py` | WONTFIX | Role→config resolution is borderline substrate. Factory/cache pattern is standard. Refactor complexity not justified. |
-| PG-22 | Post | info | Cross-provider regression: 6/6 runs PASS (268/268 each) | N/A | FIXED | Together, Google, OpenAI, Anthropic, xAI, Ollama — all with same codebase, config-only changes. State 4 promise validated. |
+| PG-22 | Post | blocker | Cross-provider tests did NOT test through Context Broker pipeline | `tests/test_cross_provider.py` | OPEN | Tests were direct API calls to each provider, bypassing the Context Broker entirely. State 4 promise NOT validated. Must rewrite as full-pipeline tests: configure CB → store_message → embedding → get_context → verify. |
 | PG-23 | Post | major | Imperator still uses internal calls, not MCP tools (D-07) | `app/flows/imperator_flow.py` | FIXED | Imperator now uses dispatch_tool("get_context") and dispatch_tool("store_message"). Self-consumption via same tool interface. |
 | PG-24 | Post | major | Initial lookback multiplier not implemented (D-09) | `app/flows/build_types/standard_tiered.py` | FIXED | load_messages checks for existing summaries. On first assembly, looks back budget * multiplier tokens. |
 | PG-25 | Post | minor | Imperator state file stores context_window_id (obsolete) | `app/imperator/state_manager.py` | FIXED | State manager simplified to conversation_id only. get_context_window_id() returns conversation_id for backward compat. |
@@ -440,23 +440,29 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | PG-35 | Post | minor | No early build type config validation at startup | `app/main.py` | FIXED | Added validation in lifespan after config load. |
 | PG-36 | Post | minor | Silent failure in verbose_log_auto | `app/config.py` | FIXED | Now logs at DEBUG instead of silent pass. |
 | PG-37 | Post | minor | packages.source is build-time only, undocumented | `config/config.example.yml` | FIXED | Added clarifying comment. |
-| PG-38 | Post | blocker | Dynamic StateGraph loading NOT implemented (REQ-001 §10) | entire codebase | FIXED | Bootstrap kernel + AE package (context-broker-ae) + TE package (context-broker-te). Entry_points discovery via importlib.metadata, install_stategraph() MCP tool, base contract (§13), migration 015 for stategraph_packages table. 293 tests passing. |
+| PG-38 | Post | blocker | Dynamic StateGraph loading NOT implemented (REQ-001 §10) | entire codebase | FIXED | Bootstrap kernel + AE package (context-broker-ae) + TE package (context-broker-te). Entry_points discovery via importlib.metadata, install_stategraph() MCP tool, base contract (§13), migration 015 for stategraph_packages table. 292 tests passing. |
+| PG-39 | Post | blocker | Credentials not hot-reloadable — require container recreation | `app/config.py`, `.env` | OPEN | API keys loaded from Docker env_file at container creation. Adding/changing a key requires `docker compose up -d`. REQ-001 §8.3 requires inference providers to be changeable without restart. Fix: read keys from mounted credential file at runtime, not from env vars. |
+| PG-40 | Post | blocker | Inference provider config (embeddings, reranker) not hot-reloadable | `app/config.py` | OPEN | Embeddings/reranker config is in config.yml (AE) which is cached at startup. REQ-001 §8.3 says inference providers must be read per operation. Must move inference settings to hot-reloadable path or make AE config detect changes per-operation for inference sections. |
+| PG-41 | Post | blocker | Hot-reload never tested | N/A | OPEN | No test exists that verifies: change a config value → next operation uses the new value without restart. Must add functional tests for: (a) switch LLM model via te.yml → Imperator uses new model, (b) switch embedding provider via config → new embeddings use new provider, (c) add API key → usable without restart. |
+| PG-42 | Post | blocker | Provider keys not provisioned on irina | `.env` on irina | OPEN | Only Ollama keys were in the .env. All provider keys (OpenAI, Anthropic, Google, Together, xAI) must be pre-provisioned from Z:\credentials\model-providers.json. |
 
 ---
 
 ## Summary
 
-Updated 2026-03-24. All compliance audit items fixed. Dynamic StateGraph loading implemented.
+Updated 2026-03-24. Critical test and config gaps found during integration testing.
 
 | Status | Count |
 |--------|-------|
-| OPEN | 0 |
-| FIXED | 219 |
+| OPEN | 5 |
+| FIXED | 218 |
 | WONTFIX | 36 |
 | FALSE_POSITIVE | 1 |
 | REMOVED | 1 |
 | NOTE | 1 |
 
 ### Open Items
+
+5 blockers: PG-22 (cross-provider tests bypass CB), PG-39 (credentials not hot-reloadable), PG-40 (inference config not hot-reloadable), PG-41 (hot-reload never tested), PG-42 (provider keys not provisioned).
 
 None.
