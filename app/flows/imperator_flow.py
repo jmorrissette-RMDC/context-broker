@@ -415,17 +415,17 @@ async def agent_node(state: ImperatorState) -> dict:
 
 
 def should_continue(state: ImperatorState) -> str:
-    """Conditional edge: route to tool_node if tool calls, else store_and_end.
+    """Conditional edge: route to tool_node if tool calls, else store nodes.
 
     ARCH-05: Flow control is graph edges, not loops in nodes.
     Enforces imperator_max_iterations to prevent unbounded ReAct loops.
     """
     if state.get("error"):
-        return "store_and_end"
+        return "store_user_message"
 
     messages = state["messages"]
     if not messages:
-        return "store_and_end"
+        return "store_user_message"
 
     last_message = messages[-1]
     if isinstance(last_message, AIMessage) and last_message.tool_calls:
@@ -438,73 +438,73 @@ def should_continue(state: ImperatorState) -> str:
                 "Imperator hit max iterations (%d) — forcing end",
                 max_iterations,
             )
-            return "store_and_end"
+            return "store_user_message"
         return "tool_node"
 
-    return "store_and_end"
+    return "store_user_message"
 
 
-async def store_and_end(state: ImperatorState) -> dict:
-    """Store user message and assistant response via the standard message pipeline.
+async def store_user_message(state: ImperatorState) -> dict:
+    """Persist the user's message via the standard message pipeline.
 
-    F-22: Uses conv_store_message (the standard pipeline), NOT direct SQL.
-    ARCH-06: The graph runs fresh each invocation — results are persisted
-    to the DB here so the next invocation can load them as history.
+    D-01: Split from store_and_end into separate nodes to avoid
+    MultipleSubgraphsError — MemorySaver requires each subgraph
+    invocation to be in its own graph node.
     """
     context_window_id = state.get("context_window_id")
     if not context_window_id:
-        # No context window — extract response text but skip persistence
-        messages = state["messages"]
-        last_ai = next(
-            (m for m in reversed(messages) if isinstance(m, AIMessage)),
-            None,
-        )
-        return {"response_text": last_ai.content if last_ai else ""}
+        return {}
 
-    messages = state["messages"]
-
-    # Find the last user message and last AI message (the final answer)
     user_content = None
-    for msg in messages:
+    for msg in state["messages"]:
         if isinstance(msg, HumanMessage):
             user_content = msg.content
 
+    if not user_content:
+        return {}
+
+    pipeline = _get_message_pipeline()
+    try:
+        await pipeline.ainvoke(
+            {
+                "context_window_id": context_window_id,
+                "role": "user",
+                "sender": "imperator_user",
+                "recipient": "imperator",
+                "content": user_content,
+                "model_name": None,
+                "tool_calls": None,
+                "tool_call_id": None,
+                "message_id": None,
+                "conversation_id": None,
+                "sequence_number": None,
+                "was_collapsed": False,
+                "queued_jobs": [],
+                "error": None,
+            }
+        )
+    except (RuntimeError, OSError) as exc:
+        _log.warning("Failed to store Imperator user message: %s", exc)
+
+    return {}
+
+
+async def store_assistant_message(state: ImperatorState) -> dict:
+    """Persist the assistant's response and extract response_text.
+
+    D-01: Second persistence node — stores assistant response separately.
+    """
     last_ai = None
-    for msg in reversed(messages):
+    for msg in reversed(state["messages"]):
         if isinstance(msg, AIMessage) and not msg.tool_calls:
             last_ai = msg
             break
 
     response_text = last_ai.content if last_ai else ""
 
-    pipeline = _get_message_pipeline()
-
-    # Store user message
-    if user_content:
-        try:
-            await pipeline.ainvoke(
-                {
-                    "context_window_id": context_window_id,
-                    "role": "user",
-                    "sender": "imperator_user",
-                    "recipient": "imperator",
-                    "content": user_content,
-                    "model_name": None,
-                    "tool_calls": None,
-                    "tool_call_id": None,
-                    "message_id": None,
-                    "conversation_id": None,
-                    "sequence_number": None,
-                    "was_collapsed": False,
-                    "queued_jobs": [],
-                    "error": None,
-                }
-            )
-        except (RuntimeError, OSError) as exc:
-            _log.warning("Failed to store Imperator user message via pipeline: %s", exc)
-
-    # Store assistant response
-    if response_text:
+    context_window_id = state.get("context_window_id")
+    if context_window_id and response_text:
+        pipeline = _get_message_pipeline()
         try:
             await pipeline.ainvoke(
                 {
@@ -525,9 +525,7 @@ async def store_and_end(state: ImperatorState) -> dict:
                 }
             )
         except (RuntimeError, OSError) as exc:
-            _log.warning(
-                "Failed to store Imperator assistant message via pipeline: %s", exc
-            )
+            _log.warning("Failed to store Imperator assistant message: %s", exc)
 
     return {"response_text": response_text}
 
@@ -562,24 +560,27 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
 
     workflow.add_node("agent_node", agent_node)
     workflow.add_node("tool_node", tool_node_instance)
-    workflow.add_node("store_and_end", store_and_end)
+    workflow.add_node("store_user_message", store_user_message)
+    workflow.add_node("store_assistant_message", store_assistant_message)
 
     workflow.set_entry_point("agent_node")
 
-    # ARCH-05: Conditional edge — tool_calls route to tool_node, else store
+    # ARCH-05: Conditional edge — tool_calls route to tool_node, else persist
     workflow.add_conditional_edges(
         "agent_node",
         should_continue,
         {
             "tool_node": "tool_node",
-            "store_and_end": "store_and_end",
+            "store_user_message": "store_user_message",
         },
     )
 
     # tool_node -> back to agent_node for the next reasoning step
     workflow.add_edge("tool_node", "agent_node")
 
-    workflow.add_edge("store_and_end", END)
+    # D-01: Split persistence into separate nodes (one subgraph per node)
+    workflow.add_edge("store_user_message", "store_assistant_message")
+    workflow.add_edge("store_assistant_message", END)
 
     # D-01: MemorySaver for graph execution state (interrupt/resume, tool tracking).
     # No infrastructure dependency — works for eMADs and standalone TEs.
