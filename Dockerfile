@@ -48,11 +48,14 @@ COPY --chown=${USER_NAME}:${USER_NAME} entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
 # REQ-001 §10: Copy and pre-build StateGraph packages as wheels.
+# Built to /app/stategraph-wheels/ (not /app/packages/ which may be volume-mounted).
 # entrypoint.sh installs them at startup via pip install --user.
-COPY --chown=${USER_NAME}:${USER_NAME} packages/context-broker-ae/ ./packages/context-broker-ae/
-COPY --chown=${USER_NAME}:${USER_NAME} packages/context-broker-te/ ./packages/context-broker-te/
-RUN pip wheel --no-deps -w ./packages/ ./packages/context-broker-ae/ && \
-    pip wheel --no-deps -w ./packages/ ./packages/context-broker-te/
+COPY --chown=${USER_NAME}:${USER_NAME} packages/context-broker-ae/ ./sg-src/context-broker-ae/
+COPY --chown=${USER_NAME}:${USER_NAME} packages/context-broker-te/ ./sg-src/context-broker-te/
+RUN mkdir -p ./stategraph-wheels && \
+    pip wheel --no-deps -w ./stategraph-wheels/ ./sg-src/context-broker-ae/ && \
+    pip wheel --no-deps -w ./stategraph-wheels/ ./sg-src/context-broker-te/ && \
+    rm -rf ./sg-src
 
 EXPOSE 8000
 

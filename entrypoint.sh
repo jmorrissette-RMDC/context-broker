@@ -91,8 +91,16 @@ echo "Installing StateGraph packages: $SG_PACKAGES"
 for pkg in $SG_PACKAGES; do
     case "$PKG_SOURCE" in
         local)
-            echo "Installing $pkg from local packages: $PKG_LOCAL_PATH"
-            pip install --user --no-cache-dir --no-index --find-links="$PKG_LOCAL_PATH" "$pkg" || echo "Warning: failed to install $pkg from local"
+            # Look for pre-built wheels in /app/stategraph-wheels/ first (built in Dockerfile),
+            # then fall back to /app/packages/ (volume mount for development overrides).
+            SG_WHEEL_DIR="/app/stategraph-wheels"
+            if [ -d "$SG_WHEEL_DIR" ]; then
+                echo "Installing $pkg from built wheels: $SG_WHEEL_DIR"
+                pip install --user --no-cache-dir --no-index --find-links="$SG_WHEEL_DIR" "$pkg" || echo "Warning: failed to install $pkg"
+            else
+                echo "Installing $pkg from local packages: $PKG_LOCAL_PATH"
+                pip install --user --no-cache-dir --no-index --find-links="$PKG_LOCAL_PATH" "$pkg" || echo "Warning: failed to install $pkg"
+            fi
             ;;
         devpi)
             if [ -n "$PKG_DEVPI_URL" ]; then
