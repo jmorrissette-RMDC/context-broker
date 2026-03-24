@@ -67,11 +67,13 @@ Both interfaces are backed by the same internal StateGraph flows.
 
 The Context Broker includes a conversational agent (Imperator) with declared Identity and Purpose, backed by its own persistent conversation. The Imperator:
 
+-   Uses standard LangGraph `MemorySaver` checkpointer for graph execution state (interrupt/resume, tool call tracking). Long-term conversation persistence is handled by the Context Broker's own pipeline.
 -   Maintains a single ongoing conversation that persists across restarts
 -   Can search conversations and memories, introspect context assembly, report system status
--   Uses the same internal functions that back the MCP tools
--   Reads its LLM provider from `config.yml` like every other flow
+-   Consumes the Context Broker's own MCP tools — the same interface any other agent would use
+-   Reads its LLM provider from `te.yml` (TE configuration)
 -   When `admin_tools` is enabled, can read and modify configuration and query the database directly
+-   Without a Context Broker configured (standalone TE deployment), the `MemorySaver` provides basic conversation continuity. The Context Broker is an upgrade, not a dependency.
 
 ***
 
@@ -255,25 +257,35 @@ packages:
 
 **4.6 MCP Tool Inventory**
 
-The Context Broker exposes the following tools via MCP. Full input/output schemas are documented in the README and discoverable via the MCP protocol.
+The Context Broker exposes tools via MCP in two categories. Full input/output schemas are documented in the README and discoverable via the MCP protocol.
 
-| Tool                          | Description                                                                        |
-|-------------------------------|------------------------------------------------------------------------------------|
-| `conv_create_conversation`    | Create a new conversation                                                          |
-| `conv_store_message`          | Store a message in a conversation (accepts `context_window_id` or `conversation_id`, at least one required; triggers async embedding, assembly, extraction) |
-| `conv_retrieve_context`       | Retrieve the assembled context window for a participant                            |
-| `conv_create_context_window`  | Create a context window instance with a build type and token budget                |
-| `conv_search`                 | Semantic and structured search across conversations                                |
-| `conv_search_messages`        | Hybrid search (vector + BM25 + reranking) across messages                          |
-| `conv_get_history`            | Retrieve full chronological message sequence for a conversation                    |
-| `conv_search_context_windows` | Search and list context windows                                                    |
-| `mem_search`                  | Semantic and graph search across extracted knowledge                               |
-| `mem_get_context`             | Retrieve relevant memories formatted for prompt injection                          |
-| `mem_add`                     | Explicitly add a memory to the knowledge graph                                     |
-| `mem_list`                    | List stored memories, optionally filtered                                          |
-| `mem_delete`                  | Delete a specific memory by ID                                                     |
-| `imperator_chat`              | Conversational interface to the Imperator                                          |
-| `metrics_get`                 | Retrieve Prometheus metrics                                                        |
+**Core tools** — used by agents in their reasoning loop. Clean names, designed for drop-in use via `langchain-mcp-adapters`:
+
+| Tool                 | Required Inputs                                      | Optional              | Description                                                                        |
+|----------------------|------------------------------------------------------|-----------------------|------------------------------------------------------------------------------------|
+| `get_context`        | `build_type` (enum), `budget` (snapped to bucket)    | `conversation_id`     | Returns assembled context. Auto-creates conversation + window if needed. Returns `conversation_id`. |
+| `store_message`      | `conversation_id`, `role`, `content`                 | `sender`, `tool_calls` | Store a message. Internally triggers async embedding, extraction, assembly.        |
+| `search_messages`    | `query`                                              | `conversation_id`     | Hybrid search (vector + BM25 + reranking) across messages.                         |
+| `search_knowledge`   | `query`, `user_id`                                   | `limit`               | Search extracted facts and relationships from knowledge graph.                     |
+
+-   `get_context` without `conversation_id` creates a new conversation and window, returning the `conversation_id` for the caller to persist.
+-   `get_context` with `conversation_id` reuses the existing conversation. If no matching window exists for that `build_type` + `budget`, one is created automatically.
+-   `context_window_id` is an internal implementation detail — not exposed in the core tool interface. Window identity = conversation + build_type + budget_bucket.
+-   `build_type` is an enum populated dynamically from registered build types in config. `budget` is snapped to the nearest bucket (always up).
+-   `search_knowledge` replaces both `mem_search` and `mem_get_context` — same search, one tool.
+
+**Management tools** — used for administration and setup. Prefixed per naming convention:
+
+| Tool                          | Description                                                     |
+|-------------------------------|-----------------------------------------------------------------|
+| `conv_create_conversation`    | Create a new conversation explicitly                            |
+| `conv_get_history`            | Retrieve full chronological message sequence for a conversation |
+| `conv_search_context_windows` | Search and list context windows                                 |
+| `mem_add`                     | Explicitly add a memory to the knowledge graph                  |
+| `mem_list`                    | List stored memories, optionally filtered                       |
+| `mem_delete`                  | Delete a specific memory by ID                                  |
+| `imperator_chat`              | Conversational interface to the Imperator                       |
+| `metrics_get`                 | Retrieve Prometheus metrics                                     |
 
 **4.5 LangGraph Mandate**
 
@@ -284,7 +296,8 @@ The Context Broker exposes the following tools via MCP. Full input/output schema
     -   LangChain embedding models via config.
     -   LangChain chat models for summarization and extraction via config.
     -   Where a standard LangChain component does not fit the retrieval mechanism (e.g., knowledge graph traversal requires edge-following, not vector similarity), the architecture may use native APIs for that technology. The constraint is to prefer standard components and justify deviations.
--   The Context Broker does **not** use LangGraph checkpointing (`MemorySaver` or equivalent). The `conversation_messages` table with full OpenAI-format fields (role, content, tool_calls, tool_call_id) **is** the persistence layer. `context_window_id` serves as the conceptual equivalent of a LangGraph `thread_id`.
+-   The Imperator uses standard LangGraph `MemorySaver` checkpointing for graph execution state (interrupt/resume, tool call tracking, mid-execution persistence). The `conversation_messages` table provides long-term conversation persistence via the Context Broker's own pipeline. These are complementary: `MemorySaver` handles the graph, the Context Broker handles the conversation.
+-   **Substrate vs application logic:** Config file loading, YAML parsing, client factories, and connection pool management are substrate — they make StateGraphs possible but are not themselves StateGraphs. Application logic that makes decisions about what the system does must be in StateGraphs. The line: did we write the decision logic, or are we calling an external library?
 
 **4.6 LangGraph State Immutability**
 
@@ -397,27 +410,30 @@ build_types:
 
 **5.4 Token Budget Resolution**
 
--   `max_context_tokens` is a build type property.
--   When set to `auto`: on context window creation, query the configured LLM provider's model list endpoint for the model's context length. If the provider does not report it, use `fallback_tokens`.
--   When set to an explicit number: use that value.
--   An explicit `max_tokens` passed by the caller when creating a context window overrides the build type default.
--   Token budget is resolved once at window creation and stored. Model changes do not retroactively affect existing windows.
+-   Token budgets are snapped to standard buckets: 4K, 8K, 16K, 32K, 64K, 128K, 200K, 256K, 512K, 1M, 2M. Always snap up (never give less than requested).
+-   Bucketing enables window sharing: multiple agents with similar budgets on the same conversation and build type share pre-built summaries instead of each triggering separate assembly.
+-   The `budget` parameter in `get_context` represents the model's full context size. The build type owns the logic for safe utilization — models degrade past approximately 85% context fill, so the build type calculates tier allocations against the effective budget (budget × utilization percentage), not the raw number.
+-   `fallback_tokens` in build type config is used when the caller doesn't specify a budget and auto-resolution from the provider fails.
+-   Budget is resolved once at window creation and stored. Changes do not retroactively affect existing windows.
 
 **5.5 Imperator Configuration**
 
 ```yaml
-# TE configuration (imperator.yml)
+# TE configuration (te.yml)
 imperator:
-  identity: "I am the Context Broker's Imperator — the cognitive agent responsible for this context engineering service."
-  purpose: "I manage conversations, assemble context windows, extract knowledge, and help users understand and operate the Context Broker."
-  build_type: standard-tiered    # or "knowledge-enriched"
+  base_url: http://context-broker-ollama:11434/v1
+  model: qwen2.5:7b
+  api_key_env: ""                # env var for API key (empty for keyless)
+  system_prompt: imperator_identity   # prompt file name (loaded from /config/prompts/)
+  build_type: standard-tiered
   max_context_tokens: auto
-  participant_id: imperator
   admin_tools: false             # true = allow config and database modification (requires restart)
+  max_iterations: 5
+  temperature: 0.3
 ```
 
--   The Imperator must declare Identity (what it is) and Purpose (what it is for) per REQ-001 §11.2. These are expressed in the system prompt template and defined in the TE configuration.
--   The Imperator is the built-in reference consumer of the Context Broker. It uses the same conversation storage, context assembly, embedding, and knowledge extraction capabilities that external callers access via MCP. It serves as both a conversational interface and a live demonstration of the system's capabilities.
+-   The Imperator's Identity, Purpose, and Persona are defined in its system prompt file (e.g., `/config/prompts/imperator_identity.md`), referenced by the `system_prompt` field. The system prompt is the primary artifact that defines who the Imperator is — it is part of the TE package. See REQ-001 §11.2.
+-   The Imperator uses standard LangGraph `MemorySaver` checkpointing for graph execution state. It consumes the Context Broker's own MCP tools (`get_context`, `store_message`, `search_messages`, `search_knowledge`) — the same interface any external agent uses. This is self-consumption: the Imperator proves the system works by using it on itself.
 -   `build_type` controls which retrieval layers the Imperator's context window uses. Defaults to `standard-tiered` for lower inference cost. Switching to `knowledge-enriched` activates the full retrieval pipeline including vector similarity search and knowledge graph traversal.
 -   `admin_tools: false` (default): Imperator can read system state, search conversations and memories, introspect context assembly.
 -   `admin_tools: true`: Imperator can additionally read/write configuration and run read-only database queries.
