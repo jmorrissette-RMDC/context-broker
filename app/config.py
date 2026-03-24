@@ -262,6 +262,50 @@ async def async_load_te_config() -> dict[str, Any]:
     return _apply_te_config(config, raw, current_mtime)
 
 
+CREDENTIALS_PATH = os.environ.get("CREDENTIALS_PATH", "/config/credentials/.env")
+
+# Cached credentials with mtime check (same pattern as config cache).
+_credentials_cache: dict[str, str] = {}
+_credentials_mtime: float = 0.0
+
+
+def _load_credentials() -> dict[str, str]:
+    """Read the credentials .env file and return a dict of key=value pairs.
+
+    Re-reads from disk when the file's mtime changes, enabling hot-reload
+    of API keys without container restart (PG-39, REQ-001 §8.3).
+    Falls back to os.environ for keys not found in the file.
+    """
+    global _credentials_cache, _credentials_mtime
+
+    try:
+        current_mtime = os.stat(CREDENTIALS_PATH).st_mtime
+    except (OSError, FileNotFoundError):
+        # No credentials file — fall back to environment only
+        return {}
+
+    if current_mtime == _credentials_mtime and _credentials_cache:
+        return _credentials_cache
+
+    creds: dict[str, str] = {}
+    try:
+        with open(CREDENTIALS_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    creds[key.strip()] = value.strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        _log.warning("Failed to read credentials file %s: %s", CREDENTIALS_PATH, exc)
+        return _credentials_cache  # Return stale cache rather than nothing
+
+    _credentials_cache = creds
+    _credentials_mtime = current_mtime
+    return creds
+
+
 def get_api_key(provider_config: dict[str, Any]) -> str:
     """Resolve an API key for a provider.
 
@@ -269,13 +313,22 @@ def get_api_key(provider_config: dict[str, Any]) -> str:
     variable that holds its API key. No defaults, no magic — explicit is
     better than implicit.
 
+    Reads from the mounted credentials file first (hot-reloadable),
+    then falls back to environment variables. This allows API keys to
+    be changed without container restart (PG-39, REQ-001 §8.3).
+
     If api_key_env is absent or empty, returns empty string (keyless
     providers like Ollama).
     """
     env_var_name = provider_config.get("api_key_env", "")
-    if env_var_name:
-        return os.environ.get(env_var_name, "")
-    return ""
+    if not env_var_name:
+        return ""
+    # Try credentials file first (hot-reloadable)
+    creds = _load_credentials()
+    if env_var_name in creds:
+        return creds[env_var_name]
+    # Fall back to environment variable
+    return os.environ.get(env_var_name, "")
 
 
 def get_build_type_config(
