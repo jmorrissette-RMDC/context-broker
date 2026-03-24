@@ -843,9 +843,9 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
     # If admin_tools=false (or no config), the ToolNode only gets base tools,
     # so even if the LLM hallucinated an admin tool call, ToolNode would reject it.
     if config is None:
-        from app.config import load_config
+        from app.config import load_merged_config
 
-        config = load_config()
+        config = load_merged_config()
     imperator_config = config.get("imperator", {})
     active_tools = list(_imperator_tools)
     if imperator_config.get("admin_tools", False):
