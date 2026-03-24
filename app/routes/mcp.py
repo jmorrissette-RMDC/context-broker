@@ -349,8 +349,121 @@ async def mcp_tool_call(
 
 
 def _get_tool_list() -> list[dict]:
-    """Return the MCP tool list with schemas."""
+    """Return the MCP tool list with schemas.
+
+    Core tools (get_context, store_message, search_messages, search_knowledge)
+    are listed first — these are the primary interface for agents.
+    Management tools (conv_*, mem_*, imperator_chat, metrics_get) follow.
+    """
+    # Build dynamic enum for build_type from config
+    try:
+        from app.config import load_te_config
+        te_config = load_te_config()
+    except Exception:
+        te_config = {}
+    try:
+        from app.config import load_config
+        ae_config = load_config()
+    except Exception:
+        ae_config = {}
+    build_type_names = list(ae_config.get("build_types", {}).keys()) or [
+        "passthrough", "standard-tiered", "knowledge-enriched"
+    ]
+
+    from app.budget import BUDGET_BUCKETS
+    bucket_desc = ", ".join(str(b) for b in BUDGET_BUCKETS)
+
     return [
+        # ============================================================
+        # Core tools (D-02)
+        # ============================================================
+        {
+            "name": "get_context",
+            "description": "Retrieve assembled context for a conversation. Auto-creates conversation and context window if needed. Returns conversation_id for subsequent store_message calls.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["build_type", "budget"],
+                "properties": {
+                    "build_type": {
+                        "type": "string",
+                        "enum": build_type_names,
+                        "description": "Context assembly strategy",
+                    },
+                    "budget": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": f"Token budget (snapped to nearest bucket: {bucket_desc})",
+                    },
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Existing conversation ID. Omit to create a new conversation.",
+                    },
+                },
+            },
+        },
+        {
+            "name": "store_message",
+            "description": "Store a message in a conversation. Triggers async embedding, extraction, and context assembly.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["conversation_id", "role", "sender"],
+                "properties": {
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Conversation ID (from get_context response)",
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "system", "tool"],
+                    },
+                    "content": {"type": "string"},
+                    "sender": {"type": "string"},
+                    "recipient": {"type": "string"},
+                    "model_name": {"type": "string"},
+                    "tool_calls": {"type": "array", "items": {"type": "object"}},
+                    "tool_call_id": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "search_messages",
+            "description": "Hybrid search (vector + BM25 + reranking) across conversation messages.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Scope search to a specific conversation",
+                    },
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+                    "sender": {"type": "string"},
+                    "role": {"type": "string", "enum": ["user", "assistant", "system", "tool"]},
+                    "date_from": {"type": "string", "description": "ISO-8601"},
+                    "date_to": {"type": "string", "description": "ISO-8601"},
+                },
+            },
+        },
+        {
+            "name": "search_knowledge",
+            "description": "Search extracted facts and relationships from the knowledge graph.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query", "user_id"],
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "user_id": {"type": "string", "minLength": 1, "maxLength": 255},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+                },
+            },
+        },
+        # ============================================================
+        # Management tools
+        # ============================================================
         {
             "name": "conv_create_conversation",
             "description": "Create a new conversation",
