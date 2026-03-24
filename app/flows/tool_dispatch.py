@@ -14,6 +14,7 @@ from app.flows.build_type_registry import get_retrieval_graph
 from app.flows.conversation_ops_flow import (
     build_create_conversation_flow,
     build_create_context_window_flow,
+    build_get_context_flow,
     build_get_history_flow,
     build_search_context_windows_flow,
 )
@@ -34,6 +35,7 @@ from app.flows.search_flow import (
     build_message_search_flow,
 )
 from app.models import (
+    GetContextInput,
     ImperatorChatInput,
     CreateContextWindowInput,
     CreateConversationInput,
@@ -47,7 +49,9 @@ from app.models import (
     RetrieveContextInput,
     SearchContextWindowsInput,
     SearchConversationsInput,
+    SearchKnowledgeInput,
     SearchMessagesInput,
+    StoreMessageCoreInput,
     StoreMessageInput,
 )
 
@@ -69,6 +73,7 @@ _mem_list_flow = None
 _mem_delete_flow = None
 _metrics_flow = None
 _imperator_flow = None
+_get_context_flow = None
 
 
 def _get_create_conversation_flow():
@@ -169,6 +174,13 @@ def _get_imperator_flow():
     return _imperator_flow
 
 
+def _get_get_context_flow():
+    global _get_context_flow
+    if _get_context_flow is None:
+        _get_context_flow = build_get_context_flow()
+    return _get_context_flow
+
+
 async def dispatch_tool(
     tool_name: str,
     arguments: dict[str, Any],
@@ -182,7 +194,129 @@ async def dispatch_tool(
     """
     _log.info("Dispatching tool: %s", tool_name)
 
-    if tool_name == "conv_create_conversation":
+    # ============================================================
+    # Core tools (D-02)
+    # ============================================================
+
+    if tool_name == "get_context":
+        validated = GetContextInput(**arguments)
+        result = await _get_get_context_flow().ainvoke(
+            {
+                "build_type": validated.build_type,
+                "budget": validated.budget,
+                "snapped_budget": 0,
+                "conversation_id": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
+                "config": config,
+                "context_window_id": None,
+                "context_messages": None,
+                "context_tiers": None,
+                "total_tokens_used": 0,
+                "assembly_status": "pending",
+                "warnings": [],
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        response: dict[str, Any] = {
+            "conversation_id": result.get("conversation_id"),
+            "context": result.get("context_messages"),
+            "tiers": result.get("context_tiers"),
+            "total_tokens": result.get("total_tokens_used", 0),
+            "assembly_status": result.get("assembly_status", "ready"),
+        }
+        if result.get("warnings"):
+            response["warnings"] = result["warnings"]
+        return response
+
+    elif tool_name == "store_message":
+        validated = StoreMessageCoreInput(**arguments)
+        result = await _get_store_message_flow().ainvoke(
+            {
+                "context_window_id": None,
+                "conversation_id_input": str(validated.conversation_id),
+                "role": validated.role,
+                "sender": validated.sender,
+                "recipient": validated.recipient,
+                "content": validated.content,
+                "model_name": validated.model_name,
+                "tool_calls": validated.tool_calls,
+                "tool_call_id": validated.tool_call_id,
+                "message_id": None,
+                "sequence_number": None,
+                "was_collapsed": False,
+                "queued_jobs": [],
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        return {
+            "message_id": result.get("message_id"),
+            "sequence_number": result.get("sequence_number"),
+        }
+
+    elif tool_name == "search_messages":
+        validated = SearchMessagesInput(**arguments)
+        result = await _get_search_messages_flow().ainvoke(
+            {
+                "query": validated.query,
+                "conversation_id": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
+                "sender": validated.sender,
+                "role": validated.role,
+                "date_from": validated.date_from,
+                "date_to": validated.date_to,
+                "limit": validated.limit,
+                "config": config,
+                "query_embedding": None,
+                "candidates": [],
+                "reranked_results": [],
+                "warning": None,
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        response = {"messages": result.get("reranked_results", [])}
+        if result.get("warning"):
+            response["warning"] = result["warning"]
+        return response
+
+    elif tool_name == "search_knowledge":
+        validated = SearchKnowledgeInput(**arguments)
+        result = await _get_mem_search_flow().ainvoke(
+            {
+                "query": validated.query,
+                "user_id": validated.user_id,
+                "limit": validated.limit,
+                "config": config,
+                "memories": [],
+                "relations": [],
+                "degraded": False,
+                "error": None,
+            }
+        )
+        if result.get("error") and not result.get("degraded"):
+            raise ValueError(result["error"])
+        return {
+            "memories": result.get("memories", []),
+            "relations": result.get("relations", []),
+            "degraded": result.get("degraded", False),
+        }
+
+    # ============================================================
+    # Management tools (keep existing names)
+    # ============================================================
+
+    elif tool_name == "conv_create_conversation":
         validated = CreateConversationInput(**arguments)
         result = await _get_create_conversation_flow().ainvoke(
             {
