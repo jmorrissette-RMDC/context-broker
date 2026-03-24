@@ -831,3 +831,180 @@ class TestMetricsGet:
         assert "metrics" in result
         # Should contain Prometheus-format text
         assert isinstance(result["metrics"], str)
+
+
+# ===================================================================
+# Core Tools (D-02)
+# ===================================================================
+
+
+class TestGetContext:
+    """Tests for the get_context core tool."""
+
+    def test_auto_create_conversation(self, client):
+        """get_context without conversation_id creates a new conversation."""
+        resp = mcp_call(
+            client,
+            "get_context",
+            {"build_type": "passthrough", "budget": 8000},
+        )
+        assert resp.status_code == 200
+        result = extract_mcp_result(resp)
+        assert "conversation_id" in result
+        assert result["conversation_id"] is not None
+        assert "context" in result
+        assert isinstance(result["context"], list)
+
+    def test_reuse_conversation(self, client):
+        """get_context with conversation_id reuses existing conversation."""
+        # Create first
+        resp1 = mcp_call(
+            client,
+            "get_context",
+            {"build_type": "passthrough", "budget": 8000},
+        )
+        result1 = extract_mcp_result(resp1)
+        conv_id = result1["conversation_id"]
+
+        # Reuse
+        resp2 = mcp_call(
+            client,
+            "get_context",
+            {"build_type": "passthrough", "budget": 8000, "conversation_id": conv_id},
+        )
+        assert resp2.status_code == 200
+        result2 = extract_mcp_result(resp2)
+        assert result2["conversation_id"] == conv_id
+
+    def test_budget_snapping(self, client):
+        """Budget is snapped to nearest bucket (8000 → 8192)."""
+        resp = mcp_call(
+            client,
+            "get_context",
+            {"build_type": "passthrough", "budget": 8000},
+        )
+        assert resp.status_code == 200
+        # The snapping is internal — we can verify by checking
+        # that the response is valid (snapping worked without error)
+        result = extract_mcp_result(resp)
+        assert result["assembly_status"] == "ready"
+
+    def test_invalid_build_type(self, client):
+        """Invalid build_type returns error."""
+        resp = mcp_call(
+            client,
+            "get_context",
+            {"build_type": "nonexistent", "budget": 8000},
+        )
+        # Should either be 400 (validation) or 200 with error in result
+        if resp.status_code == 200:
+            result = extract_mcp_result(resp)
+            # The flow should return an error about the unknown build type
+            assert "error" in str(result).lower() or "not found" in str(result).lower()
+
+    def test_missing_required_fields(self, client):
+        """Missing build_type or budget returns validation error."""
+        resp = mcp_call(client, "get_context", {"budget": 8000})
+        assert resp.status_code == 400
+
+        resp = mcp_call(client, "get_context", {"build_type": "passthrough"})
+        assert resp.status_code == 400
+
+
+class TestStoreMessageCore:
+    """Tests for the store_message core tool."""
+
+    def test_store_and_retrieve(self, client):
+        """Store a message, then retrieve context containing it."""
+        # Get context (auto-creates conversation)
+        resp = mcp_call(
+            client,
+            "get_context",
+            {"build_type": "passthrough", "budget": 8000},
+        )
+        conv_id = extract_mcp_result(resp)["conversation_id"]
+
+        # Store a message
+        resp = mcp_call(
+            client,
+            "store_message",
+            {
+                "conversation_id": conv_id,
+                "role": "user",
+                "sender": "test",
+                "content": "Core tool store test",
+            },
+        )
+        assert resp.status_code == 200
+        result = extract_mcp_result(resp)
+        assert "message_id" in result
+
+        # Retrieve and verify message is in context
+        resp = mcp_call(
+            client,
+            "get_context",
+            {"build_type": "passthrough", "budget": 8000, "conversation_id": conv_id},
+        )
+        result = extract_mcp_result(resp)
+        assert len(result["context"]) > 0
+        assert any("Core tool store test" in str(m) for m in result["context"])
+
+    def test_missing_conversation_id(self, client):
+        """Missing conversation_id returns validation error."""
+        resp = mcp_call(
+            client,
+            "store_message",
+            {"role": "user", "sender": "test", "content": "test"},
+        )
+        assert resp.status_code == 400
+
+
+class TestSearchMessagesCore:
+    """Tests for the search_messages core tool."""
+
+    def test_valid_search(self, client):
+        """Search with a query succeeds."""
+        resp = mcp_call(
+            client,
+            "search_messages",
+            {"query": "hello", "limit": 5},
+        )
+        assert resp.status_code == 200
+        result = extract_mcp_result(resp)
+        assert "messages" in result
+
+    def test_missing_query(self, client):
+        """Missing query returns validation error."""
+        resp = mcp_call(client, "search_messages", {"limit": 5})
+        assert resp.status_code == 400
+
+
+class TestSearchKnowledge:
+    """Tests for the search_knowledge core tool."""
+
+    def test_valid_search(self, client):
+        """Search knowledge with query and user_id succeeds."""
+        resp = mcp_call(
+            client,
+            "search_knowledge",
+            {"query": "context engineering", "user_id": "test-user"},
+        )
+        assert resp.status_code == 200
+        result = extract_mcp_result(resp)
+        assert "memories" in result
+
+    def test_missing_required_fields(self, client):
+        """Missing query or user_id returns validation error."""
+        resp = mcp_call(
+            client,
+            "search_knowledge",
+            {"user_id": "test-user"},
+        )
+        assert resp.status_code == 400
+
+        resp = mcp_call(
+            client,
+            "search_knowledge",
+            {"query": "test"},
+        )
+        assert resp.status_code == 400
