@@ -168,6 +168,7 @@ async def _mem_search_tool(
 
 
 # Module-level tool singletons (M-10)
+# Core tools: always available. Diagnostic tools added after their definitions below.
 _imperator_tools: list = [_conv_search_tool, _mem_search_tool]
 
 
@@ -257,8 +258,268 @@ async def _db_query_tool(sql: str) -> str:
         return f"Query error: {exc}"
 
 
+# ── Diagnostic tools (always available) ────────────────────────────────
+
+
+@tool
+async def _log_query_tool(container_name: str = "", level: str = "", search: str = "", limit: int = 50) -> str:
+    """Query MAD container logs from the system_logs table.
+
+    Logs are collected by Fluent Bit from all context-broker containers
+    and stored in Postgres. Returns recent log entries matching the filters.
+
+    Args:
+        container_name: Filter by container (e.g., "context-broker-langgraph"). Empty = all.
+        level: Filter by log level (e.g., "ERROR", "WARNING"). Empty = all.
+        search: Text search in message content. Empty = no filter.
+        limit: Maximum entries to return (default 50).
+    """
+    try:
+        pool = get_pg_pool()
+        conditions = []
+        args: list = []
+        idx = 1
+
+        if container_name:
+            conditions.append(f"container_name ILIKE ${idx}")
+            args.append(f"%{container_name}%")
+            idx += 1
+        if level:
+            conditions.append(f"level = ${idx}")
+            args.append(level.upper())
+            idx += 1
+        if search:
+            conditions.append(f"message ILIKE ${idx}")
+            args.append(f"%{search}%")
+            idx += 1
+
+        where = " AND ".join(conditions) if conditions else "1=1"
+        args.append(min(limit, 200))
+
+        rows = await pool.fetch(
+            f"""
+            SELECT container_name, log_timestamp, level, message
+            FROM system_logs
+            WHERE {where}
+            ORDER BY log_timestamp DESC
+            LIMIT ${idx}
+            """,
+            *args,
+        )
+        if not rows:
+            return "No log entries found matching the filters."
+        lines = []
+        for row in rows:
+            ts = row["log_timestamp"].isoformat() if row["log_timestamp"] else "?"
+            lines.append(f"[{ts}] [{row['container_name']}] [{row['level'] or '?'}] {row['message'] or ''}")
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"Log query error: {exc}"
+
+
+@tool
+async def _context_introspection_tool(conversation_id: str, build_type: str = "standard-tiered") -> str:
+    """Show the assembled context breakdown for a conversation.
+
+    Displays tier allocation, token usage, summary counts, and last
+    assembly time for the specified conversation and build type.
+
+    Args:
+        conversation_id: The conversation to inspect.
+        build_type: The build type to inspect (default: standard-tiered).
+    """
+    import uuid as _uuid
+
+    try:
+        pool = get_pg_pool()
+
+        # Find the window
+        window = await pool.fetchrow(
+            """
+            SELECT id, build_type, max_token_budget, last_assembled_at, created_at
+            FROM context_windows
+            WHERE conversation_id = $1 AND build_type = $2
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            _uuid.UUID(conversation_id),
+            build_type,
+        )
+        if not window:
+            return f"No context window found for conversation {conversation_id} with build type {build_type}"
+
+        # Count summaries
+        summary_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_summaries WHERE context_window_id = $1",
+            window["id"],
+        )
+
+        # Count messages
+        msg_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = $1",
+            _uuid.UUID(conversation_id),
+        )
+
+        total_tokens = await pool.fetchval(
+            "SELECT COALESCE(SUM(token_count), 0) FROM conversation_messages WHERE conversation_id = $1",
+            _uuid.UUID(conversation_id),
+        )
+
+        from app.budget import EFFECTIVE_UTILIZATION_DEFAULT
+        effective = int(window["max_token_budget"] * EFFECTIVE_UTILIZATION_DEFAULT)
+
+        lines = [
+            f"Context Window: {window['id']}",
+            f"Build Type: {window['build_type']}",
+            f"Raw Budget: {window['max_token_budget']} tokens",
+            f"Effective Budget (85%): {effective} tokens",
+            f"Total Messages: {msg_count}",
+            f"Total Message Tokens: {total_tokens}",
+            f"Summaries: {summary_count}",
+            f"Last Assembled: {window['last_assembled_at'].isoformat() if window['last_assembled_at'] else 'never'}",
+            f"Created: {window['created_at'].isoformat() if window['created_at'] else '?'}",
+        ]
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"Introspection error: {exc}"
+
+
+@tool
+async def _pipeline_status_tool() -> str:
+    """Show the status of background processing pipelines.
+
+    Displays queue depths for embedding, assembly, and extraction jobs,
+    plus dead letter counts and recent activity.
+    """
+    try:
+        import redis as redis_lib
+        from app.database import get_redis
+
+        r = get_redis()
+        pool = get_pg_pool()
+
+        # Queue depths
+        embed_depth = await r.llen("embedding_jobs") if r else 0
+        assembly_depth = await r.llen("context_assembly_jobs") if r else 0
+        extract_depth = await r.zcard("memory_extraction_jobs") if r else 0
+
+        # Dead letter counts
+        dl_embed = await r.llen("dead_letter:embedding_jobs") if r else 0
+        dl_assembly = await r.llen("dead_letter:context_assembly_jobs") if r else 0
+        dl_extract = await r.llen("dead_letter:memory_extraction_jobs") if r else 0
+
+        # Recent assembly activity
+        recent_assembly = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_summaries WHERE created_at > NOW() - INTERVAL '1 hour'"
+        )
+
+        # Recent embeddings
+        recent_embeddings = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL AND created_at > NOW() - INTERVAL '1 hour'"
+        )
+
+        lines = [
+            "Pipeline Status:",
+            f"  Embedding queue: {embed_depth} pending",
+            f"  Assembly queue: {assembly_depth} pending",
+            f"  Extraction queue: {extract_depth} pending",
+            "",
+            "Dead Letter Queues:",
+            f"  Embedding: {dl_embed}",
+            f"  Assembly: {dl_assembly}",
+            f"  Extraction: {dl_extract}",
+            "",
+            "Recent Activity (last hour):",
+            f"  Summaries created: {recent_assembly}",
+            f"  Messages embedded: {recent_embeddings}",
+        ]
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"Pipeline status error: {exc}"
+
+
+# Diagnostic tool list — always available to the Imperator
+_diagnostic_tools: list = [_log_query_tool, _context_introspection_tool, _pipeline_status_tool]
+
+# Extend the core tool list with diagnostic tools
+_imperator_tools.extend(_diagnostic_tools)
+
+
+# ── Admin tools (gated by admin_tools config) ─────────────────────────
+
+
+@tool
+async def _config_write_tool(key: str, value: str) -> str:
+    """Write a value to the AE configuration (config.yml).
+
+    Changes are hot-reloaded — they take effect on the next operation
+    without a container restart. Only AE config keys are writable;
+    TE config (Identity, Purpose, system prompt) cannot be modified.
+
+    Args:
+        key: Dot-notation config path (e.g., "summarization.model", "tuning.verbose_logging").
+        value: New value as a string. Numbers and booleans are auto-converted.
+    """
+    from app.config import CONFIG_PATH
+
+    # Refuse TE config modifications
+    te_keys = ["imperator", "system_prompt", "identity", "purpose"]
+    if any(key.startswith(k) for k in te_keys):
+        return f"Cannot modify TE config key '{key}'. TE configuration is the architect's domain."
+
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        # Navigate dot-notation path
+        parts = key.split(".")
+        target = config
+        for part in parts[:-1]:
+            if part not in target or not isinstance(target[part], dict):
+                return f"Config path '{key}' not found."
+            target = target[part]
+
+        if parts[-1] not in target:
+            return f"Config key '{key}' not found. Available keys at this level: {list(target.keys())}"
+
+        # Auto-convert value types
+        old_value = target[parts[-1]]
+        if isinstance(old_value, bool):
+            value_typed = value.lower() in ("true", "1", "yes")
+        elif isinstance(old_value, int):
+            value_typed = int(value)
+        elif isinstance(old_value, float):
+            value_typed = float(value)
+        else:
+            value_typed = value
+
+        target[parts[-1]] = value_typed
+
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+        return f"Updated '{key}': {old_value} → {value_typed}. Change will take effect on next operation (hot-reload)."
+    except (FileNotFoundError, OSError, yaml.YAMLError, ValueError) as exc:
+        return f"Config write error: {exc}"
+
+
+@tool
+async def _verbose_toggle_tool() -> str:
+    """Toggle verbose pipeline logging on or off.
+
+    Reads the current value of tuning.verbose_logging from config and
+    writes the opposite. Changes take effect immediately (hot-reload).
+    """
+    from app.config import load_config, get_tuning
+
+    current = get_tuning(load_config(), "verbose_logging", False)
+    new_value = "false" if current else "true"
+    return await _config_write_tool.ainvoke(
+        {"key": "tuning.verbose_logging", "value": new_value}
+    )
+
+
 # Admin tool singletons — gated by config
-_admin_tools: list = [_config_read_tool, _db_query_tool]
+_admin_tools: list = [_config_read_tool, _db_query_tool, _config_write_tool, _verbose_toggle_tool]
 
 
 # ── Message pipeline singleton ──────────────────────────────────────────

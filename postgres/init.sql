@@ -155,3 +155,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_window_tier_seq
 
 -- Note: mem0_memories table is created by Mem0 on first use.
 -- The application creates this index after Mem0 initializes.
+
+-- ============================================================
+-- System logs (Fluent Bit writes here)
+-- Enables Imperator to query logs from all MAD containers.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS system_logs (
+    id              BIGSERIAL PRIMARY KEY,
+    container_name  VARCHAR(255) NOT NULL,
+    log_timestamp   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    level           VARCHAR(10),
+    message         TEXT,
+    raw_json        JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_logs_container_time
+    ON system_logs (container_name, log_timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_system_logs_level
+    ON system_logs (level, log_timestamp DESC);

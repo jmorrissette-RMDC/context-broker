@@ -171,6 +171,28 @@ services:
       start_period: 30s
       retries: 3
 
+  # Optional: log collection for Imperator diagnostics.
+  # Collects logs from all MAD containers and writes to Postgres.
+  # Remove or comment out if deployment environment has its own log collector.
+  context-broker-fluentbit:
+    image: fluent/fluent-bit:3.2
+    container_name: context-broker-fluentbit
+    hostname: context-broker-fluentbit
+    restart: unless-stopped
+    networks:
+      - context-broker-net
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./fluentbit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./fluentbit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
+    env_file:
+      - ./config/credentials/.env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:2020/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
 networks:
   context-broker-net:
     driver: bridge

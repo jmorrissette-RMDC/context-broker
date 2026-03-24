@@ -316,6 +316,32 @@ async def _migration_013(conn) -> None:
     _log.info("Migration 013 complete — context_windows unique constraint updated for D-03")
 
 
+async def _migration_014(conn) -> None:
+    """Migration 14: Add system_logs table for Fluent Bit log collection.
+
+    Enables the Imperator to query logs from all MAD containers via SQL.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS system_logs (
+            id              BIGSERIAL PRIMARY KEY,
+            container_name  VARCHAR(255) NOT NULL,
+            log_timestamp   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            level           VARCHAR(10),
+            message         TEXT,
+            raw_json        JSONB
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_system_logs_container_time
+        ON system_logs (container_name, log_timestamp DESC)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_system_logs_level
+        ON system_logs (level, log_timestamp DESC)
+    """)
+    _log.info("Migration 014 complete — system_logs table for Fluent Bit")
+
+
 # Migration registry: version -> (description, migration_function)
 # Add new migrations here. Never modify existing entries.
 # IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
@@ -348,6 +374,11 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
         13,
         "Update context_windows unique constraint: (conversation_id, build_type, max_token_budget) (D-03)",
         _migration_013,
+    ),
+    (
+        14,
+        "Add system_logs table for Fluent Bit log collection",
+        _migration_014,
     ),
 ]
 
