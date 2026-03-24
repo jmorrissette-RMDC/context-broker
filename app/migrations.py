@@ -317,27 +317,28 @@ async def _migration_013(conn) -> None:
 
 
 async def _migration_014(conn) -> None:
-    """Migration 14: Add system_logs table for Fluent Bit log collection.
+    """Migration 14: Add system_logs table for log shipper.
 
     Enables the Imperator to query logs from all MAD containers via SQL.
+    The log shipper uses the Docker API to discover containers on
+    context-broker-net and writes their logs with resolved names.
     """
-    # Fluent Bit's native pgsql output schema — no id column,
-    # columns must be (tag, time, data) in that order.
     await conn.execute("DROP TABLE IF EXISTS system_logs")
     await conn.execute("""
         CREATE TABLE system_logs (
-            tag             VARCHAR(255),
-            time            TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            container_name  VARCHAR(255) NOT NULL,
+            log_timestamp   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            message         TEXT,
             data            JSONB
         )
     """)
     await conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_system_logs_tag_time
-        ON system_logs (tag, time DESC)
+        CREATE INDEX IF NOT EXISTS idx_system_logs_container_time
+        ON system_logs (container_name, log_timestamp DESC)
     """)
     await conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_system_logs_time
-        ON system_logs (time DESC)
+        ON system_logs (log_timestamp DESC)
     """)
     _log.info("Migration 014 complete — system_logs table for Fluent Bit")
 

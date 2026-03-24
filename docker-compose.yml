@@ -172,34 +172,23 @@ services:
       retries: 3
 
   # Optional: log collection for Imperator diagnostics.
-  # Collects logs from all MAD containers and writes to Postgres.
-  # Remove or comment out if deployment environment has its own log collector.
-  #
-  # Optional: log collection for Imperator diagnostics.
-  # Tails Docker log files from all containers, writes to Postgres.
+  # Discovers all containers on context-broker-net via Docker API,
+  # tails their logs, and writes to Postgres with resolved container names.
   # Remove or comment out if deployment has its own log collector.
-  #
-  # The Docker log directory path varies by host. Default: /var/lib/docker/containers.
-  # Override the host-side path in docker-compose.override.yml if different.
-  context-broker-fluentbit:
-    image: fluent/fluent-bit:3.2
-    container_name: context-broker-fluentbit
-    hostname: context-broker-fluentbit
+  context-broker-log-shipper:
+    build:
+      context: ./log_shipper
+    container_name: context-broker-log-shipper
+    hostname: context-broker-log-shipper
     restart: unless-stopped
     networks:
       - context-broker-net
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /var/lib/docker/containers:/var/log/docker-containers:ro
-      - ./fluentbit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
-      - ./fluentbit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
+    environment:
+      - POSTGRES_DSN=postgresql://context_broker:${POSTGRES_PASSWORD:-contextbroker123}@context-broker-postgres:5432/context_broker
     env_file:
       - ./config/credentials/.env
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:2020/api/v1/health || exit 1"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
 
 networks:
   context-broker-net:

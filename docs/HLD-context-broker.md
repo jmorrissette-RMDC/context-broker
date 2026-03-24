@@ -53,7 +53,7 @@ The gateway resides on both the external host-exposed network and the internal `
 | `context-broker-redis` | Async job queues, locks, and ephemeral state. | `redis:7-alpine` |
 | `context-broker-infinity` (optional) | Local embeddings and reranking via OpenAI-compatible `/v1/embeddings` and `/v1/rerank` APIs. No API keys needed. Remove if using cloud providers. | `michaelf34/infinity` |
 | `context-broker-ollama` (optional) | Local LLM inference via OpenAI-compatible API. No API keys needed. Remove if using cloud providers. | `ollama/ollama` |
-| `context-broker-fluentbit` (optional) | Collects logs from all MAD containers via Docker socket, writes to Postgres `system_logs` table for Imperator log queries. Remove if deployment has its own log collector. | `fluent/fluent-bit` |
+| `context-broker-log-shipper` (optional) | Discovers containers on context-broker-net via Docker API, tails logs, writes to Postgres `system_logs` table with resolved names. Remove if deployment has its own log collector. | Custom (Python) |
 
 The Infinity container serves embeddings and reranking on the internal network using the Infinity inference engine. It loads configured models at startup (first boot downloads weights) and exposes standard OpenAI-compatible endpoints. The LangGraph container calls it the same way it calls any cloud embedding or reranking provider.
 
@@ -201,7 +201,7 @@ The Imperator is the Context Broker's TE — the cognitive agent that owns the s
 - **Configurable Context:** The Imperator has its own configurable `build_type` and token budget. Budget is snapped to standard buckets for efficient window sharing.
 - **Persistent Continuity:** Stores its `conversation_id` in `/data/imperator_state.json`. On reboot, resumes the same conversation. If the state file is missing or the conversation no longer exists, creates a new one automatically.
 - **Standalone Operation:** Without a Context Broker endpoint configured, the Imperator operates with `MemorySaver` only — basic but functional. The Context Broker is an upgrade (curated context assembly, knowledge extraction, semantic search), not a dependency.
-- **Diagnostic Capabilities (always available):** The Imperator can query MAD container logs from Postgres (collected by Fluent Bit), introspect assembled context (tier breakdown, token usage, build type), and view pipeline status (pending jobs, queue depths). These are read-only diagnostic tools that help the Imperator observe and explain its own system's behavior.
+- **Diagnostic Capabilities (always available):** The Imperator can query MAD container logs from Postgres (collected by the log shipper), introspect assembled context (tier breakdown, token usage, build type), and view pipeline status (pending jobs, queue depths). These are read-only diagnostic tools that help the Imperator observe and explain its own system's behavior.
 - **Admin Capabilities (gated by `admin_tools: true`):** Read and write AE configuration (change LLM models, embedding models, reranker, tuning parameters), toggle verbose pipeline logging, and execute read-only database queries. The Imperator can manage the infrastructure it runs on but cannot modify its own TE configuration (Identity, Purpose, system prompt, its own model) — that is the architect's domain.
 
 ## 11. Resilience and Observability

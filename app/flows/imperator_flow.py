@@ -265,13 +265,13 @@ async def _db_query_tool(sql: str) -> str:
 async def _log_query_tool(container: str = "", level: str = "", search: str = "", limit: int = 50) -> str:
     """Query MAD container logs from the system_logs table.
 
-    Logs are collected by Fluent Bit from all context-broker containers
-    and stored in Postgres as JSONB. Returns recent log entries matching filters.
+    Logs are collected by the log shipper from all containers on
+    context-broker-net and stored in Postgres with resolved names.
 
     Args:
-        container: Filter by tag/container name (e.g., "langgraph"). Empty = all.
-        level: Filter by log level in the data (e.g., "ERROR"). Empty = all.
-        search: Text search in log content. Empty = no filter.
+        container: Filter by container name (e.g., "langgraph", "postgres"). Empty = all.
+        level: Filter by log level in the structured data (e.g., "ERROR"). Empty = all.
+        search: Text search in message content. Empty = no filter.
         limit: Maximum entries to return (default 50, max 200).
     """
     try:
@@ -281,7 +281,7 @@ async def _log_query_tool(container: str = "", level: str = "", search: str = ""
         idx = 1
 
         if container:
-            conditions.append(f"tag ILIKE ${idx}")
+            conditions.append(f"container_name ILIKE ${idx}")
             args.append(f"%{container}%")
             idx += 1
         if level:
@@ -289,7 +289,7 @@ async def _log_query_tool(container: str = "", level: str = "", search: str = ""
             args.append(level.upper())
             idx += 1
         if search:
-            conditions.append(f"(data->>'log' ILIKE ${idx} OR data->>'message' ILIKE ${idx})")
+            conditions.append(f"message ILIKE ${idx}")
             args.append(f"%{search}%")
             idx += 1
 
@@ -298,10 +298,10 @@ async def _log_query_tool(container: str = "", level: str = "", search: str = ""
 
         rows = await pool.fetch(
             f"""
-            SELECT tag, time, data
+            SELECT container_name, log_timestamp, message, data
             FROM system_logs
             WHERE {where}
-            ORDER BY time DESC
+            ORDER BY log_timestamp DESC
             LIMIT ${idx}
             """,
             *args,
@@ -310,11 +310,11 @@ async def _log_query_tool(container: str = "", level: str = "", search: str = ""
             return "No log entries found matching the filters."
         lines = []
         for row in rows:
-            ts = row["time"].isoformat() if row["time"] else "?"
+            ts = row["log_timestamp"].isoformat() if row["log_timestamp"] else "?"
             data = row["data"] or {}
-            msg = data.get("message") or data.get("log") or str(data)[:200]
             lvl = data.get("level") or "?"
-            lines.append(f"[{ts}] [{row['tag'] or '?'}] [{lvl}] {msg}")
+            msg = row["message"] or str(data)[:200]
+            lines.append(f"[{ts}] [{row['container_name']}] [{lvl}] {msg}")
         return "\n".join(lines)
     except Exception as exc:
         return f"Log query error: {exc}"

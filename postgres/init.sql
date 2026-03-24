@@ -157,23 +157,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_window_tier_seq
 -- The application creates this index after Mem0 initializes.
 
 -- ============================================================
--- System logs (Fluent Bit writes here)
+-- System logs (log shipper container writes here)
 -- Enables Imperator to query logs from all MAD containers.
+-- The log shipper discovers containers via Docker API on
+-- context-broker-net and writes their logs with resolved names.
 -- ============================================================
 
--- Fluent Bit's native pgsql output schema (exact column order matters).
--- The pgsql plugin inserts: (tag, time, data) — no id column.
--- tag: derived from log file path (contains container hash)
--- time: log timestamp
--- data: full log record as JSONB
 CREATE TABLE IF NOT EXISTS system_logs (
-    tag             VARCHAR(255),
-    time            TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    container_name  VARCHAR(255) NOT NULL,
+    log_timestamp   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    message         TEXT,
     data            JSONB
 );
 
-CREATE INDEX IF NOT EXISTS idx_system_logs_tag_time
-    ON system_logs (tag, time DESC);
+CREATE INDEX IF NOT EXISTS idx_system_logs_container_time
+    ON system_logs (container_name, log_timestamp DESC);
 
 CREATE INDEX IF NOT EXISTS idx_system_logs_time
-    ON system_logs (time DESC);
+    ON system_logs (log_timestamp DESC);
