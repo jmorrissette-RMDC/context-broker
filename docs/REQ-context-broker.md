@@ -51,6 +51,7 @@ The Context Broker runs as a group of containers managed by Docker Compose:
 | `context-broker-redis`     | Job queues, assembly locks, ephemeral state                                 | Redis (OTS)                 |
 | `context-broker-infinity`  | (Optional) Embeddings and reranking via OpenAI-compatible APIs. Remove if using cloud providers. | Infinity (OTS)              |
 | `context-broker-ollama`    | (Optional) Local LLM inference via OpenAI-compatible API. Remove if using cloud providers.       | Ollama (OTS)                |
+| `context-broker-fluentbit` | (Optional) Collects logs from all MAD containers, writes to Postgres. Remove if deployment environment has its own log collector. | Fluent Bit (OTS)            |
 
 Only the LangGraph container is custom. All backing services use official images unmodified.
 
@@ -442,8 +443,17 @@ imperator:
 -   The Imperator's Identity, Purpose, and Persona are defined in its system prompt file (e.g., `/config/prompts/imperator_identity.md`), referenced by the `system_prompt` field. The system prompt is the primary artifact that defines who the Imperator is — it is part of the TE package. See REQ-001 §11.2.
 -   The Imperator uses standard LangGraph `MemorySaver` checkpointing for graph execution state. It consumes the Context Broker's own MCP tools (`get_context`, `store_message`, `search_messages`, `search_knowledge`) — the same interface any external agent uses. This is self-consumption: the Imperator proves the system works by using it on itself.
 -   `build_type` controls which retrieval layers the Imperator's context window uses. Defaults to `standard-tiered` for lower inference cost. Switching to `knowledge-enriched` activates the full retrieval pipeline including vector similarity search and knowledge graph traversal.
--   `admin_tools: false` (default): Imperator can read system state, search conversations and memories, introspect context assembly.
--   `admin_tools: true`: Imperator can additionally read/write configuration and run read-only database queries.
+-   `admin_tools: false` (default): Imperator has diagnostic tools (always available):
+    -   Query MAD container logs from Postgres (collected by Fluent Bit)
+    -   Introspect assembled context (tier breakdown, token usage, build type)
+    -   View pipeline status (pending jobs, queue depths, last assembly time)
+    -   Search conversations and memories
+    -   View health status and metrics
+-   `admin_tools: true`: Imperator additionally has write capabilities:
+    -   Read and write AE configuration (change LLM models, embedding models, reranker, tuning parameters)
+    -   Toggle verbose pipeline logging
+    -   Run read-only database queries
+-   The Imperator cannot modify its own TE configuration (Identity, Purpose, system prompt, its own model). TE config is the architect's domain.
 
 **5.6 Package Source Configuration**
 
@@ -457,6 +467,7 @@ imperator:
 
 -   All logs go to stdout (normal) or stderr (errors). No log files inside containers.
 -   Docker captures logs via `docker logs`.
+-   The optional Fluent Bit container collects logs from all MAD containers and writes them to a `system_logs` table in Postgres. This enables the Imperator to query logs across all containers (including backing services) via SQL, and logs survive container rebuilds since they persist in the database. Deployments with their own log collection infrastructure (e.g., Promtail/Loki) can remove the Fluent Bit container.
 
 **6.2 Structured Logging**
 
