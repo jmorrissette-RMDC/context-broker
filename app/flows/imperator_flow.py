@@ -540,8 +540,9 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
 
     ARCH-05: Proper graph structure with agent_node <-> tool_node loop
              via conditional edges.  No while loops inside nodes.
-    ARCH-06: No checkpointer.  The graph runs fresh each invocation.
-             History is loaded from PostgreSQL in agent_node.
+    D-01:    MemorySaver checkpointer for graph execution state —
+             interrupt/resume, tool call tracking, mid-execution persistence.
+             Long-term conversation persistence handled by Context Broker pipeline.
     F-22:    Results stored via conv_store_message in store_and_end.
     """
     # R6-M14: Build the ToolNode with only the tools that match the config.
@@ -580,5 +581,8 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
 
     workflow.add_edge("store_and_end", END)
 
-    # ARCH-06: No checkpointer — compile without one
-    return workflow.compile()
+    # D-01: MemorySaver for graph execution state (interrupt/resume, tool tracking).
+    # No infrastructure dependency — works for eMADs and standalone TEs.
+    from langgraph.checkpoint.memory import MemorySaver
+
+    return workflow.compile(checkpointer=MemorySaver())
