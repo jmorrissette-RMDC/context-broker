@@ -198,12 +198,12 @@ async def wait_for_pipeline(
                 )
                 return False
 
-        # Success: all embeddings done and queues empty
+        # Success: all queues empty (some messages may have null content and skip embedding)
         if (
-            counts["total_embedded"] >= expected_messages
-            and queues["embedding_queue"] == 0
+            queues["embedding_queue"] == 0
             and queues["assembly_queue"] == 0
             and queues["extraction_queue"] == 0
+            and counts["total_embedded"] > 0
         ):
             log.info(
                 f"Pipeline complete. "
