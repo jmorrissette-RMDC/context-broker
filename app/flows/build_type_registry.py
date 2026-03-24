@@ -98,12 +98,12 @@ def list_build_types() -> list[str]:
 
 
 def clear_compiled_cache() -> None:
-    """Clear all compiled graph caches.
+    """Clear compiled graph caches only (not the registry).
 
     Called after install_stategraph() to ensure next invocation
-    uses freshly compiled graphs from updated packages.
+    recompiles graphs from updated packages. The registry itself
+    is repopulated by stategraph_registry.scan().
     """
     with _lock:
         _compiled_cache.clear()
-        _registry.clear()
-    _log.info("Build type registry and compiled graph caches cleared")
+    _log.info("Compiled graph caches cleared")
