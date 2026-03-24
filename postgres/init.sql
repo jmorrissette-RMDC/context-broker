@@ -161,12 +161,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_window_tier_seq
 -- Enables Imperator to query logs from all MAD containers.
 -- ============================================================
 
--- Fluent Bit's native pgsql output schema.
--- tag: Docker container identifier (from the log file path or tag config)
+-- Fluent Bit's native pgsql output schema (exact column order matters).
+-- The pgsql plugin inserts: (tag, time, data) — no id column.
+-- tag: derived from log file path (contains container hash)
 -- time: log timestamp
--- data: full log record as JSONB (includes log, stream, source, parsed fields)
+-- data: full log record as JSONB
 CREATE TABLE IF NOT EXISTS system_logs (
-    id              BIGSERIAL PRIMARY KEY,
     tag             VARCHAR(255),
     time            TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     data            JSONB
