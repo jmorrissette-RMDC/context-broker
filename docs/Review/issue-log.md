@@ -348,7 +348,7 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | R7-M1 | major | Singleton Imperator caching | imperator_flow.py, config.example.yml | FIXED | Documented admin_tools as restart-required in config. | 4/5. |
 | R7-M2 | R7 | major | Blocking file I/O in `_config_read_tool` | `app/flows/imperator_flow.py` | OPEN | 3/5. |
 | R7-M3 | major | MCP session unlocked path | mcp.py | FIXED | Extended _session_lock to cover put_nowait in tool_call handler. | 3/5. |
-| R7-M4 | R7 | major | `_total_queued_messages` counter unsafe mutation | `app/routes/mcp.py` | OPEN | 2/5. |
+| R7-M4 | R7 | major | `_total_queued_messages` counter unsafe mutation | `app/routes/mcp.py` | CLOSED | Edge case: single-threaded asyncio + GIL, no real concurrency path. |
 | R7-M5 | R7 | major | Redis lock-acquisition nodes crash if Redis unavailable | `app/flows/build_types/` | OPEN | 2/5. |
 | R7-M6 | R7 | major | Passthrough lock-release crashes if Redis down | `app/flows/build_types/passthrough.py` | OPEN | 1/5. |
 | R7-M7 | R7 | major | `known_exception_handler` missing `asyncpg.PostgresError` | `app/main.py` | OPEN | 2/5. |
@@ -358,27 +358,27 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | R7-M11 | R7 | major | Assembly summaries can exceed `max_token_budget` | `app/flows/build_types/standard_tiered.py` | OPEN | 1/5. |
 | R7-M12 | R7 | major | Lock TTL not renewed during archival consolidation | `app/flows/build_types/standard_tiered.py` | OPEN | 1/5. |
 | R7-M13 | R7 | major | Dead-letter requeue loses extraction priority | `app/workers/arq_worker.py` | OPEN | 1/5. |
-| R7-M14 | R7 | major | Assembly dedup key can permanently skip jobs | `app/flows/embed_pipeline.py` | OPEN | 1/5. |
+| R7-M14 | R7 | major | Assembly dedup key can permanently skip jobs | `app/flows/embed_pipeline.py` | CLOSED | Edge case: 60s TTL expires naturally, assembly lock is 300s. No permanent skip. |
 | R7-M15 | R7 | major | Mem0 config hash ignores env vars | `app/memory/mem0_client.py` | OPEN | 1/5. |
-| R7-M16 | R7 | major | `_db_query_tool` lacks table/statement constraints | `app/flows/imperator_flow.py` | OPEN | 1/5. |
+| R7-M16 | R7 | major | `_db_query_tool` lacks table/statement constraints | `app/flows/imperator_flow.py` | CLOSED | Edge case: SET TRANSACTION READ ONLY enforced at DB level. DML impossible regardless of SQL structure. |
 | R7-M17 | R7 | major | Malformed jobs create infinite poison-pill loop | `app/workers/arq_worker.py` | OPEN | 1/5. |
 | R7-M18 | major | Recipient NOT NULL for system/tool | message_pipeline.py | FIXED | Added defaults: system->all, tool->assistant, else->all. | 1/5. |
 | R7-M19 | R7 | major | `conv_get_history` omits `tool_calls`/`tool_call_id` | `app/flows/conversation_ops_flow.py` | OPEN | 1/3 functional. |
 | R7-M20 | R7 | major | Caller-provided priority silently ignored | `app/flows/message_pipeline.py` | OPEN | 1/3 functional. |
-| R7-M21 | R7 | major | Adaptive loading may miss older messages on first assembly | `app/flows/build_types/standard_tiered.py` | OPEN | 1/3 functional. |
+| R7-M21 | R7 | major | Adaptive loading may miss older messages on first assembly | `app/flows/build_types/standard_tiered.py` | CLOSED | Fixed by D-09: initial_lookback_multiplier (default 3x) implemented in load_messages. |
 
 **Minors (all OPEN):**
 
 | ID | Round | Severity | Description | File(s) | Status | Notes |
 |----|-------|----------|-------------|---------|--------|-------|
-| R7-m1 | R7 | minor | Config cache fast path racy | `app/config.py` | OPEN | |
-| R7-m2 | R7 | minor | Prompt cache not concurrency-safe | `app/prompt_loader.py` | OPEN | |
+| R7-m1 | R7 | minor | Config cache fast path racy | `app/config.py` | CLOSED | Edge case: CPython GIL + single-threaded asyncio. Worst case is extra file read. |
+| R7-m2 | R7 | minor | Prompt cache not concurrency-safe | `app/prompt_loader.py` | CLOSED | Edge case: same as m1 — GIL atomic dict ops, no corruption possible. |
 | R7-m3 | R7 | minor | `fetch_unextracted_messages` gets pool twice | `app/flows/memory_extraction.py` | OPEN | |
 | R7-m4 | R7 | minor | Conv search vector query expensive MIN scan | `app/flows/search_flow.py` | OPEN | |
 | R7-m5 | R7 | minor | `search_context_windows` unbounded limit | `app/flows/conversation_ops_flow.py` | OPEN | |
 | R7-m6 | R7 | minor | Recipient migration backfills 'unknown' vs runtime defaults | `app/migrations.py` | OPEN | |
 | R7-m7 | R7 | minor | `setup_logging` doesn't update existing handlers | `app/logging_setup.py` | OPEN | |
-| R7-m8 | R7 | minor | `init_postgres`/`init_redis` double-init race | `app/main.py` | OPEN | |
+| R7-m8 | R7 | minor | `init_postgres`/`init_redis` double-init race | `app/main.py` | CLOSED | Edge case: only called from single-threaded lifespan context. No real concurrency path. |
 | R7-m9 | R7 | minor | N+1 serial inserts after concurrent summarization | `app/flows/build_types/standard_tiered.py` | OPEN | |
 | R7-m10 | R7 | minor | Broad `except Exception` in `pt_finalize` (non-Mem0) | `app/flows/build_types/passthrough.py` | OPEN | |
 | R7-m11 | R7 | minor | Shared SQL `extra_where` fragile across CTEs | `app/flows/search_flow.py` | OPEN | |
@@ -387,8 +387,8 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | R7-m14 | R7 | minor | `bind_tools` called every `agent_node` invocation | `app/flows/imperator_flow.py` | OPEN | |
 | R7-m15 | R7 | minor | MCP global config vars mutated every request | `app/routes/mcp.py` | OPEN | |
 | R7-m16 | R7 | minor | Dispatch initializes KE-specific state for all types | `app/flows/tool_dispatch.py` | OPEN | |
-| R7-m17 | R7 | minor | Postgres retry exits prematurely on Imperator init fail | `app/main.py` | OPEN | |
-| R7-m18 | R7 | minor | Entrypoint broad `except Exception` in YAML parsing | `entrypoint.sh` | OPEN | |
+| R7-m17 | R7 | minor | Postgres retry exits prematurely on Imperator init fail | `app/main.py` | FIXED | Fixed by subsequent changes: uses `continue` instead of `return`. |
+| R7-m18 | R7 | minor | Entrypoint broad `except Exception` in YAML parsing | `entrypoint.sh` | CLOSED | Edge case: shell bootstrap script with safe fallback default, not application code. |
 | R7-m19 | R7 | minor | Missing null check for `build_type` in dispatch retrieval | `app/flows/tool_dispatch.py` | OPEN | |
 | R7-m20 | R7 | minor | Passthrough retrieval doesn't update `last_accessed_at` | `app/flows/build_types/passthrough.py` | OPEN | |
 | R7-m21 | R7 | minor | `search_context_windows` doesn't return `last_accessed_at` | `app/flows/conversation_ops_flow.py` | OPEN | |
@@ -440,8 +440,9 @@ Updated 2026-03-24 after log shipper implementation.
 
 | Status | Count |
 |--------|-------|
-| OPEN | 46 |
-| FIXED | 184 |
+| OPEN | 37 |
+| FIXED | 186 |
+| CLOSED | 7 |
 | WONTFIX | 14 |
 | FALSE_POSITIVE | 1 |
 | REMOVED | 1 |
@@ -449,4 +450,5 @@ Updated 2026-03-24 after log shipper implementation.
 
 ### Open Items
 
-45 items from Round 7 (18 majors + 27 minors, all deferred to deployment phase) + 1 (PG-21: StateGraph mandate for config resolution logic).
+36 items from Round 7 (15 majors + 21 minors) + 1 (PG-21: StateGraph mandate for config resolution logic).
+9 items closed this session: 7 edge cases (not real issues under CPython/asyncio), 2 fixed by subsequent changes (R7-M21 by D-09, R7-m17 by retry loop fix).
