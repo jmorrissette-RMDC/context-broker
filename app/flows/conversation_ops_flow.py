@@ -396,3 +396,184 @@ def build_search_context_windows_flow() -> StateGraph:
     workflow.set_entry_point("search_context_windows_node")
     workflow.add_edge("search_context_windows_node", END)
     return workflow.compile()
+
+
+# ============================================================
+# Get Context Flow (D-02, D-03)
+# ============================================================
+# Core tool: get_context — auto-creates conversation/window as needed,
+# then retrieves assembled context.
+
+
+class GetContextState(TypedDict):
+    """State for the get_context core tool."""
+
+    build_type: str
+    budget: int                          # raw requested budget
+    snapped_budget: int                  # after bucket snapping
+    conversation_id: Optional[str]       # None = create new
+    config: dict
+
+    # Resolved by flow
+    context_window_id: Optional[str]
+    context_messages: Optional[list]
+    context_tiers: Optional[dict]
+    total_tokens_used: int
+    assembly_status: str
+    warnings: list[str]
+    error: Optional[str]
+
+
+async def ensure_conversation_node(state: GetContextState) -> dict:
+    """Create a conversation if none was provided."""
+    if state.get("conversation_id"):
+        return {}  # Already have one
+
+    pool = get_pg_pool()
+    conv_id = uuid.uuid4()
+    await pool.execute(
+        "INSERT INTO conversations (id) VALUES ($1)",
+        conv_id,
+    )
+    _log.info("get_context: auto-created conversation %s", conv_id)
+    return {"conversation_id": str(conv_id)}
+
+
+async def snap_budget_node(state: GetContextState) -> dict:
+    """Snap the requested budget to the nearest bucket."""
+    from app.budget import snap_budget
+
+    snapped = snap_budget(state["budget"])
+    if snapped != state["budget"]:
+        _log.info(
+            "get_context: budget %d snapped to bucket %d",
+            state["budget"],
+            snapped,
+        )
+    return {"snapped_budget": snapped}
+
+
+async def find_or_create_window_node(state: GetContextState) -> dict:
+    """Look up existing window by (conversation_id, build_type, snapped_budget).
+    Create one if it doesn't exist."""
+    if state.get("error"):
+        return {}
+
+    pool = get_pg_pool()
+    conv_id = uuid.UUID(state["conversation_id"])
+    build_type = state["build_type"]
+    snapped_budget = state["snapped_budget"]
+    config = state["config"]
+
+    # Validate build type exists in config
+    try:
+        get_build_type_config(config, build_type)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    # Look for existing window with matching (conversation, build_type, budget)
+    row = await pool.fetchrow(
+        """
+        SELECT id FROM context_windows
+        WHERE conversation_id = $1 AND build_type = $2 AND max_token_budget = $3
+        LIMIT 1
+        """,
+        conv_id,
+        build_type,
+        snapped_budget,
+    )
+
+    if row:
+        _log.info("get_context: reusing window %s", row["id"])
+        return {"context_window_id": str(row["id"])}
+
+    # Create new window
+    window_id = uuid.uuid4()
+    await pool.execute(
+        """
+        INSERT INTO context_windows
+            (id, conversation_id, participant_id, build_type, max_token_budget)
+        VALUES ($1, $2, $3, $4, $5)
+        """,
+        window_id,
+        conv_id,
+        "auto",  # participant_id kept for schema compat, "auto" for core tool
+        build_type,
+        snapped_budget,
+    )
+    _log.info(
+        "get_context: created window %s (type=%s, budget=%d)",
+        window_id,
+        build_type,
+        snapped_budget,
+    )
+    return {"context_window_id": str(window_id)}
+
+
+async def retrieve_context_node(state: GetContextState) -> dict:
+    """Invoke the build-type-specific retrieval graph."""
+    if state.get("error"):
+        return {}
+
+    from app.flows.build_type_registry import get_retrieval_graph
+
+    retrieval_graph = get_retrieval_graph(state["build_type"])
+    result = await retrieval_graph.ainvoke(
+        {
+            "context_window_id": state["context_window_id"],
+            "config": state["config"],
+            "window": None,
+            "build_type_config": None,
+            "conversation_id": None,
+            "max_token_budget": 0,
+            "tier1_summary": None,
+            "tier2_summaries": [],
+            "recent_messages": [],
+            "semantic_messages": [],
+            "knowledge_graph_facts": [],
+            "assembly_status": "pending",
+            "context_messages": None,
+            "context_tiers": None,
+            "total_tokens_used": 0,
+            "warnings": [],
+            "error": None,
+        }
+    )
+
+    return {
+        "context_messages": result.get("context_messages"),
+        "context_tiers": result.get("context_tiers"),
+        "total_tokens_used": result.get("total_tokens_used", 0),
+        "assembly_status": result.get("assembly_status", "ready"),
+        "warnings": result.get("warnings", []),
+        "error": result.get("error"),
+    }
+
+
+def route_after_window(state: GetContextState) -> str:
+    """Route: if error, end. Otherwise retrieve context."""
+    if state.get("error"):
+        return END
+    return "retrieve_context_node"
+
+
+def build_get_context_flow() -> StateGraph:
+    """Build and compile the get_context core tool StateGraph."""
+    workflow = StateGraph(GetContextState)
+
+    workflow.add_node("ensure_conversation_node", ensure_conversation_node)
+    workflow.add_node("snap_budget_node", snap_budget_node)
+    workflow.add_node("find_or_create_window_node", find_or_create_window_node)
+    workflow.add_node("retrieve_context_node", retrieve_context_node)
+
+    workflow.set_entry_point("ensure_conversation_node")
+    workflow.add_edge("ensure_conversation_node", "snap_budget_node")
+    workflow.add_edge("snap_budget_node", "find_or_create_window_node")
+    workflow.add_conditional_edges(
+        "find_or_create_window_node",
+        route_after_window,
+        {"retrieve_context_node": "retrieve_context_node", END: END},
+    )
+    workflow.add_edge("retrieve_context_node", END)
+
+    return workflow.compile()
