@@ -71,6 +71,14 @@ def reset_neo4j():
     log.info(f"  Neo4j: {output or 'cleared'}")
 
 
+def reset_imperator_state():
+    """Remove the Imperator's persistent state file so it creates a new conversation."""
+    ssh_cmd(
+        "rm -f /mnt/storage/projects/portfolio/ContextBroker/data/imperator_state.json"
+    )
+    log.info("  Imperator state file removed")
+
+
 def main():
     log.info("=== Resetting databases for integration test ===")
 
@@ -82,6 +90,12 @@ def main():
 
     log.info("Neo4j:")
     reset_neo4j()
+
+    log.info("Imperator state:")
+    reset_imperator_state()
+
+    log.info("\nIMPORTANT: Restart the langgraph container for Imperator to create a new conversation:")
+    log.info("  docker compose restart context-broker-langgraph")
 
     log.info("=== Reset complete ===")
 

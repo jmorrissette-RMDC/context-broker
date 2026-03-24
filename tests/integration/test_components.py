@@ -82,10 +82,14 @@ def ssh_config_set(file: str, key_path: str, value: str):
 
 
 def reset_small():
-    """Quick reset for component tests — truncate messages only."""
+    """Quick reset for component tests — truncate messages/summaries/windows only.
+
+    Preserves conversations table so the Imperator's persistent
+    conversation_id remains valid (it holds the ID in memory).
+    """
     ssh_cmd(
         'docker exec context-broker-postgres psql -U context_broker -d context_broker '
-        '-c "TRUNCATE conversation_messages, conversation_summaries, context_windows, conversations CASCADE"'
+        '-c "TRUNCATE conversation_messages, conversation_summaries, context_windows CASCADE"'
     )
     ssh_cmd('docker exec context-broker-redis redis-cli FLUSHDB')
 
@@ -294,23 +298,23 @@ def test_d2():
 @test("D3: Pipeline status tool (diagnostic)")
 def test_d3():
     test_d3._group = "GroupD"
-    # Ask Imperator about pipeline status
-    result = chat_call("What is the current pipeline status? Use your pipeline status tool.")
+    # Tool-use via ReAct requires multiple LLM calls — needs longer timeout
+    # (especially on local Ollama; fast with cloud Gemini)
+    result = chat_call("What is the current pipeline status? Use your pipeline status tool.", timeout=180)
     content = result["choices"][0]["message"]["content"]
-    # Should mention queues or pipeline in some form
     assert len(content) > 20, f"Response too short for pipeline status: {content}"
 
 @test("D4: Log query tool (diagnostic)")
 def test_d4():
     test_d4._group = "GroupD"
-    result = chat_call("Show me the last 5 log entries from any container. Use your log query tool.")
+    result = chat_call("Show me the last 5 log entries from any container. Use your log query tool.", timeout=180)
     content = result["choices"][0]["message"]["content"]
     assert len(content) > 20, f"Response too short for log query: {content}"
 
 @test("D5: Context introspection tool (diagnostic)")
 def test_d5():
     test_d5._group = "GroupD"
-    result = chat_call("Introspect your own context. What build type and tiers are you using?")
+    result = chat_call("Introspect your own context. What build type and tiers are you using?", timeout=180)
     content = result["choices"][0]["message"]["content"]
     assert len(content) > 20, f"Response too short for introspection: {content}"
 
