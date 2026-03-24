@@ -425,6 +425,9 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | PG-20 | Post | minor | Cross-provider tests: clear embeddings between runs when switching embedding providers | `tests/` | NOTE | Dimension mismatch (e.g., 768 vs 1024) is expected when switching embedding models — not a bug. Clear old embeddings before each cross-provider run. |
 | PG-21 | Post | minor | `get_chat_model()` contains application logic (role→config resolution) outside StateGraph | `app/config.py` | OPEN | Decision logic should be a graph node. Factory/cache is substrate. Deferred — record for Gate 3. |
 | PG-22 | Post | info | Cross-provider regression: 6/6 runs PASS (268/268 each) | N/A | FIXED | Together, Google, OpenAI, Anthropic, xAI, Ollama — all with same codebase, config-only changes. State 4 promise validated. |
+| PG-23 | Post | major | Imperator still uses internal calls, not MCP tools (D-07) | `app/flows/imperator_flow.py` | OPEN | Uses `_load_conversation_history()` and direct pipeline calls instead of `get_context`/`store_message` MCP tools. |
+| PG-24 | Post | major | Initial lookback multiplier not implemented (D-09) | `app/flows/build_types/standard_tiered.py` | OPEN | Config param `initial_lookback_multiplier` exists but assembly code doesn't use it. |
+| PG-25 | Post | minor | Imperator state file stores context_window_id (obsolete) | `app/imperator/state_manager.py` | OPEN | Should store only conversation_id since context_window_id removed from external interface. |
 
 ---
 
@@ -434,7 +437,7 @@ Updated 2026-03-23 after cross-provider regression.
 
 | Status | Count |
 |--------|-------|
-| OPEN | 51 |
+| OPEN | 54 |
 | FIXED | 176 |
 | WONTFIX | 13 |
 | FALSE_POSITIVE | 1 |

@@ -368,13 +368,45 @@ async def agent_node(state: ImperatorState) -> dict:
                 "error": f"Prompt loading failed: {exc}",
             }
 
-        context_window_id = state.get("context_window_id")
-        if context_window_id:
-            history_context = await _load_conversation_history(
-                context_window_id, config
-            )
-            if history_context:
-                system_content += history_context
+        # D-07: Load context via the get_context core tool (self-consumption).
+        # The Imperator uses the same tool interface any external agent would.
+        conversation_id = state.get("context_window_id")  # legacy name in state
+        if conversation_id:
+            try:
+                from app.flows.tool_dispatch import dispatch_tool
+
+                imperator_cfg = config.get("imperator", {})
+                build_type = imperator_cfg.get("build_type", "standard-tiered")
+                budget = imperator_cfg.get("max_context_tokens", 8192)
+                if not isinstance(budget, int):
+                    budget = 8192
+
+                ctx_result = await dispatch_tool(
+                    "get_context",
+                    {
+                        "build_type": build_type,
+                        "budget": budget,
+                        "conversation_id": str(conversation_id),
+                    },
+                    config,
+                    None,
+                )
+                context_messages = ctx_result.get("context", [])
+                if context_messages:
+                    # Format context messages as history text for the system prompt
+                    history_lines = []
+                    for msg in context_messages:
+                        role = msg.get("role", "unknown")
+                        content = msg.get("content", "")
+                        if content:
+                            history_lines.append(f"[{role}] {content}")
+                    if history_lines:
+                        system_content += (
+                            "\n\n--- Conversation History ---\n"
+                            + "\n".join(history_lines)
+                        )
+            except (ValueError, RuntimeError, OSError) as exc:
+                _log.warning("Failed to load context via get_context: %s", exc)
 
         messages = [SystemMessage(content=system_content)] + messages
 
@@ -445,14 +477,13 @@ def should_continue(state: ImperatorState) -> str:
 
 
 async def store_user_message(state: ImperatorState) -> dict:
-    """Persist the user's message via the standard message pipeline.
+    """Persist the user's message via the store_message core tool.
 
-    D-01: Split from store_and_end into separate nodes to avoid
-    MultipleSubgraphsError — MemorySaver requires each subgraph
-    invocation to be in its own graph node.
+    D-01: Split into separate node for MemorySaver compatibility.
+    D-07: Uses dispatch_tool("store_message") — self-consumption.
     """
-    context_window_id = state.get("context_window_id")
-    if not context_window_id:
+    conversation_id = state.get("context_window_id")  # legacy name in state
+    if not conversation_id:
         return {}
 
     user_content = None
@@ -463,36 +494,31 @@ async def store_user_message(state: ImperatorState) -> dict:
     if not user_content:
         return {}
 
-    pipeline = _get_message_pipeline()
     try:
-        await pipeline.ainvoke(
+        from app.flows.tool_dispatch import dispatch_tool
+
+        await dispatch_tool(
+            "store_message",
             {
-                "context_window_id": context_window_id,
+                "conversation_id": str(conversation_id),
                 "role": "user",
                 "sender": "imperator_user",
-                "recipient": "imperator",
                 "content": user_content,
-                "model_name": None,
-                "tool_calls": None,
-                "tool_call_id": None,
-                "message_id": None,
-                "conversation_id": None,
-                "sequence_number": None,
-                "was_collapsed": False,
-                "queued_jobs": [],
-                "error": None,
-            }
+            },
+            state.get("config", {}),
+            None,
         )
-    except (RuntimeError, OSError) as exc:
+    except (ValueError, RuntimeError, OSError) as exc:
         _log.warning("Failed to store Imperator user message: %s", exc)
 
     return {}
 
 
 async def store_assistant_message(state: ImperatorState) -> dict:
-    """Persist the assistant's response and extract response_text.
+    """Persist the assistant's response via the store_message core tool.
 
-    D-01: Second persistence node — stores assistant response separately.
+    D-01: Second persistence node.
+    D-07: Uses dispatch_tool("store_message") — self-consumption.
     """
     last_ai = None
     for msg in reversed(state["messages"]):
@@ -502,29 +528,23 @@ async def store_assistant_message(state: ImperatorState) -> dict:
 
     response_text = last_ai.content if last_ai else ""
 
-    context_window_id = state.get("context_window_id")
-    if context_window_id and response_text:
-        pipeline = _get_message_pipeline()
+    conversation_id = state.get("context_window_id")  # legacy name in state
+    if conversation_id and response_text:
         try:
-            await pipeline.ainvoke(
+            from app.flows.tool_dispatch import dispatch_tool
+
+            await dispatch_tool(
+                "store_message",
                 {
-                    "context_window_id": context_window_id,
+                    "conversation_id": str(conversation_id),
                     "role": "assistant",
                     "sender": "imperator",
-                    "recipient": "imperator_user",
                     "content": response_text,
-                    "model_name": None,
-                    "tool_calls": None,
-                    "tool_call_id": None,
-                    "message_id": None,
-                    "conversation_id": None,
-                    "sequence_number": None,
-                    "was_collapsed": False,
-                    "queued_jobs": [],
-                    "error": None,
-                }
+                },
+                state.get("config", {}),
+                None,
             )
-        except (RuntimeError, OSError) as exc:
+        except (ValueError, RuntimeError, OSError) as exc:
             _log.warning("Failed to store Imperator assistant message: %s", exc)
 
     return {"response_text": response_text}

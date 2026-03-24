@@ -167,10 +167,10 @@ async def load_window_config(state: StandardTieredAssemblyState) -> dict:
 async def load_messages(state: StandardTieredAssemblyState) -> dict:
     """Load messages for the conversation in chronological order.
 
-    R2-F11: Adaptive message load limit. Instead of a fixed limit, estimate
-    the needed messages from the tier3 token budget and average tokens per
-    message. This avoids loading far more messages than could ever fit in
-    the context window while still providing enough for summarization.
+    R2-F11: Adaptive message load limit based on tier3 budget.
+    D-09: On first assembly (no existing summaries), look back further
+    using the initial_lookback_multiplier to provide enough raw material
+    for initial summarization.
     """
     pool = get_pg_pool()
     build_type_config = state.get("build_type_config") or {}
@@ -179,6 +179,21 @@ async def load_messages(state: StandardTieredAssemblyState) -> dict:
     tier3_budget = int(max_budget * tier3_pct)
     tokens_per_message = get_tuning(state["config"], "tokens_per_message_estimate", 150)
     adaptive_limit = max(50, tier3_budget // tokens_per_message)
+
+    # D-09: On initial assembly, look back further to build first summaries.
+    # Check if any summaries exist for this window — if not, use multiplier.
+    window_id = state.get("context_window_id") or (
+        state["window"]["id"] if state.get("window") else None
+    )
+    if window_id:
+        existing_summaries = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_summaries WHERE context_window_id = $1",
+            uuid.UUID(str(window_id)),
+        )
+        if existing_summaries == 0:
+            lookback_multiplier = build_type_config.get("initial_lookback_multiplier", 3)
+            lookback_tokens = int(max_budget * lookback_multiplier)
+            adaptive_limit = max(adaptive_limit, lookback_tokens // tokens_per_message)
 
     rows = await pool.fetch(
         """
