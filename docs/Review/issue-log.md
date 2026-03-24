@@ -484,7 +484,8 @@ Updated 2026-03-24. Component tests 28/28 PASS. Cross-provider 3/3 PASS. State 4
 
 | PG-56 | Post | major | Standard-tiered retrieval returns only tier 1 for large conversations | retrieval_flow.py | OPEN | c3164a6a (6264 msgs) has 152 summaries but get_context returns empty tiers. Sonnet rated POOR: "only tier 1 archival summary, no tier 2 or tier 3". Retrieval graph may not be loading tier 2/3 correctly at scale. |
 
-3 open majors: PG-49 (extraction at scale), PG-56 (tiered retrieval at scale).
-PG-43 FIXED (conversation resilience), PG-51 FIXED (log query data type), PG-53 FIXED (admin_tools hot-reload).
+1 open major: PG-56 (standard-tiered retrieval returns only tier 1 for large conversations).
+PG-43 FIXED, PG-49 FIXED (Mem0 client reset on error), PG-50 FIXED, PG-51 FIXED, PG-53 FIXED.
+Phase 2: 10/10. Phase 3: 9/9. Phase 4a: 3/4 (PG-56).
 2 minor: PG-52 (introspection keywords).
 PG-50 FIXED — unique thread_id per invocation. Phase 2: 8/10, Phase 3: 6/9.

@@ -66,7 +66,7 @@ def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
 
     context_text = json.dumps(ctx["context"])[:50000]  # Truncate for CLI
     total_tokens = ctx.get("total_tokens", 0)
-    tiers = ctx.get("context_tiers", {})
+    tiers = ctx.get("tiers", ctx.get("context_tiers", {}))
 
     # Get some original messages for comparison
     rows_result = subprocess.run(
