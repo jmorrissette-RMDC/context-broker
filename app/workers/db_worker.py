@@ -74,9 +74,9 @@ async def _embedding_worker(config: dict) -> None:
             config = await async_load_config()
             pool = get_pg_pool()
 
-            # Count pending for metrics
+            # Count pending for metrics (match the fetch filter)
             pending = await pool.fetchval(
-                "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NULL"
+                "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NULL AND content IS NOT NULL"
             )
             EMBEDDING_QUEUE_DEPTH.set(pending)
 
@@ -143,10 +143,11 @@ async def _embedding_worker(config: dict) -> None:
         except asyncio.CancelledError:
             _log.info("Embedding worker cancelled")
             raise
-        except (OSError, RuntimeError) as exc:
-            _log.error("Embedding worker error: %s", exc)
+        except Exception as exc:
+            _log.error("Embedding worker error: %s: %s", type(exc).__name__, exc)
             consecutive_failures += 1
             if consecutive_failures >= 3:
+                _log.warning("Embedding worker backing off after %d failures", consecutive_failures)
                 await asyncio.sleep(5)
 
 
@@ -234,8 +235,8 @@ async def _extraction_worker(config: dict) -> None:
         except asyncio.CancelledError:
             _log.info("Extraction worker cancelled")
             raise
-        except (OSError, RuntimeError) as exc:
-            _log.error("Extraction worker error: %s", exc)
+        except Exception as exc:
+            _log.error("Extraction worker error: %s: %s", type(exc).__name__, exc)
             consecutive_failures += 1
             if consecutive_failures >= 3:
                 await asyncio.sleep(5)

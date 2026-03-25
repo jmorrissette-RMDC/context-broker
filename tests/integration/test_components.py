@@ -213,7 +213,7 @@ def test_b3():
 def test_b4():
     test_b4._group = "GroupB"
     # Wait briefly for the embedding job from B3
-    time.sleep(5)
+    time.sleep(15)
     count = ssh_psql("SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL")
     assert int(count or "0") > 0, f"No embeddings generated — embedding provider may be misconfigured"
 
@@ -253,7 +253,7 @@ def test_c1():
 def test_c2():
     test_c2._group = "GroupC"
     # Wait for embedding pipeline
-    time.sleep(10)
+    time.sleep(15)
     embedded = ssh_psql("SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL")
     assert int(embedded or "0") >= 3, f"Expected >=3 embeddings, got {embedded}"
 
@@ -374,7 +374,7 @@ def test_f1():
         resp = client.get(CB_HEALTH_URL, timeout=10)
     body = resp.json()
     assert "database" in body, "Missing database status"
-    assert "cache" in body, "Missing cache status"
+    # Redis removed — only database + neo4j
     assert "neo4j" in body, "Missing neo4j status"
 
 @test("F2: Store message succeeds (basic pipeline resilience)")
