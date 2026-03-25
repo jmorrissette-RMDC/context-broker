@@ -333,13 +333,7 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
     lock_ttl = get_tuning(config, "assembly_lock_ttl_seconds", 300)
 
     async def _summarize_chunk(chunk: list[dict]) -> tuple[list[dict], str | None]:
-        # R5-M13: Renew lock TTL before each chunk summarization to prevent
-        # expiry during long-running LLM calls
-        if lock_key and lock_token:
-            current_val = None  # Advisory locks: renewal not needed
-            if current_val == lock_token:  # decode_responses=True, already a string
-                # Advisory locks do not expire � held until released
-
+        # Advisory locks: no TTL renewal needed
         chunk_text = "\n".join(
             f"[{m['role']} | {m['sender']}] {m.get('content') or ''}" for m in chunk
         )
@@ -540,11 +534,7 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
     lock_token = state.get("lock_token")
     if lock_key and lock_token:
         try:
-            pool = get_pg_pool()  # Advisory lock (Redis removed)
-            current_val = None  # Advisory locks: renewal not needed
-            if current_val == lock_token:
-                lock_ttl = get_tuning(config, "assembly_lock_ttl_seconds", 300)
-                # Advisory locks do not expire � held until released
+            pass  # Advisory locks: no TTL renewal needed
         except (RuntimeError, OSError, ConnectionError) as exc:
             _log.warning("Failed to renew lock TTL for archival consolidation: %s", exc)
 
@@ -861,9 +851,13 @@ async def ret_wait_for_assembly(state: StandardTieredRetrievalState) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            in_progress = not await pool.fetchval("SELECT pg_try_advisory_lock()", hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF)
-                if not in_progress:
-                    await pool.execute("SELECT pg_advisory_unlock()", hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF)
+            lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+            acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
+            if acquired:
+                await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+                in_progress = False
+            else:
+                in_progress = True
         except (ConnectionError, OSError, RuntimeError) as exc:
             _log.warning(
                 "Retrieval: Redis error during assembly wait, proceeding: %s", exc
