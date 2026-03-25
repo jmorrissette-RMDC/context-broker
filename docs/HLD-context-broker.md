@@ -34,11 +34,11 @@ The system is deployed as a Docker Compose group of 6 containers, communicating 
                     │   │ langgraph:8000   │     logic            │
                     │   └──────┬───────────┘                      │
                     │          │                                  │
-                    │    ┌─────┴─────┬──────────────┐             │
-                    │    ▼           ▼              ▼             │
-                    │ ┌──────┐  ┌──────┐    ┌──────────┐          │
-                    │ │pg:5432│ │redis │    │neo4j:7687│          │
-                    │ └──────┘  └──────┘    └──────────┘          │
+                    │    ┌─────┴─────┬──────────┐                  │
+                    │    ▼           ▼          ▼                  │
+                    │ ┌──────┐  ┌──────────┐                      │
+                    │ │pg:5432│  │neo4j:7687│                      │
+                    │ └──────┘  └──────────┘                      │
                     └─────────────────────────────────────────────┘
 ```
 
@@ -47,10 +47,9 @@ The gateway resides on both the external host-exposed network and the internal `
 | Container | Role | Image |
 | --- | --- | --- |
 | `context-broker` | Nginx reverse proxy. Sole network boundary. Routes requests. | `nginx:alpine` |
-| `context-broker-langgraph` | Python backend (ASGI server). Runs LangGraph flows and async queue workers. | Custom (Python 3.12-slim) |
+| `context-broker-langgraph` | Python backend (ASGI server). Runs LangGraph flows and background workers. | Custom (Python 3.12-slim) |
 | `context-broker-postgres` | Relational and vector storage (messages, windows, summaries). | `pgvector/pgvector:pg16` |
 | `context-broker-neo4j` | Entity and relationship knowledge graph (via Mem0). | `neo4j:5` |
-| `context-broker-redis` | Async job queues, locks, and ephemeral state. | `redis:7-alpine` |
 | `context-broker-infinity` (optional) | Local embeddings and reranking via OpenAI-compatible `/v1/embeddings` and `/v1/rerank` APIs. No API keys needed. Remove if using cloud providers. | `michaelf34/infinity` |
 | `context-broker-ollama` (optional) | Local LLM inference via OpenAI-compatible API. No API keys needed. Remove if using cloud providers. | `ollama/ollama` |
 | `context-broker-log-shipper` (optional) | Discovers containers on context-broker-net via Docker API, tails logs, writes to Postgres `system_logs` table with resolved names. Remove if deployment has its own log collector. | Custom (Python) |
@@ -60,7 +59,7 @@ The Infinity container serves embeddings and reranking on the internal network u
 The Ollama container is optional. When present, it provides fully local LLM inference on the internal network — the LangGraph container calls it the same way it calls any cloud provider. When not present, LLM inference routes to configured cloud providers. The same `config.yml` controls the routing.
 
 **Volume Management:**
-- Host `./data` is mounted into the containers to persist databases (`/data/postgres`, `/data/neo4j`, `/data/redis`), Infinity model weights (`/data/infinity`), and the `imperator_state.json` file.
+- Host `./data` is mounted into the containers to persist databases (`/data/postgres`, `/data/neo4j`), Infinity model weights (`/data/infinity`), and the `imperator_state.json` file.
 - Host `./config` is mounted to provide `/config/config.yml` and `/config/credentials/.env`.
 
 **Deployment Customization:**
@@ -72,9 +71,9 @@ The Context Broker optimizes for fast ingestion and rapid retrieval by shifting 
 
 **End-to-End Message Flow:**
 1. **Context Window Initialization:** A client calls `conv_create_context_window` to establish a context window for a participant, automatically resolving its token budget via the configured provider.
-2. **Ingestion:** A client calls `conv_store_message` (accepting `context_window_id` or `conversation_id`, at least one required). The system persists the message to PostgreSQL, computing `token_count` and `priority` internally. It enqueues independent background jobs for embedding and memory extraction to Redis, then returns success immediately.
+2. **Ingestion:** A client calls `conv_store_message` (accepting `context_window_id` or `conversation_id`, at least one required). The system persists the message to PostgreSQL, computing `token_count` and `priority` internally, then returns success immediately. Background workers poll for new messages (NULL embeddings, unextracted messages) and process them asynchronously.
 3. **Embedding:** An async worker generates a contextual embedding for the message (using the configured LangChain embedding model) and updates the database row.
-4. **Assembly Trigger:** The embedding worker identifies all participant context windows attached to the conversation and proactively enqueues an independent context assembly job for each.
+4. **Assembly Trigger:** After embedding a batch, the worker identifies context windows that need reassembly and triggers assembly for each.
 5. **Context Assembly:** An async worker builds a new episodic context snapshot (e.g., tier 1 archival summary, tier 2 chunk summaries) via the configured LLM and stores the updated snapshot.
 6. **Memory Extraction:** Operating concurrently with the embedding and assembly pipeline, an async worker passes the new verbatim messages to Mem0, extracting facts, entities, and relationships into the Neo4j knowledge graph.
 7. **Retrieval:** An agent calls `conv_retrieve_context`. The system serves the pre-assembled episodic snapshot from the database, dynamically querying and injecting the semantic and knowledge graph layers at request time based on the recent context. The result is a structured **messages array** (list of OpenAI-format message dicts with `role`, `content`, and optionally `tool_calls` / `tool_call_id`), not a concatenated text string.
@@ -109,11 +108,11 @@ The system relies on eventual consistency across three distinct datastores. Post
 - **Neo4j (`context-broker-neo4j`):**
   - Accessed exclusively via Mem0 APIs.
   - Stores `Entity` nodes, `Fact` nodes, and their relationships (`MENTIONS`, `RELATED_TO`). Enables rich graph traversal queries during knowledge-enriched retrieval.
-- **Redis (`context-broker-redis`):**
-  - Used for ephemeral state (distributed locks to prevent concurrent context assembly) and lightweight job queues. It utilizes disk persistence (RDB/AOF) mapped via `/data/redis` to ensure pending background jobs survive container restarts.
+- **Job State (PostgreSQL):**
+  - Background processing state is tracked in the database itself. Messages with `embedding IS NULL` need embedding; messages with `memory_extracted IS NOT TRUE` need extraction. Context windows with stale `last_assembled_at` need reassembly. No external queue is required — the database is the single source of truth for both data and processing state. Concurrent assembly is prevented by PostgreSQL advisory locks.
 
 ### 5.1 Backup and Recovery
-The system relies entirely on host-level backups. All persistent state is confined to the mapped `/data` directory. Operational recovery is achieved via standard database dumps (`pg_dump`, `neo4j-admin database dump`) and capturing the Redis persistence directory. The Context Broker does not perform automated internal backups.
+The system relies entirely on host-level backups. All persistent state is confined to the mapped `/data` directory. Operational recovery is achieved via standard database dumps (`pg_dump`, `neo4j-admin database dump`). The Context Broker does not perform automated internal backups.
 
 ## 6. Interface Design
 
@@ -132,8 +131,8 @@ Programmatic access for agents, running on `/mcp`. Exposes core capabilities as 
 Running on `/v1/chat/completions`. Allows any standard chat UI (e.g., Chatbot UI) to interact with the Imperator agent. The endpoint parses the standard OpenAI payload, invokes the Imperator StateGraph, and streams back standard OpenAI SSE tokens (`data: {"choices": ...}`).
 
 ### 6.3 Health and Metrics
-- `GET /health`: Tests all backing service connections (PostgreSQL, Neo4j, Redis) and returns an aggregated status.
-- `GET /metrics`: Exposes Prometheus metrics (request counts, queue depths, job durations).
+- `GET /health`: Tests all backing service connections (PostgreSQL, Neo4j) and returns an aggregated status.
+- `GET /metrics`: Exposes Prometheus metrics (request counts, pipeline status, job durations).
 
 ### 6.4 Ingress Validation Boundary
 To satisfy the architectural ingress contract, all data from external sources must be validated before affecting application state or reaching the StateGraphs:
@@ -146,7 +145,7 @@ Malformed data is rejected at the boundary with appropriate HTTP status codes, p
 
 Configuration is separated into AE (infrastructure) and TE (cognitive) concerns per REQ-001 §9 and REQ-002 §7:
 
-- **AE Configuration** (`/config/config.yml`): Database connection strings, network topology, queue settings, package source (`local`, `pypi`, or `devpi`), operational parameters (log level, health check intervals). Read at startup; changes require a container restart.
+- **AE Configuration** (`/config/config.yml`): Database connection strings, network topology, worker settings, package source (`local`, `pypi`, or `devpi`), operational parameters (log level, health check intervals). Read at startup; changes require a container restart.
 - **TE Configuration** (`/config/te.yml`): Imperator settings (Identity, Purpose, Persona), inference provider assignments per cognitive function (Imperator conversation, summarization, extraction), embeddings, reranker, build type definitions, cognitive tuning parameters. Hot-reloadable; changes take effect without restart.
 - **Per-Use Inference:** Different cognitive functions use different LLM configurations. The Imperator's conversational model, summarization model, and extraction model are independently configurable. This enables cost/quality trade-offs (e.g., a capable model for the Imperator, a fast/cheap model for bulk summarization).
 - **Provider Abstraction:** Each LLM slot supports a `provider` field (`"openai"` for OpenAI-compatible providers, `"anthropic"` for Anthropic's native API). Defaults to `"openai"`.
@@ -182,12 +181,13 @@ Combines episodic layers with semantically retrieved messages and knowledge grap
 
 ## 9. Async Processing Model
 
-The system uses ARQ (Async Redis Queue) — a standard, lightweight Python library for async job processing backed by Redis. ARQ provides native retry with exponential backoff, dead-letter handling, and priority scheduling, consistent with the engineering requirement to use standard components where available.
+Background processing is driven by database state, not external queues. The database is the single source of truth for both data and processing state — no external queue system is required.
 
-- **Queues:** Three job types managed by ARQ: `embedding_jobs`, `context_assembly_jobs`, and `memory_extraction_jobs`. Each invokes the corresponding StateGraph.
-- **Concurrency & Locking:** ARQ workers process jobs concurrently. Distributed Redis locks prevent concurrent context assemblies on the same participant-conversation window.
-- **Priority Scoring:** Memory extraction jobs are prioritized so that live user interactions are processed before background agent prose or bulk migration data.
-- **Dead-Letter / Retry:** ARQ handles retry with exponential backoff natively. Jobs that exhaust retries are moved to dead-letter for periodic re-queue or manual intervention.
+- **Embedding Worker:** Polls `SELECT FROM conversation_messages WHERE embedding IS NULL ORDER BY priority DESC LIMIT batch_size`. Embeds messages in batches using the configured embedding API. After embedding, checks for context windows that need reassembly.
+- **Extraction Worker:** Polls `SELECT FROM conversation_messages WHERE memory_extracted IS NOT TRUE ORDER BY priority DESC`. Sends message batches to Mem0 for knowledge extraction into the Neo4j graph. Marks messages as extracted after successful processing.
+- **Assembly Worker:** Triggered after embedding batches complete. Checks context windows where new tokens have accumulated since last assembly and runs the build-type-specific assembly graph.
+- **Concurrency & Locking:** PostgreSQL advisory locks prevent concurrent context assemblies on the same context window.
+- **Retry:** Workers naturally retry on the next poll cycle — unprocessed messages remain in the query results until successfully processed. No dead-letter handling needed.
 
 ## 10. Imperator Design
 
@@ -201,7 +201,7 @@ The Imperator is the Context Broker's TE — the cognitive agent that owns the s
 - **Configurable Context:** The Imperator has its own configurable `build_type` and token budget. Budget is snapped to standard buckets for efficient window sharing.
 - **Persistent Continuity:** Stores its `conversation_id` in `/data/imperator_state.json`. On reboot, resumes the same conversation. If the state file is missing or the conversation no longer exists, creates a new one automatically.
 - **Standalone Operation:** Without a Context Broker endpoint configured, the Imperator operates with `MemorySaver` only — basic but functional. The Context Broker is an upgrade (curated context assembly, knowledge extraction, semantic search), not a dependency.
-- **Diagnostic Capabilities (always available):** The Imperator can query MAD container logs from Postgres (collected by the log shipper), introspect assembled context (tier breakdown, token usage, build type), and view pipeline status (pending jobs, queue depths). These are read-only diagnostic tools that help the Imperator observe and explain its own system's behavior.
+- **Diagnostic Capabilities (always available):** The Imperator can query MAD container logs from Postgres (collected by the log shipper), introspect assembled context (tier breakdown, token usage, build type), and view pipeline status (pending jobs, last assembly time). These are read-only diagnostic tools that help the Imperator observe and explain its own system's behavior.
 - **Admin Capabilities (gated by `admin_tools: true`):** Read and write AE configuration (change LLM models, embedding models, reranker, tuning parameters), toggle verbose pipeline logging, and execute read-only database queries. The Imperator can manage the infrastructure it runs on but cannot modify its own TE configuration (Identity, Purpose, system prompt, its own model) — that is the architect's domain.
 
 ## 11. Resilience and Observability

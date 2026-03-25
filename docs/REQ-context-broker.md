@@ -34,9 +34,9 @@ All code, whether written by humans or LLMs, must be clear, readable, and mainta
 
 A State 4 MAD separates infrastructure (AE — Action Engine) from intelligence (TE — Thought Engine), with all external dependencies configurable:
 
--   **AE** — MCP tool handlers, message routing, database operations, queue processing. Stable, changes infrequently.
+-   **AE** — MCP tool handlers, message routing, database operations, background processing. Stable, changes infrequently.
 -   **TE** — The Imperator (conversational agent) and its cognitive apparatus. Evolves independently of infrastructure.
--   **Configuration** — Separated into AE configuration (infrastructure settings, database connections, queue config, package sources) and TE configuration (Imperator settings, inference provider assignments per cognitive function, build type definitions, cognitive parameters). Both are hot-reloadable for inference and tuning settings; infrastructure settings require restart.
+-   **Configuration** — Separated into AE configuration (infrastructure settings, database connections, worker config, package sources) and TE configuration (Imperator settings, inference provider assignments per cognitive function, build type definitions, cognitive parameters). Both are hot-reloadable for inference and tuning settings; infrastructure settings require restart.
 
 ### Container Architecture
 
@@ -45,10 +45,9 @@ The Context Broker runs as a group of containers managed by Docker Compose:
 | Container                  | Role                                                                        | Image                       |
 |----------------------------|-----------------------------------------------------------------------------|-----------------------------|
 | `context-broker`           | Nginx gateway — MCP endpoint, OpenAI-compatible chat endpoint, health check | Nginx (OTS)                 |
-| `context-broker-langgraph` | All application logic — StateGraph flows, queue worker, Imperator           | Custom (Python)             |
-| `context-broker-postgres`  | Conversation storage, vector embeddings (pgvector), build types             | PostgreSQL + pgvector (OTS) |
+| `context-broker-langgraph` | All application logic — StateGraph flows, background workers, Imperator     | Custom (Python)             |
+| `context-broker-postgres`  | Conversation storage, vector embeddings (pgvector), build types, job state  | PostgreSQL + pgvector (OTS) |
 | `context-broker-neo4j`     | Knowledge graph storage (Mem0)                                              | Neo4j (OTS)                 |
-| `context-broker-redis`     | Job queues, assembly locks, ephemeral state                                 | Redis (OTS)                 |
 | `context-broker-infinity`  | (Optional) Embeddings and reranking via OpenAI-compatible APIs. Remove if using cloud providers. | Infinity (OTS)              |
 | `context-broker-ollama`    | (Optional) Local LLM inference via OpenAI-compatible API. Remove if using cloud providers.       | Ollama (OTS)                |
 | `context-broker-log-shipper` | (Optional) Collects logs from all MAD containers on context-broker-net via Docker API, writes to Postgres. Remove if deployment has its own log collector. | Custom (Python)            |
@@ -146,7 +145,7 @@ packages:
 
 -   Containers use two mount points:
     -   `/config` — User-edited configuration and credentials. Mapped to host via bind mount (default: `./config:/config`).
-    -   `/data` — System-generated state (databases, queue data). Mapped to host via bind mount (default: `./data:/data`).
+    -   `/data` — System-generated state (databases). Mapped to host via bind mount (default: `./data:/data`).
 -   The paths inside the container are fixed. The host paths are controlled by the bind mount in `docker-compose.yml`.
 -   Users change host-side paths in the compose file (or an override file) without modifying the image.
 
@@ -156,7 +155,6 @@ packages:
 /data/
 ├── postgres/              # PostgreSQL data files
 ├── neo4j/                 # Neo4j graph data
-├── redis/                 # Redis persistence
 └── imperator_state.json   # Imperator persistent state
 ```
 
@@ -182,7 +180,7 @@ packages:
 **3.5 Database Storage**
 
 -   All database data files stored under `/data/`.
--   Each technology gets its own subdirectory (`/data/postgres/`, `/data/neo4j/`, `/data/redis/`).
+-   Each technology gets its own subdirectory (`/data/postgres/`, `/data/neo4j/`).
 -   Backing service containers use bind mounts at their declared VOLUME paths to prevent Docker from creating anonymous volumes.
 
 **3.5.1 Message Schema**
@@ -212,7 +210,7 @@ packages:
 **3.6 Backup and Recovery**
 
 -   All persistent state lives under `./data/` on the host. This is the single directory to back up.
--   For consistent snapshots: `pg_dump` for PostgreSQL, `neo4j-admin database dump` for Neo4j. Redis persistence (RDB/AOF) is captured by copying the Redis data directory.
+-   For consistent snapshots: `pg_dump` for PostgreSQL, `neo4j-admin database dump` for Neo4j.
 -   Backup frequency and retention are the deployer's responsibility. The Context Broker does not perform automated backups.
 
 **3.7 Schema Migration**
@@ -248,7 +246,7 @@ packages:
 **4.4 Health Endpoint**
 
 -   The gateway exposes `GET /health` returning `200 OK` when healthy, `503` when unhealthy.
--   Response includes per-dependency status: `{"status": "healthy", "database": "ok", "cache": "ok", "neo4j": "ok"}`.
+-   Response includes per-dependency status: `{"status": "healthy", "database": "ok", "neo4j": "ok"}`.
 -   Health check verifies connectivity to all backing services.
 
 **4.5 Tool Naming Convention**
@@ -310,14 +308,14 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 -   The gateway (nginx) is a pure routing layer. No application logic.
 -   Routes MCP traffic to the LangGraph container.
 -   Routes `/v1/chat/completions` to the LangGraph container.
--   Routes `/health` to the LangGraph container. The LangGraph container performs the actual dependency checks (database, cache, neo4j connectivity) and returns the aggregated status. Nginx proxies the response — it does not perform health checks itself.
+-   Routes `/health` to the LangGraph container. The LangGraph container performs the actual dependency checks (database, neo4j connectivity) and returns the aggregated status. Nginx proxies the response — it does not perform health checks itself.
 -   Serves as the sole network boundary between external traffic and internal containers.
 
 **4.8 Prometheus Metrics**
 
 -   The LangGraph container exposes `GET /metrics` in Prometheus exposition format.
 -   Metrics produced inside a StateGraph (not in imperative route handlers).
--   Standard metrics: request counts, durations, error counts, queue depths.
+-   Standard metrics: request counts, durations, error counts, pipeline status.
 -   The gateway exposes a `metrics_get` MCP tool for programmatic access to metrics.
 
 ### 5. Configuration
@@ -327,7 +325,7 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 **5.1 Configuration Separation**
 
 -   Configuration is split into two files:
-    -   **AE configuration** (`/config/config.yml`): Infrastructure settings (database connections, ports, network), queue configuration, package source, operational settings (log level, health check intervals). Read at startup; changes require restart.
+    -   **AE configuration** (`/config/config.yml`): Infrastructure settings (database connections, ports, network), worker configuration, package source, operational settings (log level, health check intervals). Read at startup; changes require restart.
     -   **TE configuration** (`/config/te.yml`): Imperator settings (Identity, Purpose, Persona), inference provider assignments per cognitive function, build type definitions, cognitive parameters (token budgets, tier percentages, tuning). Hot-reloadable; changes take effect without restart.
 -   The TE configuration is conceptually part of the TE package. When the TE is upgraded or replaced, its configuration changes without touching AE infrastructure settings.
 
@@ -356,6 +354,7 @@ inference:
 embeddings:
   base_url: http://context-broker-infinity:7997
   model: nomic-ai/nomic-embed-text-v1.5
+  embedding_dims: 768              # REQUIRED — must match the model's output dimensions
 
 reranker:
   provider: api                  # "api" or "none"
@@ -446,7 +445,7 @@ imperator:
 -   `admin_tools: false` (default): Imperator has diagnostic tools (always available):
     -   Query MAD container logs from Postgres (collected by the log shipper)
     -   Introspect assembled context (tier breakdown, token usage, build type)
-    -   View pipeline status (pending jobs, queue depths, last assembly time)
+    -   View pipeline status (pending jobs, last assembly time)
     -   Search conversations and memories
     -   View health status and metrics
 -   `admin_tools: true`: Imperator additionally has write capabilities:
@@ -520,7 +519,7 @@ imperator:
 -   Failure of an optional component (e.g., Neo4j, reranker) causes degraded operation, not a crash.
 -   Core operations (store, retrieve, search) continue with reduced capability.
 -   Health endpoint reports degraded status.
--   The system is eventually consistent across datastores, not transactionally consistent. Message storage (Postgres) is the source of truth. Background processing — embedding generation, context assembly, knowledge extraction (Neo4j) — is asynchronous and may lag behind the conversation. If a background job fails, it retries with backoff. The conversation record is never lost due to a downstream processing failure.
+-   The system is eventually consistent across datastores, not transactionally consistent. Message storage (Postgres) is the source of truth. Background processing — embedding generation, context assembly, knowledge extraction (Neo4j) — is asynchronous and may lag behind the conversation. Background workers poll the database for unprocessed messages (NULL embeddings, unextracted messages) and process them in batches. The conversation record is never lost due to a downstream processing failure.
 
 **7.2 Independent Container Startup**
 
@@ -566,10 +565,6 @@ services:
     networks:
       - context-broker-net # outbound internet via NAT, no inbound from host
 
-  context-broker-redis:
-    networks:
-      - context-broker-net # outbound internet via NAT, no inbound from host
-
 networks:
   context-broker-net:
     driver: bridge         # standard bridge — NOT internal:true
@@ -591,7 +586,7 @@ The default deployment allows unrestricted outbound internet access from `contex
 
 **7.6 Asynchronous Correctness**
 
--   No blocking I/O in async functions. Use `await asyncio.sleep()`, `asyncpg`, `aioredis`, etc.
+-   No blocking I/O in async functions. Use `await asyncio.sleep()`, `asyncpg`, etc.
 -   Synchronous calls like `time.sleep()` or blocking library calls in async context are forbidden.
 
 **7.7 Input Validation**
