@@ -14,7 +14,6 @@ langchain-postgres==0.0.13
 # Database
 asyncpg==0.30.0
 psycopg2-binary==2.9.10
-redis==5.2.1
 
 # Memory / Knowledge graph
 mem0ai==0.1.29

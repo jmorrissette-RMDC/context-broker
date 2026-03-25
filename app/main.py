@@ -11,18 +11,17 @@ import logging
 from contextlib import asynccontextmanager
 
 import asyncpg
-import redis.exceptions
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import load_config, get_build_type_config, get_tuning
-from app.database import init_postgres, init_redis, close_all_connections
+from app.database import init_postgres, close_all_connections
 from app.logging_setup import setup_logging, update_log_level
 from app.migrations import run_migrations
 from app.routes import chat, health, mcp, metrics
-from app.workers.arq_worker import start_background_worker
+from app.workers.db_worker import start_background_worker
 from app.imperator.state_manager import ImperatorStateManager
 
 setup_logging()
@@ -84,41 +83,6 @@ async def _postgres_retry_loop(application: FastAPI, config: dict) -> None:
             _log.warning("PostgreSQL retry failed: %s", exc)
 
 
-async def _redis_retry_loop(application: FastAPI, config: dict) -> None:
-    """Background task that retries Redis connection and starts the worker once available."""
-    while True:
-        # R6-M15: Reload config each iteration so hot-reloaded corrections take effect
-        config = load_config()
-        retry_interval = get_tuning(config, "redis_retry_interval_seconds", 10)
-        await asyncio.sleep(retry_interval)
-        if getattr(application.state, "redis_available", False):
-            return
-        try:
-            from app.database import get_redis
-
-            # R5-M23: Recreate the Redis client if it doesn't exist or
-            # if the previous init_redis() failed (client is None)
-            try:
-                redis_client = get_redis()
-            except (RuntimeError, AttributeError):
-                _log.info("Redis client not available, reinitializing...")
-                await init_redis(config)
-                redis_client = get_redis()
-            await redis_client.ping()
-            application.state.redis_available = True
-            _log.info("Redis connection verified on retry — starting background worker")
-            application.state.worker_task = asyncio.create_task(
-                start_background_worker(config)
-            )
-            return
-        except (
-            ConnectionError,
-            OSError,
-            RuntimeError,
-            redis.exceptions.RedisError,
-        ) as exc:
-            _log.warning("Redis retry failed: %s", exc)
-
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
@@ -170,25 +134,12 @@ async def lifespan(application: FastAPI):
         application.state.postgres_available = False
         pg_retry_task = asyncio.create_task(_postgres_retry_loop(application, config))
 
-    await init_redis(config)
-
-    # Verify Redis is actually usable before starting the worker (G5-32)
-    redis_retry_task = None
+    # Start DB-driven background worker (no Redis needed)
     worker_task = None
-    try:
-        from app.database import get_redis
-
-        redis_client = get_redis()
-        await redis_client.ping()
-        application.state.redis_available = True
+    if application.state.postgres_available:
         worker_task = asyncio.create_task(start_background_worker(config))
-    except (ConnectionError, OSError, RuntimeError, redis.exceptions.RedisError) as exc:
-        _log.warning(
-            "Redis unavailable at startup — worker deferred until Redis connects: %s",
-            exc,
-        )
-        application.state.redis_available = False
-        redis_retry_task = asyncio.create_task(_redis_retry_loop(application, config))
+    else:
+        _log.warning("Background worker deferred — Postgres not available yet")
 
     # Initialize Imperator persistent state
     imperator_manager = ImperatorStateManager(config)
@@ -218,10 +169,8 @@ async def lifespan(application: FastAPI):
     # Shutdown
     _log.info("Context Broker shutting down")
 
-    # Worker may have been started later by the Redis retry loop
-    active_worker = worker_task or getattr(application.state, "worker_task", None)
     tasks_to_cancel = [
-        t for t in [active_worker, pg_retry_task, redis_retry_task] if t is not None
+        t for t in [worker_task, pg_retry_task] if t is not None
     ]
     for t in tasks_to_cancel:
         t.cancel()

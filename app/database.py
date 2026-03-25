@@ -1,8 +1,9 @@
 """
 Database connection management for the Context Broker.
 
-Manages asyncpg (PostgreSQL) and redis.asyncio (Redis) connection pools.
-Connections are initialized at startup and closed at shutdown.
+Manages asyncpg (PostgreSQL) connection pool. PostgreSQL is the only
+external database — it handles data storage, vector search (pgvector),
+job state (DB-driven workers), and advisory locks.
 """
 
 import base64
@@ -12,21 +13,14 @@ from typing import Optional
 
 import asyncpg
 import httpx
-import redis.asyncio as aioredis
-import redis.exceptions
 
 _log = logging.getLogger("context_broker.database")
 
 _pg_pool: Optional[asyncpg.Pool] = None
-_redis_client: Optional[aioredis.Redis] = None
 
 
 async def init_postgres(config: dict) -> asyncpg.Pool:
-    """Create the asyncpg connection pool using config and environment variables.
-
-    Database credentials come from environment (loaded via env_file in compose).
-    Connection parameters come from environment variables set in compose.
-    """
+    """Create the asyncpg connection pool using config and environment variables."""
     global _pg_pool
 
     db_config = config.get("database", {})
@@ -46,27 +40,6 @@ async def init_postgres(config: dict) -> asyncpg.Pool:
     return _pg_pool
 
 
-async def init_redis(config: dict) -> aioredis.Redis:
-    """Create the async Redis client and verify connectivity."""
-    global _redis_client
-
-    _redis_client = aioredis.Redis(
-        host=os.environ.get("REDIS_HOST", "context-broker-redis"),
-        port=int(os.environ.get("REDIS_PORT", "6379")),
-        decode_responses=True,
-    )
-
-    try:
-        await _redis_client.ping()
-        _log.info("Redis client initialized (ping OK)")
-    except (redis.exceptions.RedisError, ConnectionError, OSError) as exc:
-        _log.warning(
-            "Redis client created but ping failed — starting in degraded mode: %s", exc
-        )
-
-    return _redis_client
-
-
 def get_pg_pool() -> asyncpg.Pool:
     """Return the initialized asyncpg pool. Raises if not initialized."""
     if _pg_pool is None:
@@ -76,26 +49,14 @@ def get_pg_pool() -> asyncpg.Pool:
     return _pg_pool
 
 
-def get_redis() -> aioredis.Redis:
-    """Return the initialized Redis client. Raises if not initialized."""
-    if _redis_client is None:
-        raise RuntimeError("Redis client not initialized — call init_redis() first")
-    return _redis_client
-
-
 async def close_all_connections() -> None:
     """Gracefully close all database connections."""
-    global _pg_pool, _redis_client
+    global _pg_pool
 
     if _pg_pool is not None:
         await _pg_pool.close()
         _pg_pool = None
         _log.info("PostgreSQL pool closed")
-
-    if _redis_client is not None:
-        await _redis_client.aclose()
-        _redis_client = None
-        _log.info("Redis client closed")
 
 
 async def check_postgres_health() -> bool:
@@ -110,28 +71,10 @@ async def check_postgres_health() -> bool:
         return False
 
 
-async def check_redis_health() -> bool:
-    """Check Redis connectivity for health endpoint."""
-    try:
-        client = get_redis()
-        await client.ping()
-        return True
-    except (redis.exceptions.RedisError, ConnectionError, OSError, RuntimeError) as exc:
-        _log.warning("Redis health check failed: %s", exc)
-        return False
-
-
 async def check_neo4j_health(config: dict | None = None) -> bool:
     """Check Neo4j connectivity for health endpoint.
 
-    G5-13: This intentionally probes the HTTP endpoint (port 7474) rather than
-    Bolt (port 7687). The HTTP endpoint is Neo4j's built-in health/discovery
-    endpoint, suitable for container health checks. Bolt is used for data
-    operations by the Mem0 client and Neo4j driver, not for health probes.
-
-    R5-m4: The ``config`` parameter is accepted for interface consistency with
-    callers (health_flow.py) but connection details are read from environment
-    variables, matching the pattern used by init_postgres/init_redis.
+    Probes the HTTP endpoint (port 7474) — Neo4j's built-in health endpoint.
     """
     neo4j_host = os.environ.get("NEO4J_HOST", "context-broker-neo4j")
     neo4j_http_port = os.environ.get("NEO4J_HTTP_PORT", "7474")

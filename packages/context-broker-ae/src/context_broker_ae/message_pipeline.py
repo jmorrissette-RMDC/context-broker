@@ -19,11 +19,9 @@ from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 import asyncpg
-import redis.exceptions
 
 from app.config import verbose_log_auto
-from app.database import get_pg_pool, get_redis
-from app.metrics_registry import JOBS_ENQUEUED
+from app.database import get_pg_pool
 
 _log = logging.getLogger("context_broker.flows.message_pipeline")
 
@@ -257,92 +255,24 @@ async def store_message(state: MessagePipelineState) -> dict:
     }
 
 
-async def enqueue_background_jobs(state: MessagePipelineState) -> dict:
-    """Enqueue embedding and memory extraction jobs in Redis for ARQ workers."""
-    if state.get("error"):
-        return {"queued_jobs": []}
-
-    conversation_id = state.get("conversation_id")
-    redis_client = get_redis()
-    queued = []
-    now = datetime.now(timezone.utc).isoformat()
-
-    # Enqueue embedding job
-    embed_job = json.dumps(
-        {
-            "job_type": "embed_message",
-            "message_id": state["message_id"],
-            "conversation_id": conversation_id,
-            "enqueued_at": now,
-        }
-    )
-    try:
-        # No dedup needed: the embed pipeline's UPDATE is idempotent
-        # (re-embedding overwrites the same row).
-        await redis_client.lpush("embedding_jobs", embed_job)
-        queued.append("embed_message")
-        JOBS_ENQUEUED.labels(job_type="embed_message").inc()
-    except (redis.exceptions.RedisError, ConnectionError) as exc:
-        # M-17: The message is already safely stored in Postgres before this
-        # point. If Redis is down, embedding/extraction won't happen for this
-        # message until re-triggered. Known gap: a periodic sweep checking for
-        # messages where embedding IS NULL AND created_at < NOW() - INTERVAL
-        # '5 minutes' can detect and re-enqueue these orphaned messages.
-        # The queue depth metrics (M-03) can also surface this condition.
-        _log.warning(
-            "Failed to enqueue embedding job (message safe in Postgres): %s", exc
-        )
-
-    # F-01: Enqueue memory extraction job via sorted set with priority as score
-    extract_job = json.dumps(
-        {
-            "job_type": "extract_memory",
-            "conversation_id": conversation_id,
-            "enqueued_at": now,
-        }
-    )
-    try:
-        dedup_key = f"job_dedup:extract:{conversation_id}"
-        is_new = await redis_client.set(dedup_key, "1", ex=300, nx=True)
-        if is_new:
-            # ARCH-14: Use role-based priority as score (lower = higher priority)
-            score = _ROLE_PRIORITY.get(state.get("role", "assistant"), 2)
-            await redis_client.zadd("memory_extraction_jobs", {extract_job: score})
-            queued.append("extract_memory")
-            JOBS_ENQUEUED.labels(job_type="extract_memory").inc()
-    except (redis.exceptions.RedisError, ConnectionError) as exc:
-        # M-17: Same as above — message is safe in Postgres. Memory extraction
-        # can be retried via the periodic dead-letter sweep.
-        _log.warning(
-            "Failed to enqueue memory extraction job (message safe in Postgres): %s",
-            exc,
-        )
-
-    return {"queued_jobs": queued}
-
-
 def route_after_store(state: MessagePipelineState) -> str:
-    """Route: if error or collapsed, skip to END. Otherwise enqueue jobs."""
-    if state.get("error") or state.get("was_collapsed"):
-        return END
-    return "enqueue_background_jobs"
+    """Route: always END. Background processing is DB-driven — workers
+    poll for unembedded/unextracted messages automatically."""
+    return END
 
 
 def build_message_pipeline() -> StateGraph:
-    """Build and compile the message ingestion StateGraph."""
+    """Build and compile the message ingestion StateGraph.
+
+    Stores the message to Postgres and returns. Background processing
+    (embedding, extraction, assembly) is handled by the DB-driven worker
+    which polls for messages with NULL embeddings / unextracted flags.
+    No queue enqueue step needed.
+    """
     workflow = StateGraph(MessagePipelineState)
 
     workflow.add_node("store_message", store_message)
-    workflow.add_node("enqueue_background_jobs", enqueue_background_jobs)
-
     workflow.set_entry_point("store_message")
-
-    workflow.add_conditional_edges(
-        "store_message",
-        route_after_store,
-        {"enqueue_background_jobs": "enqueue_background_jobs", END: END},
-    )
-
-    workflow.add_edge("enqueue_background_jobs", END)
+    workflow.add_edge("store_message", END)
 
     return workflow.compile()

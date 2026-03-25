@@ -408,42 +408,34 @@ async def _pipeline_status_tool() -> str:
     plus dead letter counts and recent activity.
     """
     try:
-        import redis as redis_lib
-        from app.database import get_redis
-
-        r = get_redis()
         pool = get_pg_pool()
 
-        # Queue depths
-        embed_depth = await r.llen("embedding_jobs") if r else 0
-        assembly_depth = await r.llen("context_assembly_jobs") if r else 0
-        extract_depth = await r.zcard("memory_extraction_jobs") if r else 0
+        # Pending work (DB-driven — the database IS the queue)
+        pending_embed = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NULL AND content IS NOT NULL"
+        )
+        pending_extract = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_messages WHERE memory_extracted IS NOT TRUE"
+        )
 
-        # Dead letter counts
-        dl_embed = await r.llen("dead_letter:embedding_jobs") if r else 0
-        dl_assembly = await r.llen("dead_letter:context_assembly_jobs") if r else 0
-        dl_extract = await r.llen("dead_letter:memory_extraction_jobs") if r else 0
-
-        # Recent assembly activity
+        # Recent activity
         recent_assembly = await pool.fetchval(
             "SELECT COUNT(*) FROM conversation_summaries WHERE created_at > NOW() - INTERVAL '1 hour'"
         )
-
-        # Recent embeddings
         recent_embeddings = await pool.fetchval(
             "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL AND created_at > NOW() - INTERVAL '1 hour'"
         )
 
+        # Totals
+        total_messages = await pool.fetchval("SELECT COUNT(*) FROM conversation_messages")
+        total_embedded = await pool.fetchval("SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL")
+
         lines = [
-            "Pipeline Status:",
-            f"  Embedding queue: {embed_depth} pending",
-            f"  Assembly queue: {assembly_depth} pending",
-            f"  Extraction queue: {extract_depth} pending",
-            "",
-            "Dead Letter Queues:",
-            f"  Embedding: {dl_embed}",
-            f"  Assembly: {dl_assembly}",
-            f"  Extraction: {dl_extract}",
+            "Pipeline Status (DB-driven):",
+            f"  Pending embedding: {pending_embed} messages",
+            f"  Pending extraction: {pending_extract} messages",
+            f"  Total messages: {total_messages}",
+            f"  Total embedded: {total_embedded}",
             "",
             "Recent Activity (last hour):",
             f"  Summaries created: {recent_assembly}",

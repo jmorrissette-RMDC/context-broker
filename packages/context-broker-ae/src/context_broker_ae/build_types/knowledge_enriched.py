@@ -31,7 +31,7 @@ from app.config import (
     verbose_log,
 )
 from context_broker_ae.memory_scoring import filter_and_rank_memories
-from app.database import get_pg_pool, get_redis
+from app.database import get_pg_pool
 # Registration handled by register.py — no module-scope side effects
 from context_broker_ae.build_types.standard_tiered import (
     build_standard_tiered_assembly,
@@ -141,26 +141,22 @@ async def ke_wait_for_assembly(state: KnowledgeEnrichedRetrievalState) -> dict:
 
     R6-M9: If Redis is unavailable, proceed without waiting rather than crashing.
     """
-    try:
-        redis = get_redis()
-    except RuntimeError:
-        _log.warning("Retrieval: Redis not available, proceeding without assembly wait")
-        return {"assembly_status": "ready"}
-
-    lock_key = f"assembly_in_progress:{state['context_window_id']}"
+    pool = get_pg_pool()
+    lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
 
     timeout = get_tuning(state["config"], "assembly_wait_timeout_seconds", 50)
     poll_interval = get_tuning(state["config"], "assembly_poll_interval_seconds", 2)
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        try:
-            in_progress = await redis.exists(lock_key)
-        except (ConnectionError, OSError, RuntimeError) as exc:
-            _log.warning(
-                "Retrieval: Redis error during assembly wait, proceeding: %s", exc
-            )
-            return {"assembly_status": "ready"}
+        # Try to acquire lock — if we can, assembly is NOT in progress
+        acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
+        if acquired:
+            # Release immediately — we just wanted to check
+            await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+            in_progress = False
+        else:
+            in_progress = True
         if not in_progress:
             return {"assembly_status": "ready"}
 

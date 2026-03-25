@@ -20,7 +20,7 @@ from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 from app.config import get_tuning, verbose_log
-from app.database import get_pg_pool, get_redis
+from app.database import get_pg_pool
 
 _log = logging.getLogger("context_broker.flows.memory_extraction")
 
@@ -80,31 +80,25 @@ class MemoryExtractionState(TypedDict):
 
 
 async def acquire_extraction_lock(state: MemoryExtractionState) -> dict:
-    """Acquire a Redis lock to prevent concurrent extraction of the same conversation."""
+    """Acquire a Postgres advisory lock for extraction of this conversation."""
     verbose_log(
         state["config"],
         _log,
         "memory_extraction.acquire_lock ENTER conv=%s",
         state["conversation_id"],
     )
-    lock_key = f"extraction_in_progress:{state['conversation_id']}"
-    lock_token = str(uuid.uuid4())
-    redis = get_redis()
+    pool = get_pg_pool()
+    lock_id = hash(state["conversation_id"]) & 0x7FFFFFFFFFFFFFFF
+    acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
 
-    acquired = await redis.set(
-        lock_key,
-        lock_token,
-        ex=get_tuning(state["config"], "extraction_lock_ttl_seconds", 180),
-        nx=True,
-    )
     if not acquired:
         _log.info(
             "Memory extraction: lock not acquired for conv=%s — skipping",
             state["conversation_id"],
         )
-        return {"lock_key": lock_key, "lock_token": None, "lock_acquired": False}
+        return {"lock_key": str(lock_id), "lock_token": None, "lock_acquired": False}
 
-    return {"lock_key": lock_key, "lock_token": lock_token, "lock_acquired": True}
+    return {"lock_key": str(lock_id), "lock_token": "pg_advisory", "lock_acquired": True}
 
 
 async def fetch_unextracted_messages(state: MemoryExtractionState) -> dict:
@@ -280,42 +274,16 @@ async def mark_messages_extracted(state: MemoryExtractionState) -> dict:
     return {"extracted_count": len(message_uuids)}
 
 
-async def _atomic_lock_release(redis_client, lock_key: str, lock_token: str) -> bool:
-    """Atomically release a Redis lock only if we still own it (CB-R3-02).
-
-    Uses a Lua script to perform check-and-delete in a single atomic operation,
-    preventing the race where another worker acquires the lock between our GET
-    and DELETE.
-
-    Returns True if the lock was released, False if it was already gone or
-    owned by another worker.
-    """
-    lua_script = """
-    if redis.call("GET", KEYS[1]) == ARGV[1] then
-        return redis.call("DEL", KEYS[1])
-    else
-        return 0
-    end
-    """
-    result = await redis_client.eval(lua_script, 1, lock_key, lock_token)
-    return result == 1
-
-
 async def release_extraction_lock(state: MemoryExtractionState) -> dict:
-    """Release the Redis extraction lock.
-
-    CB-R3-02: Uses atomic Lua script to prevent race between GET and DELETE.
-    """
+    """Release the Postgres advisory lock for extraction."""
     lock_key = state.get("lock_key", "")
-    lock_token = state.get("lock_token")
-    if lock_key and state.get("lock_acquired") and lock_token:
-        redis = get_redis()
-        released = await _atomic_lock_release(redis, lock_key, lock_token)
-        if not released:
-            _log.debug(
-                "Lock %s was not released (expired or taken by another worker)",
-                lock_key,
-            )
+    if lock_key and state.get("lock_acquired"):
+        try:
+            pool = get_pg_pool()
+            lock_id = int(lock_key)
+            await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+        except (ValueError, OSError) as exc:
+            _log.debug("Lock release failed: %s", exc)
     return {}
 
 

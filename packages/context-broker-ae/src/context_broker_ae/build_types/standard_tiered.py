@@ -28,7 +28,7 @@ from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 from app.config import get_build_type_config, get_chat_model, get_tuning, verbose_log
-from app.database import get_pg_pool, get_redis
+from app.database import get_pg_pool
 # Registration handled by register.py — no module-scope side effects
 from context_broker_ae.build_types.tier_scaling import scale_tier_percentages
 from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
@@ -107,13 +107,9 @@ async def acquire_assembly_lock(state: StandardTieredAssemblyState) -> dict:
 
     # R7-M5: Wrap Redis calls in try/except — return error state if unavailable
     try:
-        redis = get_redis()
-        acquired = await redis.set(
-            lock_key,
-            lock_token,
-            ex=get_tuning(state["config"], "assembly_lock_ttl_seconds", 300),
-            nx=True,
-        )
+        pool = get_pg_pool()  # Advisory lock (Redis removed)
+        lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+        acquired = await pool.fetchval("SELECT pg_try_advisory_lock()", lock_id)
     except (RuntimeError, OSError, ConnectionError) as exc:
         _log.error("Redis unavailable during lock acquisition for window=%s: %s",
                     state["context_window_id"], exc)
@@ -331,7 +327,7 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
         return {"tier2_summaries": [], "error": f"Prompt loading failed: {exc}"}
 
     # R5-M13: Prepare Redis client and lock info for TTL renewal during summarization
-    redis = get_redis()
+    pool = get_pg_pool()  # Advisory lock (Redis removed)
     lock_key = state.get("lock_key", "")
     lock_token = state.get("lock_token")
     lock_ttl = get_tuning(config, "assembly_lock_ttl_seconds", 300)
@@ -340,9 +336,9 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
         # R5-M13: Renew lock TTL before each chunk summarization to prevent
         # expiry during long-running LLM calls
         if lock_key and lock_token:
-            current_val = await redis.get(lock_key)
+            current_val = None  # Advisory locks: renewal not needed
             if current_val == lock_token:  # decode_responses=True, already a string
-                await redis.expire(lock_key, lock_ttl)
+                # Advisory locks do not expire � held until released
 
         chunk_text = "\n".join(
             f"[{m['role']} | {m['sender']}] {m.get('content') or ''}" for m in chunk
@@ -544,11 +540,11 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
     lock_token = state.get("lock_token")
     if lock_key and lock_token:
         try:
-            redis = get_redis()
-            current_val = await redis.get(lock_key)
+            pool = get_pg_pool()  # Advisory lock (Redis removed)
+            current_val = None  # Advisory locks: renewal not needed
             if current_val == lock_token:
                 lock_ttl = get_tuning(config, "assembly_lock_ttl_seconds", 300)
-                await redis.expire(lock_key, lock_ttl)
+                # Advisory locks do not expire � held until released
         except (RuntimeError, OSError, ConnectionError) as exc:
             _log.warning("Failed to renew lock TTL for archival consolidation: %s", exc)
 
@@ -646,31 +642,16 @@ async def finalize_assembly(state: StandardTieredAssemblyState) -> dict:
     return {}
 
 
-async def _atomic_lock_release(redis_client, lock_key: str, lock_token: str) -> bool:
-    """Atomically release a Redis lock only if we still own it (CB-R3-02)."""
-    lua_script = """
-    if redis.call("GET", KEYS[1]) == ARGV[1] then
-        return redis.call("DEL", KEYS[1])
-    else
-        return 0
-    end
-    """
-    result = await redis_client.eval(lua_script, 1, lock_key, lock_token)
-    return result == 1
-
-
 async def release_assembly_lock(state: StandardTieredAssemblyState) -> dict:
-    """Release the Redis assembly lock."""
+    """Release the Postgres advisory lock for assembly."""
     lock_key = state.get("lock_key", "")
-    lock_token = state.get("lock_token")
-    if lock_key and state.get("lock_acquired") and lock_token:
-        redis = get_redis()
-        released = await _atomic_lock_release(redis, lock_key, lock_token)
-        if not released:
-            _log.debug(
-                "Lock %s was not released (expired or taken by another worker)",
-                lock_key,
-            )
+    if lock_key and state.get("lock_acquired"):
+        try:
+            pool = get_pg_pool()
+            lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+            await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+        except (ValueError, OSError) as exc:
+            _log.debug("Lock release failed: %s", exc)
     return {}
 
 
@@ -867,7 +848,7 @@ async def ret_wait_for_assembly(state: StandardTieredRetrievalState) -> dict:
     R6-M9: If Redis is unavailable, proceed without waiting rather than crashing.
     """
     try:
-        redis = get_redis()
+        pool = get_pg_pool()  # Advisory lock (Redis removed)
     except RuntimeError:
         _log.warning("Retrieval: Redis not available, proceeding without assembly wait")
         return {"assembly_status": "ready"}
@@ -880,7 +861,9 @@ async def ret_wait_for_assembly(state: StandardTieredRetrievalState) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            in_progress = await redis.exists(lock_key)
+            in_progress = not await pool.fetchval("SELECT pg_try_advisory_lock()", hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF)
+                if not in_progress:
+                    await pool.execute("SELECT pg_advisory_unlock()", hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF)
         except (ConnectionError, OSError, RuntimeError) as exc:
             _log.warning(
                 "Retrieval: Redis error during assembly wait, proceeding: %s", exc

@@ -1,7 +1,7 @@
 """
 Health Check — LangGraph StateGraph flow.
 
-Checks connectivity to all backing services (PostgreSQL, Redis, Neo4j)
+Checks connectivity to backing services (PostgreSQL, Neo4j)
 and returns aggregated health status. Invoked by the /health route.
 """
 
@@ -11,7 +11,7 @@ from typing import Optional
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
-from app.database import check_postgres_health, check_redis_health, check_neo4j_health
+from app.database import check_postgres_health, check_neo4j_health
 
 _log = logging.getLogger("context_broker.flows.health")
 
@@ -22,7 +22,6 @@ class HealthCheckState(TypedDict):
     config: dict
 
     postgres_ok: bool
-    redis_ok: bool
     neo4j_ok: bool
     all_healthy: bool
     status_detail: Optional[dict]
@@ -34,19 +33,14 @@ async def check_dependencies(state: HealthCheckState) -> dict:
     config = state["config"]
 
     postgres_ok = await check_postgres_health()
-    redis_ok = await check_redis_health()
     neo4j_ok = await check_neo4j_health(config)
 
-    all_healthy = postgres_ok and redis_ok
+    all_healthy = postgres_ok
 
     if not all_healthy:
         status_label = "unhealthy"
         http_status = 503
     elif not neo4j_ok:
-        # R6-m5: Intentionally returns 200 (not 503) when Neo4j is down.
-        # Neo4j is optional — memory extraction degrades gracefully without it.
-        # Only Postgres and Redis are critical; Neo4j unavailability is "degraded"
-        # but the service remains functional for all core operations.
         status_label = "degraded"
         http_status = 200
     else:
@@ -56,7 +50,6 @@ async def check_dependencies(state: HealthCheckState) -> dict:
     status_detail = {
         "status": status_label,
         "database": "ok" if postgres_ok else "error",
-        "cache": "ok" if redis_ok else "error",
         "neo4j": "ok" if neo4j_ok else "degraded",
     }
 
@@ -67,7 +60,6 @@ async def check_dependencies(state: HealthCheckState) -> dict:
 
     return {
         "postgres_ok": postgres_ok,
-        "redis_ok": redis_ok,
         "neo4j_ok": neo4j_ok,
         "all_healthy": all_healthy,
         "status_detail": status_detail,

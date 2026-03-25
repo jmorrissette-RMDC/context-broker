@@ -18,7 +18,7 @@ from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 from app.config import get_tuning, verbose_log
-from app.database import get_pg_pool, get_redis
+from app.database import get_pg_pool
 # Registration handled by register.py — no module-scope side effects
 from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
 
@@ -67,26 +67,20 @@ async def pt_acquire_lock(state: PassthroughAssemblyState) -> dict:
         "passthrough.acquire_lock ENTER window=%s",
         state["context_window_id"],
     )
-    lock_key = f"assembly_in_progress:{state['context_window_id']}"
-    lock_token = str(uuid.uuid4())
-    redis = get_redis()
+    pool = get_pg_pool()
+    lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+    acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
 
-    acquired = await redis.set(
-        lock_key,
-        lock_token,
-        ex=get_tuning(state["config"], "assembly_lock_ttl_seconds", 300),
-        nx=True,
-    )
     if not acquired:
         _log.info(
             "Passthrough assembly: lock not acquired for window=%s — skipping",
             state["context_window_id"],
         )
-        return {"lock_key": lock_key, "lock_token": None, "lock_acquired": False}
+        return {"lock_key": str(lock_id), "lock_token": None, "lock_acquired": False}
 
     return {
-        "lock_key": lock_key,
-        "lock_token": lock_token,
+        "lock_key": str(lock_id),
+        "lock_token": "pg_advisory",
         "lock_acquired": True,
         "assembly_start_time": time.monotonic(),
     }
@@ -129,19 +123,12 @@ async def pt_release_lock(state: PassthroughAssemblyState) -> dict:
     R7-M6: Wrapped in try/except — log warning on failure instead of crashing.
     """
     lock_key = state.get("lock_key", "")
-    lock_token = state.get("lock_token")
-    if lock_key and state.get("lock_acquired") and lock_token:
+    if lock_key and state.get("lock_acquired"):
         try:
-            redis = get_redis()
-            lua_script = """
-            if redis.call("GET", KEYS[1]) == ARGV[1] then
-                return redis.call("DEL", KEYS[1])
-            else
-                return 0
-            end
-            """
-            await redis.eval(lua_script, 1, lock_key, lock_token)
-        except (RuntimeError, OSError, ConnectionError) as exc:
+            pool = get_pg_pool()
+            lock_id = int(lock_key)
+            await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+        except (ValueError, OSError) as exc:
             _log.warning(
                 "Failed to release assembly lock for window=%s: %s",
                 state.get("context_window_id"), exc,

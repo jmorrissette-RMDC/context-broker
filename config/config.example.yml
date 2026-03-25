@@ -140,23 +140,11 @@ tuning:
   failure_backoff_seconds: 5         # seconds to wait during backoff
 
 # ============================================================
-# Workers (infrastructure — queue processing)
+# Workers (infrastructure — DB-driven background processing)
 # ============================================================
 
 workers:
   poll_interval_seconds: 2
-  max_retries: 3
-  dead_letter_sweep_interval_seconds: 60
-
-# ============================================================
-# Locks (infrastructure — distributed coordination)
-# ============================================================
-
-locks:
-  assembly_lock_ttl_seconds: 300
-  extraction_lock_ttl_seconds: 180
-  assembly_wait_timeout_seconds: 50
-  assembly_poll_interval_seconds: 2
 
 # ============================================================
 # Database (infrastructure — requires restart to change)

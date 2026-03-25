@@ -21,7 +21,7 @@ from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 from app.config import get_embeddings_model, get_tuning, verbose_log
-from app.database import get_pg_pool, get_redis
+from app.database import get_pg_pool
 from app.metrics_registry import JOBS_ENQUEUED
 
 _log = logging.getLogger("context_broker.flows.embed_pipeline")
@@ -152,140 +152,12 @@ async def store_embedding(state: EmbedPipelineState) -> dict:
 
 
 async def enqueue_context_assembly(state: EmbedPipelineState) -> dict:
-    """Enqueue context assembly jobs for all context windows on this conversation.
+    """No-op: assembly is handled by the DB-driven background worker.
 
-    Each context window gets its own assembly job. Uses Redis distributed
-    locks to prevent concurrent assembly of the same window.
-
-    F-08: Only queues assembly when new tokens since last assembly exceed the
-    trigger threshold (percentage of max_token_budget).
+    The worker checks for context windows needing reassembly after
+    each embedding batch. No explicit enqueue needed.
     """
-    pool = get_pg_pool()
-    redis = get_redis()
-    config = state["config"]
-
-    windows = await pool.fetch(
-        "SELECT id, build_type, max_token_budget, last_assembled_at FROM context_windows WHERE conversation_id = $1",
-        uuid.UUID(state["conversation_id"]),
-    )
-
-    # Get conversation token count for threshold check
-    # Token count for threshold checking is fetched per-window in the batch query below
-
-    queued = []
-    now = datetime.now(timezone.utc).isoformat()
-
-    # G5-11: Batch the Redis EXISTS checks instead of N+1 queries per window.
-    # Use mget on lock keys to check all windows in a single round-trip.
-    window_ids = [str(w["id"]) for w in windows]
-    lock_keys = [f"assembly_in_progress:{wid}" for wid in window_ids]
-    lock_values = await redis.mget(*lock_keys) if lock_keys else []
-
-    # Build a set of windows that already have assembly in progress
-    locked_window_ids = {
-        wid for wid, val in zip(window_ids, lock_values) if val is not None
-    }
-
-    # G5-11: Batch the token-since-last-assembly queries for windows that
-    # have a last_assembled_at. Group by last_assembled_at to reduce queries.
-    # (Each distinct timestamp still needs its own query, but windows sharing
-    # the same timestamp are batched.)
-
-    # R5-M10: Batch-fetch token counts since last assembly for all windows
-    # instead of N+1 individual queries per window. One query fetches tokens
-    # added after each distinct last_assembled_at timestamp.
-    tokens_since_map: dict[str, int] = {}
-    windows_needing_token_check = [
-        w
-        for w in windows
-        if str(w["id"]) not in locked_window_ids and w["last_assembled_at"] is not None
-    ]
-    if windows_needing_token_check:
-        # Batch query: for each window's last_assembled_at, get sum of tokens
-        # added after that timestamp. Uses a VALUES list to do it in one round-trip.
-        token_rows = await pool.fetch(
-            """
-            SELECT w.id AS window_id, COALESCE(SUM(m.token_count), 0) AS tokens_since
-            FROM (SELECT unnest($1::uuid[]) AS id, unnest($2::timestamptz[]) AS last_assembled_at) w
-            LEFT JOIN conversation_messages m
-              ON m.conversation_id = $3
-              AND m.created_at > w.last_assembled_at
-            GROUP BY w.id
-            """,
-            [w["id"] for w in windows_needing_token_check],
-            [w["last_assembled_at"] for w in windows_needing_token_check],
-            uuid.UUID(state["conversation_id"]),
-        )
-        for row in token_rows:
-            tokens_since_map[str(row["window_id"])] = row["tokens_since"]
-
-    for window in windows:
-        window_id = str(window["id"])
-
-        if window_id in locked_window_ids:
-            _log.debug(
-                "Skipping assembly queue: already in progress for window=%s",
-                window_id,
-            )
-            continue
-
-        # F-08: Check trigger threshold — only queue if enough new tokens.
-        # R6-M16: Known approximation — the threshold check counts all tokens since
-        # last assembly, which for shared conversations may include tokens from other
-        # participants' messages. Acceptable for triggering purposes (over-triggering
-        # is safe, under-triggering is not).
-        max_budget = window["max_token_budget"]
-        bt_config = config.get("build_types", {}).get(window["build_type"], {})
-        # CB-R3-03: The double-fallback (bt_config -> global tuning -> hardcoded 0.1)
-        # is intentional: build-type-specific threshold takes priority, then the
-        # global tuning knob, then a safe default. This avoids unnecessary assembly
-        # when no threshold is configured at any level.
-        trigger_pct = float(
-            bt_config.get(
-                "trigger_threshold_percent",
-                get_tuning(config, "trigger_threshold_percent", 0.1),
-            )
-        )
-        threshold_tokens = int(max_budget * trigger_pct)
-
-        if window["last_assembled_at"] is not None:
-            # R5-M10: Use batch-fetched token count instead of per-window query
-            tokens_since = tokens_since_map.get(window_id, 0)
-            if tokens_since < threshold_tokens:
-                _log.debug(
-                    "Skipping assembly: tokens_since=%d < threshold=%d for window=%s",
-                    tokens_since,
-                    threshold_tokens,
-                    window_id,
-                )
-                continue
-
-        # G5-12: Use SET NX for atomic dedup instead of racy EXISTS-then-LPUSH.
-        # The dedup key expires after a short TTL to allow retries.
-        dedup_key = f"assembly_dedup:{window_id}"
-        dedup_acquired = await redis.set(dedup_key, "1", ex=60, nx=True)
-        if not dedup_acquired:
-            _log.debug(
-                "Skipping assembly queue: dedup key exists for window=%s",
-                window_id,
-            )
-            continue
-
-        job = json.dumps(
-            {
-                "job_type": "assemble_context",
-                "context_window_id": window_id,
-                "conversation_id": state["conversation_id"],
-                "build_type": window["build_type"],
-                "enqueued_at": now,
-            }
-        )
-        await redis.lpush("context_assembly_jobs", job)
-        queued.append(window_id)
-        JOBS_ENQUEUED.labels(job_type="assemble_context").inc()
-        _log.info("Queued context assembly for window=%s", window_id)
-
-    return {"assembly_jobs_queued": queued}
+    return {"assembly_jobs_queued": []}
 
 
 def route_after_fetch(state: EmbedPipelineState) -> str:

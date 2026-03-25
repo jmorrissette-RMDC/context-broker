@@ -48,8 +48,7 @@ async def health_check(request: Request) -> JSONResponse:
             content={
                 "status": "degraded",
                 "error": f"Config load failed: {exc}",
-                "postgres": "unknown",
-                "redis": "unknown",
+                "database": "unknown",
                 "neo4j": "unknown",
             },
         )
@@ -58,7 +57,6 @@ async def health_check(request: Request) -> JSONResponse:
         {
             "config": config,
             "postgres_ok": False,
-            "redis_ok": False,
             "neo4j_ok": False,
             "all_healthy": False,
             "status_detail": None,
