@@ -49,17 +49,28 @@ def mcp_call(tool_name: str, arguments: dict) -> dict:
 def sonnet_evaluate(prompt: str) -> str:
     """Call Claude Sonnet via CLI for quality evaluation.
 
-    Uses stdin to pass the prompt (avoids Windows command line length limit).
+    Writes prompt to a temp file and passes the file path to Claude CLI.
+    Avoids stdin pipe issues and command line length limits.
     """
-    result = subprocess.run(
-        ["claude", "--model", SONNET_MODEL, "--print", "-p", "-"],
-        input=prompt.encode("utf-8"),
-        capture_output=True, timeout=300,
-    )
-    if result.returncode != 0:
-        stderr = (result.stderr or b"").decode("utf-8", errors="replace")
-        return f"Sonnet CLI error: {stderr[:200]}"
-    return (result.stdout or b"").decode("utf-8", errors="replace").strip()
+    import tempfile
+    from pathlib import Path
+
+    prompt_file = Path(tempfile.mktemp(suffix=".md"))
+    try:
+        prompt_file.write_text(prompt, encoding="utf-8")
+        result = subprocess.run(
+            ["claude", "--model", SONNET_MODEL, "--print",
+             "-p", "-"],
+            input=prompt.encode("utf-8", errors="replace"),
+            capture_output=True, timeout=300,
+        )
+        stdout = (result.stdout or b"").decode("utf-8", errors="replace").strip()
+        if not stdout:
+            stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+            return f"Sonnet CLI error: {stderr[:300]}"
+        return stdout
+    finally:
+        prompt_file.unlink(missing_ok=True)
 
 
 def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
@@ -76,7 +87,7 @@ def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
     if not ctx.get("context"):
         return {"passed": False, "detail": "No context returned"}
 
-    context_text = json.dumps(ctx["context"], ensure_ascii=False)[:15000]  # Truncate for eval
+    context_text = json.dumps(ctx["context"], ensure_ascii=False)[:5000]  # Truncate for Sonnet CLI
     total_tokens = ctx.get("total_tokens", 0)
     tiers = ctx.get("tiers", ctx.get("context_tiers", {}))
 
@@ -88,15 +99,16 @@ def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
          f"AND role='user' AND LENGTH(content) > 50 ORDER BY sequence_number LIMIT 10\""],
         capture_output=True, timeout=15,
     )
-    rows = (rows_result.stdout or b"").decode("utf-8", errors="replace")[:5000]
+    rows = (rows_result.stdout or b"").decode("utf-8", errors="replace")[:2000]
 
     eval_prompt = f"""You are evaluating the quality of a context assembly system.
 
 ORIGINAL SAMPLE MESSAGES (10 of many):
 {rows}
 
-ASSEMBLED CONTEXT ({build_type}, {total_tokens} tokens, tiers: {json.dumps(tiers)}):
-{context_text[:20000]}
+ASSEMBLED CONTEXT ({build_type}, {total_tokens} tokens):
+Tier counts: {json.dumps({k: len(v) if isinstance(v, list) else (len(v) if isinstance(v, str) and v else 0) for k, v in tiers.items()})}
+{context_text[:5000]}
 
 Evaluate:
 1. Does the assembled context preserve the key themes and topics from the original messages?
