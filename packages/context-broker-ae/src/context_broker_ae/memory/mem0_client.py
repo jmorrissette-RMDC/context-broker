@@ -258,6 +258,8 @@ def _get_embedding_dims(config: dict, embeddings_config: dict) -> int:
         "text-embedding-3-small": 1536,
         "text-embedding-3-large": 3072,
         "text-embedding-ada-002": 1536,
+        # Google
+        "gemini-embedding-001": 3072,
         # M-19: Ollama / nomic models
         "nomic-embed-text": 768,
         "nomic-embed-text:latest": 768,
