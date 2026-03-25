@@ -46,22 +46,23 @@ def mcp_call(tool_name: str, arguments: dict) -> dict:
         return json.loads(text)
 
 
-def sonnet_evaluate(prompt: str) -> str:
+def sonnet_evaluate(data_content: str, instruction: str) -> str:
     """Call Claude Sonnet via CLI for quality evaluation.
 
-    Writes prompt to a temp file and passes the file path to Claude CLI.
-    Avoids stdin pipe issues and command line length limits.
+    Writes data to a temp file, passes a short instruction via -p that
+    tells Sonnet to read the file and evaluate it. Avoids prompt length limits.
     """
     import tempfile
     from pathlib import Path
 
-    prompt_file = Path(tempfile.mktemp(suffix=".md"))
+    data_file = Path(tempfile.mktemp(suffix=".md", dir="."))
     try:
-        prompt_file.write_text(prompt, encoding="utf-8")
+        data_file.write_text(data_content, encoding="utf-8")
+        prompt = f"Read the file at {data_file.absolute()} and follow the instructions inside it. {instruction}"
         result = subprocess.run(
             ["claude", "--model", SONNET_MODEL, "--print",
-             "-p", "-"],
-            input=prompt.encode("utf-8", errors="replace"),
+             "--allowedTools", "Read",
+             "-p", prompt],
             capture_output=True, timeout=300,
         )
         stdout = (result.stdout or b"").decode("utf-8", errors="replace").strip()
@@ -70,7 +71,7 @@ def sonnet_evaluate(prompt: str) -> str:
             return f"Sonnet CLI error: {stderr[:300]}"
         return stdout
     finally:
-        prompt_file.unlink(missing_ok=True)
+        data_file.unlink(missing_ok=True)
 
 
 def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
@@ -87,9 +88,10 @@ def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
     if not ctx.get("context"):
         return {"passed": False, "detail": "No context returned"}
 
-    context_text = json.dumps(ctx["context"], ensure_ascii=False)[:5000]  # Truncate for Sonnet CLI
+    context_text = json.dumps(ctx["context"], ensure_ascii=False)
     total_tokens = ctx.get("total_tokens", 0)
     tiers = ctx.get("tiers", ctx.get("context_tiers", {}))
+    tier_summary = {k: len(v) if isinstance(v, list) else (len(v) if isinstance(v, str) and v else 0) for k, v in tiers.items()}
 
     # Get some original messages for comparison
     rows_result = subprocess.run(
@@ -99,26 +101,33 @@ def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
          f"AND role='user' AND LENGTH(content) > 50 ORDER BY sequence_number LIMIT 10\""],
         capture_output=True, timeout=15,
     )
-    rows = (rows_result.stdout or b"").decode("utf-8", errors="replace")[:2000]
+    rows = (rows_result.stdout or b"").decode("utf-8", errors="replace")
 
-    eval_prompt = f"""You are evaluating the quality of a context assembly system.
+    # Write full data to file for Sonnet to read
+    data_content = f"""# Context Assembly Quality Evaluation
 
-ORIGINAL SAMPLE MESSAGES (10 of many):
+## Build Type: {build_type}
+## Total Tokens: {total_tokens}
+## Tier Counts: {json.dumps(tier_summary)}
+
+## Original Sample Messages (10 of many)
 {rows}
 
-ASSEMBLED CONTEXT ({build_type}, {total_tokens} tokens):
-Tier counts: {json.dumps({k: len(v) if isinstance(v, list) else (len(v) if isinstance(v, str) and v else 0) for k, v in tiers.items()})}
-{context_text[:5000]}
+## Assembled Context (full)
+{context_text}
 
-Evaluate:
-1. Does the assembled context preserve the key themes and topics from the original messages?
-2. For standard-tiered: are there clear tier 1 (archival summary), tier 2 (chunk summaries), and tier 3 (recent verbatim) sections?
-3. Is any critical information obviously lost?
-4. Rate the overall quality: GOOD, ACCEPTABLE, or POOR.
+## Instructions
+Evaluate this assembled context:
+1. Does it preserve the key themes and topics from the original messages?
+2. For standard-tiered: are there clear tier 1 (archival summary), tier 2 (chunk summaries), and tier 3 (recent verbatim)?
+3. For knowledge-enriched: are there knowledge graph facts and semantic messages in addition to tiers?
+4. Is any critical information obviously lost?
+5. Rate the overall quality: GOOD, ACCEPTABLE, or POOR.
 
-Respond with a JSON object: {{"rating": "GOOD/ACCEPTABLE/POOR", "assessment": "brief explanation", "issues": ["list of issues if any"]}}"""
+Respond with ONLY a JSON object: {{"rating": "GOOD/ACCEPTABLE/POOR", "assessment": "brief explanation", "issues": ["list of issues if any"]}}"""
 
-    response = sonnet_evaluate(eval_prompt)
+    instruction = "Evaluate the context assembly quality as described in the file. Respond with ONLY a JSON object."
+    response = sonnet_evaluate(data_content, instruction)
     print(f"    Sonnet: {response[:200]}")
 
     try:

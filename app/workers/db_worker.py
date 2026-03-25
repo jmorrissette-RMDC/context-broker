@@ -157,6 +157,9 @@ async def _extraction_worker(config: dict) -> None:
 
     poll_interval = get_tuning(config, "worker_poll_interval_seconds", 2)
     consecutive_failures = 0
+    # Track per-conversation failure counts to avoid retry storms
+    _conv_failures: dict[str, int] = {}
+    _MAX_CONV_RETRIES = 3
 
     while True:
         try:
@@ -185,6 +188,10 @@ async def _extraction_worker(config: dict) -> None:
 
             for conv_row in conv_rows:
                 conv_id = str(conv_row["conversation_id"])
+
+                # Skip conversations that have failed too many times
+                if _conv_failures.get(conv_id, 0) >= _MAX_CONV_RETRIES:
+                    continue
 
                 # Use Postgres advisory lock to prevent concurrent extraction
                 lock_id = hash(conv_id) & 0x7FFFFFFFFFFFFFFF  # Positive bigint
@@ -215,9 +222,14 @@ async def _extraction_worker(config: dict) -> None:
                     duration = time.monotonic() - start
 
                     if result.get("error"):
-                        _log.error("Extraction failed for %s: %s", conv_id, result["error"])
+                        _conv_failures[conv_id] = _conv_failures.get(conv_id, 0) + 1
+                        _log.error(
+                            "Extraction failed for %s (attempt %d/%d): %s",
+                            conv_id, _conv_failures[conv_id], _MAX_CONV_RETRIES, result["error"],
+                        )
                         JOBS_COMPLETED.labels(job_type="extract_memory", status="error").inc()
                     else:
+                        _conv_failures.pop(conv_id, None)  # Reset on success
                         _log.info(
                             "Extraction complete: conv=%s extracted=%d duration_ms=%d",
                             conv_id, result.get("extracted_count", 0), int(duration * 1000),
