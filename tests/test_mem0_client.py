@@ -154,6 +154,16 @@ class TestGetEmbeddingDims:
 # ── reset_mem0_client ────────────────────────────────────────────────
 
 class TestResetMem0Client:
+    @pytest.fixture(autouse=True)
+    def clean_state(self):
+        """Ensure clean global state before and after each test."""
+        import context_broker_ae.memory.mem0_client as mod
+        mod._mem0_instance = None
+        mod._mem0_config_hash = None
+        yield
+        mod._mem0_instance = None
+        mod._mem0_config_hash = None
+
     def test_clears_instance(self):
         import context_broker_ae.memory.mem0_client as mod
         mod._mem0_instance = "fake"
@@ -181,6 +191,15 @@ class TestResetMem0Client:
 # ── get_mem0_client ──────────────────────────────────────────────────
 
 class TestGetMem0Client:
+    @pytest.fixture(autouse=True)
+    def clean_state(self):
+        import context_broker_ae.memory.mem0_client as mod
+        mod._mem0_instance = None
+        mod._mem0_config_hash = None
+        yield
+        mod._mem0_instance = None
+        mod._mem0_config_hash = None
+
     @pytest.mark.asyncio
     async def test_returns_none_on_init_failure(self):
         """Graceful degradation: returns None if Mem0 can't initialize."""
@@ -235,12 +254,20 @@ class TestGetMem0Client:
 # ── _build_mem0_instance ─────────────────────────────────────────────
 
 class TestBuildMem0Instance:
+    @pytest.fixture(autouse=True)
+    def skip_patches(self):
+        """Prevent _apply_mem0_patches from running during unit tests."""
+        import context_broker_ae.memory.mem0_client as mod
+        mod._patches_applied = True
+        yield
+        mod._patches_applied = False
+
     @patch.dict(os.environ, {
         "POSTGRES_HOST": "localhost", "POSTGRES_PORT": "5432",
         "POSTGRES_DB": "test_db", "POSTGRES_USER": "test_user",
         "POSTGRES_PASSWORD": "test_pass", "NEO4J_PASSWORD": "",
     })
-    @patch("context_broker_ae.memory.mem0_client.Memory")
+    @patch("mem0.Memory")
     def test_creates_memory_with_all_providers(self, mock_memory):
         from context_broker_ae.memory.mem0_client import _build_mem0_instance
         config = {
@@ -255,7 +282,7 @@ class TestBuildMem0Instance:
         "POSTGRES_DB": "test_db", "POSTGRES_USER": "test_user",
         "POSTGRES_PASSWORD": "test_pass", "NEO4J_PASSWORD": "real-pw",
     })
-    @patch("context_broker_ae.memory.mem0_client.Memory")
+    @patch("mem0.Memory")
     def test_passes_real_neo4j_password(self, mock_memory):
         from context_broker_ae.memory.mem0_client import _build_mem0_instance
         config = {
@@ -264,15 +291,21 @@ class TestBuildMem0Instance:
         }
         _build_mem0_instance(config)
         call_args = mock_memory.call_args
-        mem_config = call_args.kwargs.get("config") or call_args.args[0]
-        assert mem_config.graph_store.config["password"] == "real-pw"
+        mem_config = call_args.kwargs.get("config")
+        if mem_config is None and call_args.args:
+            mem_config = call_args.args[0]
+        # MemoryConfig is a Pydantic model — access graph_store.config
+        gs_config = mem_config.graph_store.config
+        # GraphStoreConfig.config may be a dict or Pydantic model
+        pwd = gs_config["password"] if isinstance(gs_config, dict) else gs_config.password
+        assert pwd == "real-pw"
 
     @patch.dict(os.environ, {
         "POSTGRES_HOST": "localhost", "POSTGRES_PORT": "5432",
         "POSTGRES_DB": "test_db", "POSTGRES_USER": "test_user",
         "POSTGRES_PASSWORD": "test_pass", "NEO4J_PASSWORD": "",
     })
-    @patch("context_broker_ae.memory.mem0_client.Memory")
+    @patch("mem0.Memory")
     def test_dummy_neo4j_password_when_auth_none(self, mock_memory):
         """PG-44: Empty NEO4J_PASSWORD should pass dummy credentials."""
         from context_broker_ae.memory.mem0_client import _build_mem0_instance
@@ -282,16 +315,21 @@ class TestBuildMem0Instance:
         }
         _build_mem0_instance(config)
         call_args = mock_memory.call_args
-        mem_config = call_args.kwargs.get("config") or call_args.args[0]
-        assert mem_config.graph_store.config["password"] == "neo4j"
-        assert mem_config.graph_store.config["username"] == "neo4j"
+        mem_config = call_args.kwargs.get("config")
+        if mem_config is None and call_args.args:
+            mem_config = call_args.args[0]
+        gs_config = mem_config.graph_store.config
+        pwd = gs_config["password"] if isinstance(gs_config, dict) else gs_config.password
+        usr = gs_config["username"] if isinstance(gs_config, dict) else gs_config.username
+        assert pwd == "neo4j"
+        assert usr == "neo4j"
 
     @patch.dict(os.environ, {
         "POSTGRES_HOST": "localhost", "POSTGRES_PORT": "5432",
         "POSTGRES_DB": "test_db", "POSTGRES_USER": "test_user",
         "POSTGRES_PASSWORD": "test_pass", "NEO4J_PASSWORD": "",
     })
-    @patch("context_broker_ae.memory.mem0_client.Memory")
+    @patch("mem0.Memory")
     def test_uses_extraction_config_not_llm(self, mock_memory):
         """Extraction LLM config should come from 'extraction' key, not 'llm'."""
         from context_broker_ae.memory.mem0_client import _build_mem0_instance
@@ -302,7 +340,9 @@ class TestBuildMem0Instance:
         }
         _build_mem0_instance(config)
         call_args = mock_memory.call_args
-        mem_config = call_args.kwargs.get("config") or call_args.args[0]
+        mem_config = call_args.kwargs.get("config")
+        if mem_config is None and call_args.args:
+            mem_config = call_args.args[0]
         assert mem_config.llm.config["model"] == "extraction-model"
         assert "extraction-host" in mem_config.llm.config["openai_base_url"]
 
@@ -311,7 +351,7 @@ class TestBuildMem0Instance:
         "POSTGRES_DB": "test_db", "POSTGRES_USER": "test_user",
         "POSTGRES_PASSWORD": "test_pass", "NEO4J_PASSWORD": "",
     })
-    @patch("context_broker_ae.memory.mem0_client.Memory")
+    @patch("mem0.Memory")
     def test_falls_back_to_llm_if_no_extraction(self, mock_memory):
         """If no 'extraction' key, fall back to 'llm'."""
         from context_broker_ae.memory.mem0_client import _build_mem0_instance
@@ -321,5 +361,7 @@ class TestBuildMem0Instance:
         }
         _build_mem0_instance(config)
         call_args = mock_memory.call_args
-        mem_config = call_args.kwargs.get("config") or call_args.args[0]
+        mem_config = call_args.kwargs.get("config")
+        if mem_config is None and call_args.args:
+            mem_config = call_args.args[0]
         assert mem_config.llm.config["model"] == "fallback-model"

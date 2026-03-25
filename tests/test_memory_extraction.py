@@ -13,17 +13,39 @@ import pytest
 
 from context_broker_ae.memory_extraction import (
     _redact_secrets,
-    acquire_extraction_lock,
     build_extraction_text,
-    fetch_unextracted_messages,
-    mark_messages_extracted,
-    release_extraction_lock,
     route_after_build_text,
     route_after_extraction,
     route_after_fetch,
     route_after_lock,
     run_mem0_extraction,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_mem0_state():
+    """Reset Mem0 global state before each test."""
+    from context_broker_ae.memory.mem0_client import reset_mem0_client
+    reset_mem0_client()
+    yield
+    reset_mem0_client()
+
+
+# Mock fixtures that patch at both the source AND the import target
+@pytest.fixture
+def mock_pg_pool():
+    pool = AsyncMock()
+    with patch("app.database._pg_pool", pool), \
+         patch("app.database.get_pg_pool", return_value=pool):
+        yield pool
+
+
+@pytest.fixture
+def mock_redis():
+    redis = AsyncMock()
+    with patch("app.database._redis_client", redis), \
+         patch("app.database.get_redis", return_value=redis):
+        yield redis
 
 
 # ── _redact_secrets ──────────────────────────────────────────────────
@@ -62,33 +84,30 @@ class TestRedactSecrets:
 
 class TestAcquireExtractionLock:
     @pytest.mark.asyncio
-    async def test_lock_acquired(self):
-        mock_redis = AsyncMock()
+    async def test_lock_acquired(self, mock_redis):
+        from context_broker_ae.memory_extraction import acquire_extraction_lock
         mock_redis.set.return_value = True
         state = {"conversation_id": str(uuid.uuid4()), "config": {"tuning": {}}}
-        with patch("context_broker_ae.memory_extraction.get_redis", return_value=mock_redis):
-            result = await acquire_extraction_lock(state)
+        result = await acquire_extraction_lock(state)
         assert result["lock_acquired"] is True
         assert result["lock_token"] is not None
         assert "extraction_in_progress:" in result["lock_key"]
 
     @pytest.mark.asyncio
-    async def test_lock_not_acquired(self):
-        mock_redis = AsyncMock()
-        mock_redis.set.return_value = False  # Another worker has it
+    async def test_lock_not_acquired(self, mock_redis):
+        from context_broker_ae.memory_extraction import acquire_extraction_lock
+        mock_redis.set.return_value = False
         state = {"conversation_id": str(uuid.uuid4()), "config": {"tuning": {}}}
-        with patch("context_broker_ae.memory_extraction.get_redis", return_value=mock_redis):
-            result = await acquire_extraction_lock(state)
+        result = await acquire_extraction_lock(state)
         assert result["lock_acquired"] is False
         assert result["lock_token"] is None
 
     @pytest.mark.asyncio
-    async def test_lock_uses_config_ttl(self):
-        mock_redis = AsyncMock()
+    async def test_lock_uses_config_ttl(self, mock_redis):
+        from context_broker_ae.memory_extraction import acquire_extraction_lock
         mock_redis.set.return_value = True
         state = {"conversation_id": str(uuid.uuid4()), "config": {"tuning": {"extraction_lock_ttl_seconds": 999}}}
-        with patch("context_broker_ae.memory_extraction.get_redis", return_value=mock_redis):
-            await acquire_extraction_lock(state)
+        await acquire_extraction_lock(state)
         call_kwargs = mock_redis.set.call_args
         assert call_kwargs.kwargs.get("ex") == 999
 
@@ -97,39 +116,36 @@ class TestAcquireExtractionLock:
 
 class TestFetchUnextractedMessages:
     @pytest.mark.asyncio
-    async def test_no_messages(self):
-        mock_pool = AsyncMock()
-        mock_pool.fetch.return_value = []
+    async def test_no_messages(self, mock_pg_pool):
+        from context_broker_ae.memory_extraction import fetch_unextracted_messages
+        mock_pg_pool.fetch.return_value = []
         state = {"conversation_id": str(uuid.uuid4()), "config": {}}
-        with patch("context_broker_ae.memory_extraction.get_pg_pool", return_value=mock_pool):
-            result = await fetch_unextracted_messages(state)
+        result = await fetch_unextracted_messages(state)
         assert result["messages"] == []
         assert result["extracted_count"] == 0
 
     @pytest.mark.asyncio
-    async def test_returns_messages_and_user_id(self):
-        mock_pool = AsyncMock()
-        mock_pool.fetch.return_value = [
+    async def test_returns_messages_and_user_id(self, mock_pg_pool):
+        from context_broker_ae.memory_extraction import fetch_unextracted_messages
+        mock_pg_pool.fetch.return_value = [
             {"id": uuid.uuid4(), "role": "user", "sender": "human", "content": "Hello", "sequence_number": 1},
             {"id": uuid.uuid4(), "role": "assistant", "sender": "bot", "content": "Hi", "sequence_number": 2},
         ]
-        mock_pool.fetchrow.return_value = {"participant_id": "test-user"}
+        mock_pg_pool.fetchrow.return_value = {"participant_id": "test-user"}
         state = {"conversation_id": str(uuid.uuid4()), "config": {}}
-        with patch("context_broker_ae.memory_extraction.get_pg_pool", return_value=mock_pool):
-            result = await fetch_unextracted_messages(state)
+        result = await fetch_unextracted_messages(state)
         assert len(result["messages"]) == 2
         assert result["user_id"] == "test-user"
 
     @pytest.mark.asyncio
-    async def test_default_user_id_when_no_window(self):
-        mock_pool = AsyncMock()
-        mock_pool.fetch.return_value = [
+    async def test_default_user_id_when_no_window(self, mock_pg_pool):
+        from context_broker_ae.memory_extraction import fetch_unextracted_messages
+        mock_pg_pool.fetch.return_value = [
             {"id": uuid.uuid4(), "role": "user", "sender": "human", "content": "Hello", "sequence_number": 1},
         ]
-        mock_pool.fetchrow.return_value = None  # No context window
+        mock_pg_pool.fetchrow.return_value = None
         state = {"conversation_id": str(uuid.uuid4()), "config": {}}
-        with patch("context_broker_ae.memory_extraction.get_pg_pool", return_value=mock_pool):
-            result = await fetch_unextracted_messages(state)
+        result = await fetch_unextracted_messages(state)
         assert result["user_id"] == "default"
 
 
@@ -139,59 +155,61 @@ class TestBuildExtractionText:
     def _make_msg(self, role="user", sender="human", content="Hello", msg_id=None):
         return {"id": msg_id or uuid.uuid4(), "role": role, "sender": sender, "content": content}
 
-    def test_formats_messages_chronologically(self):
+    @pytest.mark.asyncio
+    async def test_formats_messages_chronologically(self):
         msgs = [
             self._make_msg(content="First message"),
             self._make_msg(role="assistant", sender="bot", content="Second message"),
         ]
-        state = {"messages": msgs, "config": {"tuning": {}}, "selected_message_ids": [], "extraction_text": "", "error": None}
-        result = build_extraction_text(state)
+        state = {"messages": msgs, "config": {"tuning": {}}, "selected_message_ids": [], "fully_extracted_ids": [], "extraction_text": "", "error": None}
+        result = await build_extraction_text(state)
         text = result["extraction_text"]
         assert "First message" in text
         assert "Second message" in text
-        # First should appear before second in the text
         assert text.index("First") < text.index("Second")
 
-    def test_skips_null_content(self):
+    @pytest.mark.asyncio
+    async def test_skips_null_content(self):
         msgs = [
             self._make_msg(content="Valid"),
             self._make_msg(content=None),
             self._make_msg(content=""),
             self._make_msg(content="Also valid"),
         ]
-        state = {"messages": msgs, "config": {"tuning": {}}, "selected_message_ids": [], "extraction_text": "", "error": None}
-        result = build_extraction_text(state)
+        state = {"messages": msgs, "config": {"tuning": {}}, "selected_message_ids": [], "fully_extracted_ids": [], "extraction_text": "", "error": None}
+        result = await build_extraction_text(state)
         assert "Valid" in result["extraction_text"]
         assert "Also valid" in result["extraction_text"]
         assert len(result["selected_message_ids"]) == 2
 
-    def test_respects_max_chars(self):
+    @pytest.mark.asyncio
+    async def test_respects_max_chars(self):
         msgs = [self._make_msg(content="x" * 5000) for _ in range(20)]
-        state = {"messages": msgs, "config": {"tuning": {"extraction_max_chars": 10000}}, "selected_message_ids": [], "extraction_text": "", "error": None}
-        result = build_extraction_text(state)
-        assert len(result["extraction_text"]) <= 11000  # Some formatting overhead
-        # Not all 20 messages selected
+        state = {"messages": msgs, "config": {"tuning": {"extraction_max_chars": 10000}}, "selected_message_ids": [], "fully_extracted_ids": [], "extraction_text": "", "error": None}
+        result = await build_extraction_text(state)
+        assert len(result["extraction_text"]) <= 11000
         assert len(result["selected_message_ids"]) < 20
 
-    def test_fully_extracted_ids_excludes_truncated(self):
-        """Messages that were truncated should NOT be in fully_extracted_ids."""
+    @pytest.mark.asyncio
+    async def test_fully_extracted_ids_excludes_truncated(self):
         msgs = [self._make_msg(content="x" * 8000) for _ in range(3)]
-        state = {"messages": msgs, "config": {"tuning": {"extraction_max_chars": 10000}}, "selected_message_ids": [], "extraction_text": "", "error": None}
-        result = build_extraction_text(state)
-        # Some messages should be fully extracted, at most 1 truncated
+        state = {"messages": msgs, "config": {"tuning": {"extraction_max_chars": 10000}}, "selected_message_ids": [], "fully_extracted_ids": [], "extraction_text": "", "error": None}
+        result = await build_extraction_text(state)
         assert len(result["fully_extracted_ids"]) <= len(result["selected_message_ids"])
 
-    def test_empty_messages(self):
-        state = {"messages": [], "config": {"tuning": {}}, "selected_message_ids": [], "extraction_text": "", "error": None}
-        result = build_extraction_text(state)
+    @pytest.mark.asyncio
+    async def test_empty_messages(self):
+        state = {"messages": [], "config": {"tuning": {}}, "selected_message_ids": [], "fully_extracted_ids": [], "extraction_text": "", "error": None}
+        result = await build_extraction_text(state)
         assert result["extraction_text"] == ""
         assert result["selected_message_ids"] == []
         assert result["fully_extracted_ids"] == []
 
-    def test_redacts_secrets_in_output(self):
+    @pytest.mark.asyncio
+    async def test_redacts_secrets_in_output(self):
         msgs = [self._make_msg(content='api_key="sk-proj-abcdefghijklmnopqrstuvwxyz123456"')]
-        state = {"messages": msgs, "config": {"tuning": {}}, "selected_message_ids": [], "extraction_text": "", "error": None}
-        result = build_extraction_text(state)
+        state = {"messages": msgs, "config": {"tuning": {}}, "selected_message_ids": [], "fully_extracted_ids": [], "extraction_text": "", "error": None}
+        result = await build_extraction_text(state)
         assert "sk-proj" not in result["extraction_text"]
         assert "[REDACTED]" in result["extraction_text"]
 
@@ -206,7 +224,7 @@ class TestRunMem0Extraction:
             "extraction_text": "test", "user_id": "test",
             "selected_message_ids": ["id1"], "extracted_count": 0, "error": None,
         }
-        with patch("context_broker_ae.memory_extraction.get_mem0_client", new_callable=AsyncMock, return_value=None):
+        with patch("context_broker_ae.memory.mem0_client.get_mem0_client", new_callable=AsyncMock, return_value=None) as _:
             result = await run_mem0_extraction(state)
         assert "not available" in result["error"]
 
@@ -220,7 +238,7 @@ class TestRunMem0Extraction:
             "extraction_text": "The sky is blue.", "user_id": "user123",
             "selected_message_ids": ["id1"], "extracted_count": 0, "error": None,
         }
-        with patch("context_broker_ae.memory_extraction.get_mem0_client", new_callable=AsyncMock, return_value=mock_mem0):
+        with patch("context_broker_ae.memory.mem0_client.get_mem0_client", new_callable=AsyncMock, return_value=mock_mem0):
             result = await run_mem0_extraction(state)
         mock_mem0.add.assert_called_once_with(
             "The sky is blue.",
@@ -239,31 +257,25 @@ class TestRunMem0Extraction:
             "extraction_text": "test", "user_id": "test",
             "selected_message_ids": ["id1"], "extracted_count": 0, "error": None,
         }
-        with patch("context_broker_ae.memory_extraction.get_mem0_client", new_callable=AsyncMock, return_value=mock_mem0):
-            with patch("context_broker_ae.memory_extraction.reset_mem0_client") as mock_reset:
-                result = await run_mem0_extraction(state)
+        with patch("context_broker_ae.memory.mem0_client.get_mem0_client", new_callable=AsyncMock, return_value=mock_mem0), \
+             patch("context_broker_ae.memory.mem0_client.reset_mem0_client") as mock_reset:
+            result = await run_mem0_extraction(state)
         assert result["error"] is not None
         assert "transaction aborted" in result["error"]
         mock_reset.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_mem0_silent_failure_not_detected(self):
-        """KNOWN BUG: If mem0.add() succeeds but doesn't persist, we return error=None.
-
-        This test documents the current (broken) behavior. When fixed,
-        the test should verify that we check the add() return value.
-        """
+        """KNOWN BUG: If mem0.add() succeeds but doesn't persist, we return error=None."""
         mock_mem0 = MagicMock()
-        mock_mem0.add.return_value = None  # Mem0 returns None but didn't persist
+        mock_mem0.add.return_value = None
         state = {
             "conversation_id": str(uuid.uuid4()), "config": {},
             "extraction_text": "test", "user_id": "test",
             "selected_message_ids": ["id1"], "extracted_count": 0, "error": None,
         }
-        with patch("context_broker_ae.memory_extraction.get_mem0_client", new_callable=AsyncMock, return_value=mock_mem0):
+        with patch("context_broker_ae.memory.mem0_client.get_mem0_client", new_callable=AsyncMock, return_value=mock_mem0):
             result = await run_mem0_extraction(state)
-        # Currently returns no error even though add may have silently failed
-        # TODO: Fix to validate add() return value
         assert result.get("error") is None
 
 
@@ -271,74 +283,67 @@ class TestRunMem0Extraction:
 
 class TestMarkMessagesExtracted:
     @pytest.mark.asyncio
-    async def test_marks_fully_extracted_only(self):
-        mock_pool = AsyncMock()
+    async def test_marks_fully_extracted_only(self, mock_pg_pool):
+        from context_broker_ae.memory_extraction import mark_messages_extracted
         ids = [str(uuid.uuid4()), str(uuid.uuid4())]
         state = {"fully_extracted_ids": ids, "error": None}
-        with patch("context_broker_ae.memory_extraction.get_pg_pool", return_value=mock_pool):
-            result = await mark_messages_extracted(state)
+        result = await mark_messages_extracted(state)
         assert result["extracted_count"] == 2
-        mock_pool.execute.assert_called_once()
+        mock_pg_pool.execute.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_skips_on_error(self):
-        mock_pool = AsyncMock()
+    async def test_skips_on_error(self, mock_pg_pool):
+        from context_broker_ae.memory_extraction import mark_messages_extracted
         state = {"fully_extracted_ids": ["id1"], "error": "previous error"}
-        with patch("context_broker_ae.memory_extraction.get_pg_pool", return_value=mock_pool):
-            result = await mark_messages_extracted(state)
+        result = await mark_messages_extracted(state)
         assert result == {}
-        mock_pool.execute.assert_not_called()
+        mock_pg_pool.execute.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_empty_list_returns_zero(self):
-        mock_pool = AsyncMock()
+    async def test_empty_list_returns_zero(self, mock_pg_pool):
+        from context_broker_ae.memory_extraction import mark_messages_extracted
         state = {"fully_extracted_ids": [], "error": None}
-        with patch("context_broker_ae.memory_extraction.get_pg_pool", return_value=mock_pool):
-            result = await mark_messages_extracted(state)
+        result = await mark_messages_extracted(state)
         assert result["extracted_count"] == 0
-        mock_pool.execute.assert_not_called()
+        mock_pg_pool.execute.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_extracted_count_matches_fully_extracted(self):
+    async def test_extracted_count_matches_fully_extracted(self, mock_pg_pool):
         """extracted_count must equal len(fully_extracted_ids), NOT len(selected_message_ids)."""
-        mock_pool = AsyncMock()
+        from context_broker_ae.memory_extraction import mark_messages_extracted
         state = {
             "fully_extracted_ids": [str(uuid.uuid4())],
             "selected_message_ids": [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())],
             "error": None,
         }
-        with patch("context_broker_ae.memory_extraction.get_pg_pool", return_value=mock_pool):
-            result = await mark_messages_extracted(state)
-        assert result["extracted_count"] == 1  # NOT 3
+        result = await mark_messages_extracted(state)
+        assert result["extracted_count"] == 1
 
 
 # ── release_extraction_lock ──────────────────────────────────────────
 
 class TestReleaseExtractionLock:
     @pytest.mark.asyncio
-    async def test_releases_when_acquired(self):
-        mock_redis = AsyncMock()
+    async def test_releases_when_acquired(self, mock_redis):
+        from context_broker_ae.memory_extraction import release_extraction_lock
         mock_redis.eval.return_value = 1
         state = {"lock_key": "test-lock", "lock_token": "test-token", "lock_acquired": True}
-        with patch("context_broker_ae.memory_extraction.get_redis", return_value=mock_redis):
-            result = await release_extraction_lock(state)
+        result = await release_extraction_lock(state)
         assert result == {}
         mock_redis.eval.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_skips_when_not_acquired(self):
-        mock_redis = AsyncMock()
+    async def test_skips_when_not_acquired(self, mock_redis):
+        from context_broker_ae.memory_extraction import release_extraction_lock
         state = {"lock_key": "test-lock", "lock_token": None, "lock_acquired": False}
-        with patch("context_broker_ae.memory_extraction.get_redis", return_value=mock_redis):
-            result = await release_extraction_lock(state)
+        result = await release_extraction_lock(state)
         mock_redis.eval.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_skips_when_no_token(self):
-        mock_redis = AsyncMock()
+    async def test_skips_when_no_token(self, mock_redis):
+        from context_broker_ae.memory_extraction import release_extraction_lock
         state = {"lock_key": "test-lock", "lock_token": None, "lock_acquired": True}
-        with patch("context_broker_ae.memory_extraction.get_redis", return_value=mock_redis):
-            result = await release_extraction_lock(state)
+        result = await release_extraction_lock(state)
         mock_redis.eval.assert_not_called()
 
 
