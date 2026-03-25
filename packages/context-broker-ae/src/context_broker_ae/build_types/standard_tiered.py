@@ -109,7 +109,7 @@ async def acquire_assembly_lock(state: StandardTieredAssemblyState) -> dict:
     try:
         pool = get_pg_pool()  # Advisory lock (Redis removed)
         lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
-        acquired = await pool.fetchval("SELECT pg_try_advisory_lock()", lock_id)
+        acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
     except (RuntimeError, OSError, ConnectionError) as exc:
         _log.error("Redis unavailable during lock acquisition for window=%s: %s",
                     state["context_window_id"], exc)
