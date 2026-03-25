@@ -361,6 +361,20 @@ async def _migration_015(conn) -> None:
     _log.info("Migration 015 complete — stategraph_packages table")
 
 
+async def _migration_016(conn) -> None:
+    """Migration 16: Add unique index for Mem0 memory deduplication.
+
+    Prevents duplicate memories with the same hash+user_id. Works with
+    the PGVector.insert monkey-patch (ON CONFLICT DO NOTHING) to prevent
+    transaction aborts from duplicate inserts. From Rogers (Fix 2).
+    """
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mem0_hash_user
+        ON mem0_memories ((payload->>'hash'), (payload->>'user_id'))
+    """)
+    _log.info("Migration 016 complete — mem0_memories dedup index")
+
+
 # Migration registry: version -> (description, migration_function)
 # Add new migrations here. Never modify existing entries.
 # IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
@@ -403,6 +417,11 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
         15,
         "Add stategraph_packages table for dynamic loading (REQ-001 §10)",
         _migration_015,
+    ),
+    (
+        16,
+        "Add mem0_memories dedup index (hash+user_id) — from Rogers Fix 2",
+        _migration_016,
     ),
 ]
 
