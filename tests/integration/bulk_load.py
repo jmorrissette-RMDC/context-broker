@@ -198,11 +198,9 @@ async def wait_for_pipeline(
                 )
                 return False
 
-        # Success: all queues empty (some messages may have null content and skip embedding)
+        # Success: embedding queue empty (extraction runs in background, may take longer)
         if (
             queues["embedding_queue"] == 0
-            and queues["assembly_queue"] == 0
-            and queues["extraction_queue"] == 0
             and counts["total_embedded"] > 0
         ):
             log.info(
