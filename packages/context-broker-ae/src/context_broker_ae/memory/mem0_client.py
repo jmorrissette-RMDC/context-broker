@@ -241,27 +241,21 @@ def _neo4j_config(password: str) -> dict:
 
 
 def _get_embedding_dims(config: dict, embeddings_config: dict) -> int:
-    """Return the embedding dimensions for the configured model.
+    """Return the embedding dimensions from config.
 
-    Checks for an explicit ``embedding_dims`` value in the top-level config
-    first (settable in config.yml).  Falls back to a built-in lookup table
-    keyed by model name, defaulting to 1536.
+    embedding_dims is a REQUIRED field in the embeddings config section.
+    Different embedding models produce different dimension vectors —
+    this must match the model being used. No hardcoded defaults.
     """
-    # Prefer explicit config override
-    configured_dims = config.get("embedding_dims")
-    if configured_dims is not None:
-        return int(configured_dims)
-
-    model = embeddings_config.get("model", "text-embedding-3-small")
-    # Known dimension mappings (fallback)
-    dims_map = {
-        "text-embedding-3-small": 1536,
-        "text-embedding-3-large": 3072,
-        "text-embedding-ada-002": 1536,
-        # Google
-        "gemini-embedding-001": 3072,
-        # M-19: Ollama / nomic models
-        "nomic-embed-text": 768,
-        "nomic-embed-text:latest": 768,
-    }
-    return dims_map.get(model, 1536)
+    configured_dims = embeddings_config.get("embedding_dims")
+    if configured_dims is None:
+        # Also check top-level config for backward compat
+        configured_dims = config.get("embedding_dims")
+    if configured_dims is None:
+        raise ValueError(
+            "embedding_dims is required in the embeddings config section. "
+            "Set it to match your embedding model's output dimensions "
+            "(e.g., 3072 for gemini-embedding-001, 1536 for text-embedding-3-small, "
+            "768 for nomic-embed-text)."
+        )
+    return int(configured_dims)

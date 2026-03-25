@@ -32,6 +32,7 @@ extraction:
 embeddings:
   base_url: http://context-broker-infinity:7997
   model: nomic-ai/nomic-embed-text-v1.5
+  embedding_dims: 768               # REQUIRED — must match model output dimensions
   tiktoken_enabled: false
   check_embedding_ctx_length: false
   context_window_size: 3
