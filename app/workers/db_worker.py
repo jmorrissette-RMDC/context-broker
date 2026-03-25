@@ -136,9 +136,7 @@ async def _embedding_worker(config: dict) -> None:
             JOBS_COMPLETED.labels(job_type="embed_message", status="success").inc(len(rows))
             consecutive_failures = 0
 
-            # Trigger assembly check for affected conversations
-            conv_ids = list(set(str(r["conversation_id"]) for r in rows))
-            await _check_assembly_needed(pool, config, conv_ids)
+            # Assembly is handled by the separate assembly worker loop
 
         except asyncio.CancelledError:
             _log.info("Embedding worker cancelled")
@@ -307,6 +305,83 @@ async def _check_assembly_needed(pool, config: dict, conv_ids: list[str]) -> Non
 
 # ── Main entry point ────────────────────────────────────────────────
 
+async def _assembly_worker(config: dict) -> None:
+    """Poll for context windows that need reassembly."""
+    _log.info("Assembly worker started (DB-driven)")
+
+    poll_interval = get_tuning(config, "worker_poll_interval_seconds", 2)
+
+    while True:
+        try:
+            config = await async_load_config()
+            pool = get_pg_pool()
+
+            # Find windows where new messages exist since last assembly
+            windows = await pool.fetch(
+                """
+                SELECT cw.id, cw.conversation_id, cw.build_type,
+                       cw.max_token_budget, cw.last_assembled_at
+                FROM context_windows cw
+                WHERE EXISTS (
+                    SELECT 1 FROM conversation_messages cm
+                    WHERE cm.conversation_id = cw.conversation_id
+                    AND (cw.last_assembled_at IS NULL OR cm.created_at > cw.last_assembled_at)
+                )
+                LIMIT 5
+                """
+            )
+
+            ASSEMBLY_QUEUE_DEPTH.set(len(windows))
+
+            if not windows:
+                await asyncio.sleep(poll_interval * 5)  # Poll less frequently for assembly
+                continue
+
+            for window in windows:
+                conv_id = str(window["conversation_id"])
+                window_id = str(window["id"])
+                await _run_assembly(pool, config, window_id, conv_id, window["build_type"])
+
+            await asyncio.sleep(poll_interval)
+
+        except asyncio.CancelledError:
+            _log.info("Assembly worker cancelled")
+            raise
+        except Exception as exc:
+            _log.error("Assembly worker error: %s: %s", type(exc).__name__, exc)
+            await asyncio.sleep(5)
+
+
+async def _run_assembly(pool, config, window_id, conv_id, build_type):
+    """Run assembly for a single window."""
+    from app.flows.build_type_registry import get_assembly_graph
+
+    _log.info("Triggering assembly for window=%s", window_id)
+    start = time.monotonic()
+
+    try:
+        assembly_graph = get_assembly_graph(build_type)
+        await assembly_graph.ainvoke(
+            {
+                "context_window_id": window_id,
+                "conversation_id": conv_id,
+                "config": config,
+            }
+        )
+
+        duration = time.monotonic() - start
+        _log.info(
+            "Assembly complete: window=%s duration_ms=%d",
+            window_id, int(duration * 1000),
+        )
+        JOBS_COMPLETED.labels(job_type="assemble_context", status="success").inc()
+        JOB_DURATION.labels(job_type="assemble_context").observe(duration)
+
+    except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
+        _log.error("Assembly failed for window=%s: %s", window_id, exc)
+        JOBS_COMPLETED.labels(job_type="assemble_context", status="error").inc()
+
+
 async def start_background_worker(config: dict) -> None:
     """Start all background worker loops concurrently."""
     _log.info("Background worker starting (DB-driven, no Redis)")
@@ -314,4 +389,5 @@ async def start_background_worker(config: dict) -> None:
     await asyncio.gather(
         _embedding_worker(config),
         _extraction_worker(config),
+        _assembly_worker(config),
     )
