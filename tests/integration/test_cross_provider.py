@@ -34,6 +34,7 @@ PROVIDERS = {
             "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
             "model": "gemini-embedding-001",
             "api_key_env": "GOOGLE_API_KEY",
+            "embedding_dims": 3072,
         },
         "summarization": {
             "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -46,6 +47,7 @@ PROVIDERS = {
             "base_url": "https://api.openai.com/v1",
             "model": "text-embedding-3-small",
             "api_key_env": "OPENAI_API_KEY",
+            "embedding_dims": 1536,
         },
         "summarization": {
             "base_url": "https://api.openai.com/v1",
@@ -60,6 +62,7 @@ PROVIDERS = {
             "base_url": "http://context-broker-ollama:11434/v1",
             "model": "nomic-embed-text",
             "api_key_env": "",
+            "embedding_dims": 768,
         },
         "summarization": {
             "base_url": "http://context-broker-ollama:11434/v1",
@@ -121,6 +124,7 @@ cfg['embeddings'] = {{
     'base_url': '{emb["base_url"]}',
     'model': '{emb["model"]}',
     'api_key_env': '{emb["api_key_env"]}',
+    'embedding_dims': {emb.get("embedding_dims", 3072)},
     'tiktoken_enabled': False,
     'check_embedding_ctx_length': False,
 }}
