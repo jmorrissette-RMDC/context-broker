@@ -279,19 +279,11 @@ async def _check_assembly_needed(pool, config: dict, conv_ids: list[str]) -> Non
                 if tokens_since < threshold_tokens:
                     continue
 
-            # Postgres advisory lock for assembly
-            lock_id = hash(window_id) & 0x7FFFFFFFFFFFFFFF
-            locked = await pool.fetchval(
-                "SELECT pg_try_advisory_lock($1)", lock_id
-            )
-            if not locked:
-                continue
+            _log.info("Triggering assembly for window=%s", window_id)
+            assembly_graph = get_assembly_graph(window["build_type"])
+            start = time.monotonic()
 
             try:
-                _log.info("Triggering assembly for window=%s", window_id)
-                assembly_graph = get_assembly_graph(window["build_type"])
-                start = time.monotonic()
-
                 await assembly_graph.ainvoke(
                     {
                         "context_window_id": window_id,
@@ -311,8 +303,6 @@ async def _check_assembly_needed(pool, config: dict, conv_ids: list[str]) -> Non
             except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
                 _log.error("Assembly failed for window=%s: %s", window_id, exc)
                 JOBS_COMPLETED.labels(job_type="assemble_context", status="error").inc()
-            finally:
-                await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
 
 
 # ── Main entry point ────────────────────────────────────────────────

@@ -18,10 +18,18 @@ from config import CB_MCP_URL, SONNET_MODEL
 
 SSH_TARGET = "aristotle9@192.168.1.110"
 
-CONV_IDS = [
-    "dd69aa9d-f8c7-4b13-821b-ac9d80090395",  # conversation-1 (Joshua26 arch)
-    "c3164a6a-6680-42a2-9ee1-2ced44e433e2",  # conversation-2 (Context Broker)
-]
+def _discover_conv_ids() -> list[str]:
+    """Discover test conversation IDs from the database."""
+    import subprocess
+    result = subprocess.run(
+        ["ssh", SSH_TARGET,
+         "docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c "
+         "\"SELECT id FROM conversations WHERE title LIKE 'conversation-%' ORDER BY created_at LIMIT 2\""],
+        capture_output=True, text=True, timeout=15,
+    )
+    return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+
+CONV_IDS = _discover_conv_ids()
 
 
 def mcp_call(tool_name: str, arguments: dict) -> dict:
