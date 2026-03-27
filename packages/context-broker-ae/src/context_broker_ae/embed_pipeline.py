@@ -8,11 +8,9 @@ jobs for all context windows attached to the conversation.
 Triggered by ARQ worker consuming from embedding_jobs queue.
 """
 
-import json
 import logging
 import time as _time_mod
 import uuid
-from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -22,7 +20,6 @@ from typing_extensions import TypedDict
 
 from app.config import get_embeddings_model, get_tuning, verbose_log
 from app.database import get_pg_pool
-from app.metrics_registry import JOBS_ENQUEUED
 
 _log = logging.getLogger("context_broker.flows.embed_pipeline")
 

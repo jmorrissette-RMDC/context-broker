@@ -12,7 +12,10 @@ import time
 SCRIPTS = [
     ("Reset databases", "tests/integration/reset_databases.py"),
     ("Bulk load (Phase 1)", "tests/integration/bulk_load.py"),
-    ("Imperator conversation (Phase 2)", "tests/integration/run_imperator_conversation.py"),
+    (
+        "Imperator conversation (Phase 2)",
+        "tests/integration/run_imperator_conversation.py",
+    ),
     ("Tool exercises (Phase 3)", "tests/integration/run_tool_exercises.py"),
     ("Quality evaluation (Phase 4a)", "tests/integration/evaluate_quality.py"),
     ("Performance analysis (Phase 4b)", "tests/integration/analyze_performance.py"),
@@ -55,7 +58,7 @@ def main():
     total_passed = sum(1 for r in results if r["passed"])
 
     print(f"\n{'=' * 60}")
-    print(f"  FINAL REPORT")
+    print("  FINAL REPORT")
     print(f"{'=' * 60}")
     for r in results:
         status = "PASS" if r["passed"] else "FAIL"

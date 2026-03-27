@@ -16,13 +16,6 @@ import json
 import logging
 import time
 import uuid
-
-
-def _json_default(obj: object) -> object:
-    """Handle non-standard types in MCP JSON responses."""
-    if isinstance(obj, decimal.Decimal):
-        return float(obj)
-    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 from collections import OrderedDict
 from typing import Any, AsyncGenerator
 
@@ -33,8 +26,17 @@ from pydantic import ValidationError
 from app.config import async_load_config, get_tuning
 from app.flows.tool_dispatch import dispatch_tool
 from app.models import MCPToolCall
+from app.routes.caller_identity import resolve_caller
 
 _log = logging.getLogger("context_broker.routes.mcp")
+
+
+def _json_default(obj: object) -> object:
+    """Handle non-standard types in MCP JSON responses."""
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
 
 router = APIRouter()
 
@@ -67,9 +69,7 @@ def _evict_stale_sessions(
     global _total_queued_messages
     now = time.monotonic()
     stale_ids = [
-        sid
-        for sid, info in _sessions.items()
-        if now - info["created_at"] > session_ttl
+        sid for sid, info in _sessions.items() if now - info["created_at"] > session_ttl
     ]
     for sid in stale_ids:
         info = _sessions.pop(sid, None)
@@ -244,9 +244,22 @@ async def mcp_tool_call(
             content={
                 "jsonrpc": "2.0",
                 "id": mcp_request.id,
-                "error": {"code": -32000, "message": f"Configuration unavailable: {exc}"},
+                "error": {
+                    "code": -32000,
+                    "message": f"Configuration unavailable: {exc}",
+                },
             },
         )
+
+    # Resolve caller identity from the HTTP request for sender/recipient
+    caller = resolve_caller(request)
+    config = {
+        **config,
+        "imperator": {
+            **config.get("imperator", {}),
+            "_request_user": caller,
+        },
+    }
 
     try:
         result = await dispatch_tool(
@@ -362,19 +375,24 @@ def _get_tool_list() -> list[dict]:
     # Build dynamic enum for build_type from config
     try:
         from app.config import load_te_config
-        te_config = load_te_config()
+
+        load_te_config()  # Validate TE config is loadable
     except (FileNotFoundError, RuntimeError, OSError, ValueError):
-        te_config = {}
+        pass
     try:
         from app.config import load_config
+
         ae_config = load_config()
     except (FileNotFoundError, RuntimeError, OSError, ValueError):
         ae_config = {}
     build_type_names = list(ae_config.get("build_types", {}).keys()) or [
-        "passthrough", "standard-tiered", "knowledge-enriched"
+        "passthrough",
+        "standard-tiered",
+        "knowledge-enriched",
     ]
 
     from app.budget import BUDGET_BUCKETS
+
     bucket_desc = ", ".join(str(b) for b in BUDGET_BUCKETS)
 
     return [
@@ -444,9 +462,17 @@ def _get_tool_list() -> list[dict]:
                         "format": "uuid",
                         "description": "Scope search to a specific conversation",
                     },
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 10,
+                    },
                     "sender": {"type": "string"},
-                    "role": {"type": "string", "enum": ["user", "assistant", "system", "tool"]},
+                    "role": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "system", "tool"],
+                    },
                     "date_from": {"type": "string", "description": "ISO-8601"},
                     "date_to": {"type": "string", "description": "ISO-8601"},
                 },
@@ -461,7 +487,12 @@ def _get_tool_list() -> list[dict]:
                 "properties": {
                     "query": {"type": "string", "minLength": 1, "maxLength": 2000},
                     "user_id": {"type": "string", "minLength": 1, "maxLength": 255},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 10,
+                    },
                 },
             },
         },
@@ -490,6 +521,44 @@ def _get_tool_list() -> list[dict]:
                     "user_id": {
                         "type": "string",
                         "description": "Optional user identifier",
+                    },
+                },
+            },
+        },
+        {
+            "name": "conv_delete_conversation",
+            "description": "Delete a conversation and all its messages, summaries, and context windows.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["conversation_id"],
+                "properties": {
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "ID of the conversation to delete",
+                    },
+                },
+            },
+        },
+        {
+            "name": "conv_list_conversations",
+            "description": "List conversations. Optional participant filter returns only conversations where the participant appears as sender or recipient on any message.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "participant": {
+                        "type": "string",
+                        "description": "Filter by participant — returns conversations where this value appears as sender or recipient on any message. Typically a MAD hostname or user identity.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum conversations to return (default 50, max 500)",
+                        "default": 50,
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Pagination offset (default 0)",
+                        "default": 0,
                     },
                 },
             },
@@ -635,6 +704,73 @@ def _get_tool_list() -> list[dict]:
                     "participant_id": {"type": "string"},
                     "build_type": {"type": "string"},
                     "limit": {"type": "integer", "default": 10},
+                },
+            },
+        },
+        {
+            "name": "query_logs",
+            "description": "Query system logs. Filter by container, level, time range, keyword.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "container_name": {
+                        "type": "string",
+                        "description": "Filter by container name (substring match)",
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": ["DEBUG", "INFO", "WARN", "WARNING", "ERROR"],
+                        "description": "Filter by log level",
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "ISO-8601 timestamp lower bound",
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": "ISO-8601 timestamp upper bound",
+                    },
+                    "keyword": {
+                        "type": "string",
+                        "description": "Text search in message content",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max entries to return (default 50, max 500)",
+                        "default": 50,
+                    },
+                },
+            },
+        },
+        {
+            "name": "search_logs",
+            "description": "Semantic search over system logs using vector similarity. Requires log_embeddings to be configured.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language search query",
+                    },
+                    "container_name": {
+                        "type": "string",
+                        "description": "Filter by container name (substring match)",
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": ["DEBUG", "INFO", "WARN", "WARNING", "ERROR"],
+                        "description": "Filter by log level",
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "ISO-8601 timestamp lower bound",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max entries to return (default 20, max 100)",
+                        "default": 20,
+                    },
                 },
             },
         },

@@ -9,6 +9,9 @@
 #
 # Infrastructure settings (database, embeddings, reranker, build types,
 # pipeline tuning, workers) are in config.yml (the AE configuration).
+#
+# This file ships with LOCAL defaults (no API keys needed).
+# See comments for Nominal and Premium alternatives.
 
 # ============================================================
 # Imperator
@@ -17,10 +20,21 @@
 imperator:
   # LLM for the Imperator's conversational inference.
   # All providers use the OpenAI-compatible wire protocol (including Anthropic).
-  # For local Ollama, no api_key_env needed.
+  #
+  # Premium: Gemini 3.1 Pro — best reasoning available
+  #   base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  #   model: gemini-3.1-pro
+  #   api_key_env: GOOGLE_API_KEY
+  #
+  # Nominal: Gemini 2.5 Pro — strong reasoning, lower cost
+  #   base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  #   model: gemini-2.5-pro
+  #   api_key_env: GOOGLE_API_KEY
+  #
+  # Local (default): Ollama qwen2.5:7b — no API key needed
   base_url: http://context-broker-ollama:11434/v1
   model: qwen2.5:7b
-  # api_key_env: OPENAI_API_KEY   # env var holding the API key (omit for keyless)
+  # api_key_env: GOOGLE_API_KEY
 
   # Path to the system prompt file (without extension).
   # Loaded from /config/prompts/{name}.md.

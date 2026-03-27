@@ -23,6 +23,7 @@ from app.flows.imperator_wrapper import (
     invoke_with_metrics,
 )
 from app.models import ChatCompletionRequest
+from app.routes.caller_identity import resolve_caller
 
 _log = logging.getLogger("context_broker.routes.chat")
 
@@ -124,6 +125,16 @@ async def chat_completions(request: Request):
             )
         else:
             lc_messages.append(cls(content=m.content))
+
+    # Resolve caller identity for sender/recipient on stored messages.
+    caller = resolve_caller(request, chat_request.user)
+    config = {
+        **config,
+        "imperator": {
+            **config.get("imperator", {}),
+            "_request_user": caller,
+        },
+    }
 
     initial_state = {
         "messages": lc_messages,

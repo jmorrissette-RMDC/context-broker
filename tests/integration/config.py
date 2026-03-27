@@ -19,12 +19,12 @@ PHASE2_DIR = TEST_DATA_DIR / "phase2-agent-conversation"
 PHASE3_DIR = TEST_DATA_DIR / "phase3-synthetic"
 
 # Timeouts
-PIPELINE_TIMEOUT_SECONDS = 3600      # 60 min hard timeout for bulk pipeline
+PIPELINE_TIMEOUT_SECONDS = 3600  # 60 min hard timeout for bulk pipeline
 PIPELINE_POLL_INTERVAL_SECONDS = 30  # Poll every 30s during pipeline wait
-PIPELINE_STALL_SECONDS = 120         # Fail if no progress for 2 min
-EARLY_VALIDATION_MESSAGES = 100      # Check pipeline after this many messages
-MCP_CALL_TIMEOUT_SECONDS = 30        # Timeout per MCP tool call
-CHAT_CALL_TIMEOUT_SECONDS = 60       # Timeout per Imperator chat turn
+PIPELINE_STALL_SECONDS = 120  # Fail if no progress for 2 min
+EARLY_VALIDATION_MESSAGES = 100  # Check pipeline after this many messages
+MCP_CALL_TIMEOUT_SECONDS = 30  # Timeout per MCP tool call
+CHAT_CALL_TIMEOUT_SECONDS = 60  # Timeout per Imperator chat turn
 
 # Sonnet CLI for quality evaluation
 SONNET_MODEL = "sonnet"  # Claude Code CLI model flag

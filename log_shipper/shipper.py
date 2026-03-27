@@ -12,18 +12,19 @@ import asyncpg
 # Configure logging for the shipper itself
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    datefmt='%Y-%m-%dT%H:%M:%S%z'
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S%z",
 )
 logger = logging.getLogger("log_shipper")
 
 # Configuration
 POSTGRES_DSN = os.environ.get(
-    "POSTGRES_DSN", 
-    "postgresql://context_broker:context_broker@context-broker-postgres:5432/context_broker"
+    "POSTGRES_DSN",
+    "postgresql://context_broker:context_broker@context-broker-postgres:5432/context_broker",
 )
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "100"))
 FLUSH_INTERVAL_SEC = float(os.environ.get("FLUSH_INTERVAL_SEC", "1.0"))
+
 
 class LogShipper:
     def __init__(self):
@@ -33,33 +34,39 @@ class LogShipper:
         self.log_queue = asyncio.Queue()
         self.active_tasks = {}  # container_id -> task
         self.running = False
-        
+
     async def setup(self):
         """Initialize connections and discover network topology."""
         logger.info("Initializing Log Shipper...")
-        
+
         # 1. Connect to Postgres
         try:
-            self.pg_pool = await asyncpg.create_pool(POSTGRES_DSN, min_size=1, max_size=5)
+            self.pg_pool = await asyncpg.create_pool(
+                POSTGRES_DSN, min_size=1, max_size=5
+            )
             logger.info("Connected to PostgreSQL")
         except Exception as e:
             logger.error(f"Failed to connect to PostgreSQL: {e}")
             sys.exit(1)
-            
+
         # 2. Connect to Docker
         self.docker = aiodocker.Docker()
-        
+
         # 3. Discover our own container and network
         # The hostname in a Docker container is its container ID by default
         my_container_id = os.environ.get("HOSTNAME")
         if not my_container_id:
-            logger.warning("Could not determine own container ID from HOSTNAME. Trying network discovery fallback.")
+            logger.warning(
+                "Could not determine own container ID from HOSTNAME. Trying network discovery fallback."
+            )
             # Fallback: Find the context-broker-net network by name
             networks = await self.docker.networks.list()
             for net in networks:
                 if "context-broker-net" in net["Name"]:
                     self.network_id = net["Id"]
-                    logger.info(f"Discovered network by name: {net['Name']} ({self.network_id[:12]})")
+                    logger.info(
+                        f"Discovered network by name: {net['Name']} ({self.network_id[:12]})"
+                    )
                     break
         else:
             try:
@@ -70,11 +77,13 @@ class LogShipper:
                 # Assume the first network is the primary internal one (context-broker-net)
                 network_name = list(networks.keys())[0]
                 self.network_id = networks[network_name]["NetworkID"]
-                logger.info(f"Discovered network via self-inspection: {network_name} ({self.network_id[:12]})")
+                logger.info(
+                    f"Discovered network via self-inspection: {network_name} ({self.network_id[:12]})"
+                )
             except Exception as e:
                 logger.error(f"Failed to discover network topology: {e}")
                 sys.exit(1)
-                
+
         if not self.network_id:
             logger.error("Could not determine the primary network ID. Exiting.")
             sys.exit(1)
@@ -87,16 +96,16 @@ class LogShipper:
         async with self.pg_pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT log_timestamp FROM system_logs WHERE container_name = $1 ORDER BY log_timestamp DESC LIMIT 1",
-                container_name
+                container_name,
             )
-            
-            if row and row['log_timestamp']:
+
+            if row and row["log_timestamp"]:
                 # Docker API expects unix timestamp (integer) or formatted string
                 # We return it as a string for the 'since' parameter
                 # The datetime from asyncpg is already a datetime object
-                ts = int(row['log_timestamp'].timestamp())
+                ts = int(row["log_timestamp"].timestamp())
                 return str(ts)
-            
+
         # If no logs exist, return 0 to get everything
         return "0"
 
@@ -106,25 +115,27 @@ class LogShipper:
             container = await self.docker.containers.get(container_id)
             # Remove the leading slash from the container name
             name = container["Name"].lstrip("/")
-            
+
             # Don't tail ourselves to avoid an infinite loop of logging our own inserts
             if name == "context-broker-log-shipper":
                 return
-                
+
             logger.info(f"Starting tail for container: {name} ({container_id[:12]})")
-            
+
             # Determine where to start tailing from
             since_ts = await self._get_last_timestamp(name)
-            
+
             # Get the log stream
             # follow=True blocks and yields new lines as they arrive
             # timestamps=True prepends the Docker timestamp to each line
-            stream = container.log(stdout=True, stderr=True, follow=True, timestamps=True, since=since_ts)
-            
+            stream = container.log(
+                stdout=True, stderr=True, follow=True, timestamps=True, since=since_ts
+            )
+
             async for line in stream:
                 if not self.running:
                     break
-                    
+
                 # line format with timestamps=True: "2024-03-24T12:00:00.000000000Z The actual log message..."
                 try:
                     # Docker's multiplexed stream (stdout/stderr) is handled transparently by aiodocker in string mode,
@@ -132,13 +143,13 @@ class LogShipper:
                     parts = line.split(" ", 1)
                     if len(parts) < 2:
                         continue
-                        
+
                     timestamp_str = parts[0]
                     message = parts[1].strip()
-                    
+
                     if not message:
                         continue
-                    
+
                     # Try to parse the message as JSON if possible (for structured logs)
                     data = None
                     if message.startswith("{") and message.endswith("}"):
@@ -165,7 +176,7 @@ class LogShipper:
                             frac = frac.replace("Z", "")
                             frac = frac[:6].ljust(6, "0")
                             ts_clean = f"{base}.{frac}Z"
-                            
+
                         # Parse to datetime
                         dt = datetime.strptime(ts_clean, "%Y-%m-%dT%H:%M:%S.%fZ")
                         dt = dt.replace(tzinfo=timezone.utc)
@@ -178,17 +189,19 @@ class LogShipper:
                         "container_name": name,
                         "timestamp": dt,
                         "message": message,
-                        "data": data
+                        "data": data,
                     }
-                    
+
                     await self.log_queue.put(payload)
-                    
+
                 except Exception as e:
                     logger.debug(f"Error parsing log line from {name}: {e}")
-                    
+
         except aiodocker.exceptions.DockerError as e:
             if e.status == 404:
-                logger.info(f"Container {container_id[:12]} no longer exists. Stopping tail.")
+                logger.info(
+                    f"Container {container_id[:12]} no longer exists. Stopping tail."
+                )
             else:
                 logger.error(f"Docker error tailing {container_id[:12]}: {e}")
         except asyncio.CancelledError:
@@ -203,7 +216,7 @@ class LogShipper:
         """Bulk insert a batch of logs into Postgres."""
         if not batch:
             return
-            
+
         try:
             async with self.pg_pool.acquire() as conn:
                 # Use executemany for bulk insert
@@ -211,18 +224,23 @@ class LogShipper:
                     INSERT INTO system_logs (container_name, log_timestamp, message, data)
                     VALUES ($1, $2, $3, $4::jsonb)
                 """
-                
+
                 records = [
-                    (item["container_name"], item["timestamp"], item["message"], item["data"])
+                    (
+                        item["container_name"],
+                        item["timestamp"],
+                        item["message"],
+                        item["data"],
+                    )
                     for item in batch
                 ]
-                
+
                 await conn.executemany(query, records)
                 logger.debug(f"Inserted batch of {len(batch)} logs")
-                
+
         except Exception as e:
             logger.error(f"Failed to write batch to Postgres: {e}")
-            # If the DB fails, we could potentially requeue, but for logs it's usually 
+            # If the DB fails, we could potentially requeue, but for logs it's usually
             # better to drop them than to exhaust memory if the DB is permanently down.
             # In a State 4 environment, simplicity > perfect reliability for diagnostic logs.
 
@@ -230,29 +248,31 @@ class LogShipper:
         """Continuous background loop to pull from queue and write batches."""
         logger.info("Starting Postgres writer loop")
         batch = []
-        
+
         while self.running:
             try:
                 # Try to get an item from the queue with a timeout
                 # This ensures we periodically flush even if the batch isn't full
                 try:
-                    item = await asyncio.wait_for(self.log_queue.get(), timeout=FLUSH_INTERVAL_SEC)
+                    item = await asyncio.wait_for(
+                        self.log_queue.get(), timeout=FLUSH_INTERVAL_SEC
+                    )
                     batch.append(item)
                     self.log_queue.task_done()
                 except asyncio.TimeoutError:
-                    pass # Timeout is expected, just flush what we have
-                    
+                    pass  # Timeout is expected, just flush what we have
+
                 # Flush if we hit the batch size OR if we had a timeout and have *some* data
                 if len(batch) >= BATCH_SIZE or (batch and self.log_queue.empty()):
                     await self._write_batch(batch)
                     batch = []
-                    
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Error in postgres writer loop: {e}")
                 await asyncio.sleep(1)
-                
+
         # Final flush on shutdown
         if batch:
             await self._write_batch(batch)
@@ -290,67 +310,69 @@ class LogShipper:
     async def event_watcher_loop(self):
         """Watch the Docker event stream for containers joining/leaving our network."""
         logger.info("Starting Docker event watcher")
-        
+
         # We want to watch for network connect/disconnect events
         filters = {
             "type": ["network"],
             "event": ["connect", "disconnect"],
-            "network": [self.network_id]
+            "network": [self.network_id],
         }
-        
+
         try:
             subscriber = self.docker.events.subscribe(filters=filters)
-            
+
             while self.running:
                 try:
                     event = await subscriber.get()
                     if not event:
                         continue
-                        
+
                     action = event.get("Action")
                     actor = event.get("Actor", {})
                     attributes = actor.get("Attributes", {})
-                    
+
                     container_id = attributes.get("container")
                     if not container_id:
                         continue
-                        
+
                     if action == "connect":
                         logger.info(f"Container joined network: {container_id[:12]}")
                         if container_id not in self.active_tasks:
-                            task = asyncio.create_task(self.tail_container(container_id))
+                            task = asyncio.create_task(
+                                self.tail_container(container_id)
+                            )
                             self.active_tasks[container_id] = task
-                            
+
                     elif action == "disconnect":
                         logger.info(f"Container left network: {container_id[:12]}")
                         if container_id in self.active_tasks:
                             self.active_tasks[container_id].cancel()
                             del self.active_tasks[container_id]
-                            
+
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
                     logger.error(f"Error processing Docker event: {e}")
                     await asyncio.sleep(1)
-                    
+
         except Exception as e:
             logger.error(f"Failed to subscribe to Docker events: {e}")
 
     async def run(self):
         """Main execution flow."""
         self.running = True
-        
+
         await self.setup()
-        
+
         # Start the writer loop
         writer_task = asyncio.create_task(self.postgres_writer_loop())
-        
+
         # Scan for existing containers
         await self.scan_existing_containers()
-        
+
         # Start watching for new events
         event_task = asyncio.create_task(self.event_watcher_loop())
-        
+
         # Wait for shutdown signal
         try:
             await asyncio.gather(writer_task, event_task)
@@ -358,28 +380,30 @@ class LogShipper:
             logger.info("Received shutdown signal")
         finally:
             self.running = False
-            
+
             # Cancel all tail tasks
             for task in self.active_tasks.values():
                 task.cancel()
-                
+
             # Wait for writer to finish final flush
             if not writer_task.done():
                 writer_task.cancel()
-                
+
             if self.pg_pool:
                 await self.pg_pool.close()
-                
+
             if self.docker:
                 await self.docker.close()
-                
+
             logger.info("Log Shipper shut down cleanly")
+
 
 def handle_sigterm(shipper, main_task):
     """Handle graceful shutdown."""
     logger.info("SIGTERM received, initiating shutdown...")
     shipper.running = False
     main_task.cancel()
+
 
 if __name__ == "__main__":
     shipper = LogShipper()

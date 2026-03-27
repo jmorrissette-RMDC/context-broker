@@ -39,7 +39,7 @@ services:
     networks:
       - context-broker-net
     volumes:
-      - ./config:/config:ro
+      - ./config:/config
       - ./data:/data
       - ./packages:/app/packages:ro
     env_file:
@@ -177,6 +177,42 @@ services:
       - POSTGRES_DSN=postgresql://context_broker:${POSTGRES_PASSWORD:-contextbroker123}@context-broker-postgres:5432/context_broker
     env_file:
       - ./config/credentials/.env
+
+  # Optional: Gradio Chat UI for the Imperator.
+  # Multi-MAD client — connects to any State 4 MAD via standard endpoints.
+  # Publishes port 7860 for browser access.
+  context-broker-ui:
+    build:
+      context: ./ui
+    container_name: context-broker-ui
+    hostname: context-broker-ui
+    restart: unless-stopped
+    networks:
+      - context-broker-net
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./ui/config.yml:/app/config.yml:ro
+
+  # Optional: Alerter webhook relay.
+  # Receives CloudEvents webhooks from the Imperator's send_notification tool,
+  # optionally formats via LLM, and fans out to Slack/Discord/ntfy/SMTP/webhook.
+  # Remove or comment out if not using multi-channel alerting.
+  context-broker-alerter:
+    build:
+      context: ./alerter
+    container_name: context-broker-alerter
+    hostname: context-broker-alerter
+    restart: unless-stopped
+    networks:
+      - context-broker-net
+    environment:
+      - POSTGRES_DSN=postgresql://context_broker:${POSTGRES_PASSWORD:-contextbroker123}@context-broker-postgres:5432/context_broker
+      - ALERTER_CONFIG=/config/alerter.yml
+    env_file:
+      - ./config/credentials/.env
+    volumes:
+      - ./config:/config:ro
 
 networks:
   context-broker-net:

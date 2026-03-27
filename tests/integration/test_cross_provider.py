@@ -80,9 +80,12 @@ def ssh_cmd(cmd: str, timeout: int = 30) -> str:
     return result.stdout.strip()
 
 
-def mcp_call(tool_name: str, arguments: dict, timeout: int = MCP_CALL_TIMEOUT_SECONDS) -> dict:
+def mcp_call(
+    tool_name: str, arguments: dict, timeout: int = MCP_CALL_TIMEOUT_SECONDS
+) -> dict:
     payload = {
-        "jsonrpc": "2.0", "id": 1,
+        "jsonrpc": "2.0",
+        "id": 1,
         "method": "tools/call",
         "params": {"name": tool_name, "arguments": arguments},
     }
@@ -99,10 +102,10 @@ def mcp_call(tool_name: str, arguments: dict, timeout: int = MCP_CALL_TIMEOUT_SE
 def reset_for_provider():
     """Clear messages and embeddings between provider runs."""
     ssh_cmd(
-        'docker exec context-broker-postgres psql -U context_broker -d context_broker '
+        "docker exec context-broker-postgres psql -U context_broker -d context_broker "
         '-c "TRUNCATE conversation_messages, conversation_summaries, context_windows CASCADE"'
     )
-    ssh_cmd('docker exec context-broker-redis redis-cli FLUSHDB')
+    ssh_cmd("docker exec context-broker-redis redis-cli FLUSHDB")
 
 
 def set_provider_config(provider_name: str, config: dict):
@@ -137,7 +140,7 @@ with open('{CONFIG_PATH}', 'w') as f:
     yaml.dump(cfg, f, default_flow_style=False)
 print('Config updated for {provider_name}')
 """
-    ssh_cmd(f"python3 -c \"{script.strip()}\"")
+    ssh_cmd(f'python3 -c "{script.strip()}"')
 
 
 def run_provider_test(provider_name: str, config: dict) -> tuple[bool, str]:
@@ -148,7 +151,7 @@ def run_provider_test(provider_name: str, config: dict) -> tuple[bool, str]:
     print(f"\n--- {provider_name} ---")
 
     # Step 1: Reset data
-    print(f"  Resetting data...")
+    print("  Resetting data...")
     reset_for_provider()
 
     # Step 2: Switch config to this provider (hot-reload)
@@ -157,13 +160,16 @@ def run_provider_test(provider_name: str, config: dict) -> tuple[bool, str]:
     time.sleep(2)  # Brief pause for mtime cache to detect change
 
     # Step 3: Store messages through MCP
-    print(f"  Storing messages...")
+    print("  Storing messages...")
     try:
-        conv = mcp_call("conv_create_conversation", {
-            "title": f"cross-provider-{provider_name}",
-            "flow_id": "cross-provider-test",
-            "user_id": "test-runner",
-        })
+        conv = mcp_call(
+            "conv_create_conversation",
+            {
+                "title": f"cross-provider-{provider_name}",
+                "flow_id": "cross-provider-test",
+                "user_id": "test-runner",
+            },
+        )
         conv_id = conv["conversation_id"]
     except (httpx.HTTPError, RuntimeError) as exc:
         return False, f"Failed to create conversation: {exc}"
@@ -171,21 +177,24 @@ def run_provider_test(provider_name: str, config: dict) -> tuple[bool, str]:
     test_content = f"Cross-provider test with {provider_name}: The Joshua26 ecosystem uses MAD architecture."
     try:
         for i in range(3):
-            mcp_call("store_message", {
-                "conversation_id": conv_id,
-                "role": "user" if i % 2 == 0 else "assistant",
-                "content": f"{test_content} Message {i}.",
-                "sender": "test-runner" if i % 2 == 0 else "assistant",
-            })
+            mcp_call(
+                "store_message",
+                {
+                    "conversation_id": conv_id,
+                    "role": "user" if i % 2 == 0 else "assistant",
+                    "content": f"{test_content} Message {i}.",
+                    "sender": "test-runner" if i % 2 == 0 else "assistant",
+                },
+            )
     except (httpx.HTTPError, RuntimeError) as exc:
         return False, f"Failed to store messages: {exc}"
 
     # Step 4: Wait for embeddings
-    print(f"  Waiting for embeddings...")
+    print("  Waiting for embeddings...")
     for attempt in range(15):
         time.sleep(2)
         count = ssh_cmd(
-            'docker exec context-broker-postgres psql -U context_broker -d context_broker '
+            "docker exec context-broker-postgres psql -U context_broker -d context_broker "
             '-t -c "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL"'
         ).strip()
         embedded = int(count or "0")
@@ -201,24 +210,27 @@ def run_provider_test(provider_name: str, config: dict) -> tuple[bool, str]:
     print(f"  Embeddings: {embedded}/3")
 
     # Step 5: get_context through MCP
-    print(f"  Getting context...")
+    print("  Getting context...")
     try:
-        ctx = mcp_call("get_context", {
-            "build_type": "passthrough",
-            "budget": 4096,
-            "conversation_id": conv_id,
-        })
+        ctx = mcp_call(
+            "get_context",
+            {
+                "build_type": "passthrough",
+                "budget": 4096,
+                "conversation_id": conv_id,
+            },
+        )
         if not ctx.get("context"):
             return False, f"get_context returned empty context: {ctx}"
     except (httpx.HTTPError, RuntimeError) as exc:
         return False, f"get_context failed: {exc}"
 
     # Step 6: search_messages through MCP
-    print(f"  Searching messages...")
+    print("  Searching messages...")
     try:
         search = mcp_call("search_messages", {"query": "MAD architecture"})
         if not search.get("messages"):
-            return False, f"search_messages returned no results"
+            return False, "search_messages returned no results"
     except (httpx.HTTPError, RuntimeError) as exc:
         return False, f"search_messages failed: {exc}"
 
@@ -233,7 +245,7 @@ def main():
     else:
         providers_to_test = PROVIDERS
 
-    print(f"=== Cross-Provider Full Pipeline Tests ===")
+    print("=== Cross-Provider Full Pipeline Tests ===")
     print(f"Target: {CB_MCP_URL}")
     print(f"Providers: {', '.join(providers_to_test.keys())}")
 
@@ -248,7 +260,7 @@ def main():
     if "google" in PROVIDERS:
         set_provider_config("google", PROVIDERS["google"])
 
-    print(f"\n=== Results ===")
+    print("\n=== Results ===")
     passed = sum(1 for p, _ in results.values() if p)
     total = len(results)
     print(f"Passed: {passed}/{total}")

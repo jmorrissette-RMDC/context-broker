@@ -50,7 +50,9 @@ def main():
             content = response["choices"][0]["message"]["content"]
 
             # Check for expected keywords
-            missing = [kw for kw in expected_keywords if kw.lower() not in content.lower()]
+            missing = [
+                kw for kw in expected_keywords if kw.lower() not in content.lower()
+            ]
 
             passed = len(content) > 20 and len(missing) == 0
             detail = f"{len(content)} chars, {duration:.1f}s"
@@ -61,7 +63,7 @@ def main():
             print(f"  [{status}] {detail}")
             print(f"  Response: {content[:200]}...")
 
-            results.append({"turn": i+1, "passed": passed, "detail": detail})
+            results.append({"turn": i + 1, "passed": passed, "detail": detail})
 
             # Add to history for next turn
             history.append({"role": "user", "content": prompt})
@@ -70,7 +72,7 @@ def main():
         except (httpx.HTTPError, KeyError) as exc:
             duration = time.monotonic() - start
             print(f"  [FAIL] Error: {exc} ({duration:.1f}s)")
-            results.append({"turn": i+1, "passed": False, "detail": str(exc)})
+            results.append({"turn": i + 1, "passed": False, "detail": str(exc)})
 
     # Summary
     passed = sum(1 for r in results if r["passed"])
@@ -78,10 +80,16 @@ def main():
 
     # Save transcript
     transcript_path = PHASE2_DIR / "transcript.json"
-    transcript_path.write_text(json.dumps({
-        "history": history,
-        "results": results,
-    }, indent=2), encoding="utf-8")
+    transcript_path.write_text(
+        json.dumps(
+            {
+                "history": history,
+                "results": results,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     print(f"Transcript saved to {transcript_path}")
 
     if passed < len(results):

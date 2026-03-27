@@ -13,14 +13,13 @@ Three worker loops run concurrently:
 """
 
 import asyncio
-import json
 import logging
 import time
 import uuid
-from typing import Any
 
 from app.config import async_load_config, get_tuning
 from app.database import get_pg_pool
+from app.utils import stable_lock_id
 from app.stategraph_registry import get_flow_builder
 from app.metrics_registry import (
     EMBEDDING_QUEUE_DEPTH,
@@ -59,14 +58,13 @@ def _get_extraction_flow():
 
 # ── Embedding worker ─────────────────────────────────────────────────
 
+
 async def _embedding_worker(config: dict) -> None:
     """Poll for unembedded messages and process in batches."""
     _log.info("Embedding worker started (DB-driven)")
 
     poll_interval = get_tuning(config, "worker_poll_interval_seconds", 2)
     batch_size = get_tuning(config, "embedding_batch_size", 50)
-    concurrency = get_tuning(config, "embedding_concurrency", 3)
-    semaphore = asyncio.Semaphore(concurrency)
     consecutive_failures = 0
 
     while True:
@@ -109,12 +107,44 @@ async def _embedding_worker(config: dict) -> None:
             embeddings_model = get_embeddings_model(config)
             texts = [r["content"] for r in rows]
 
+            embed_timeout = get_tuning(config, "embedding_timeout_seconds", 300)
             try:
-                vectors = await embeddings_model.aembed_documents(texts)
+                vectors = await asyncio.wait_for(
+                    embeddings_model.aembed_documents(texts),
+                    timeout=embed_timeout,
+                )
+            except asyncio.TimeoutError:
+                _log.error(
+                    "Embedding batch timed out after %ds — skipping %d messages",
+                    embed_timeout,
+                    len(rows),
+                )
+                consecutive_failures += 1
+                await asyncio.sleep(5)
+                continue
             except (OSError, ValueError, RuntimeError) as exc:
                 _log.error("Batch embedding failed: %s", exc)
                 consecutive_failures += 1
-                if consecutive_failures >= 3:
+                if consecutive_failures >= 5:
+                    # Poison pill protection: mark this batch as failed
+                    # so the worker doesn't re-fetch the same rows forever.
+                    _log.warning(
+                        "Embedding batch failed %d times — marking %d messages "
+                        "with zero-vector to skip them",
+                        consecutive_failures,
+                        len(rows),
+                    )
+                    emb_dims = config.get("embeddings", {}).get("embedding_dims", 3072)
+                    zero_vec = "[" + ",".join(["0"] * emb_dims) + "]"
+                    for row in rows:
+                        await pool.execute(
+                            "UPDATE conversation_messages "
+                            "SET embedding = $1::vector WHERE id = $2",
+                            zero_vec,
+                            row["id"],
+                        )
+                    consecutive_failures = 0
+                else:
                     await asyncio.sleep(5)
                 continue
 
@@ -130,10 +160,13 @@ async def _embedding_worker(config: dict) -> None:
             duration = time.monotonic() - start
             _log.info(
                 "Embedding batch complete: %d messages in %dms",
-                len(rows), int(duration * 1000),
+                len(rows),
+                int(duration * 1000),
             )
             JOB_DURATION.labels(job_type="embed_batch").observe(duration)
-            JOBS_COMPLETED.labels(job_type="embed_message", status="success").inc(len(rows))
+            JOBS_COMPLETED.labels(job_type="embed_message", status="success").inc(
+                len(rows)
+            )
             consecutive_failures = 0
 
             # Assembly is handled by the separate assembly worker loop
@@ -145,11 +178,15 @@ async def _embedding_worker(config: dict) -> None:
             _log.error("Embedding worker error: %s: %s", type(exc).__name__, exc)
             consecutive_failures += 1
             if consecutive_failures >= 3:
-                _log.warning("Embedding worker backing off after %d failures", consecutive_failures)
+                _log.warning(
+                    "Embedding worker backing off after %d failures",
+                    consecutive_failures,
+                )
                 await asyncio.sleep(5)
 
 
 # ── Extraction worker ────────────────────────────────────────────────
+
 
 async def _extraction_worker(config: dict) -> None:
     """Poll for unextracted messages and send to Mem0."""
@@ -177,47 +214,67 @@ async def _extraction_worker(config: dict) -> None:
                 continue
 
             # Find conversations with unextracted messages
-            conv_rows = await pool.fetch(
-                """
+            conv_rows = await pool.fetch("""
                 SELECT DISTINCT conversation_id
                 FROM conversation_messages
                 WHERE memory_extracted IS NOT TRUE
                 LIMIT 5
-                """
-            )
+                """)
 
             for conv_row in conv_rows:
                 conv_id = str(conv_row["conversation_id"])
 
-                # Skip conversations that have failed too many times
+                # Skip conversations that have failed too many times.
+                # After max retries, mark messages as extracted to stop
+                # retrying indefinitely. The messages stay in the DB but
+                # won't be re-processed until manually reset.
                 if _conv_failures.get(conv_id, 0) >= _MAX_CONV_RETRIES:
+                    if _conv_failures.get(conv_id, 0) == _MAX_CONV_RETRIES:
+                        _log.warning(
+                            "Extraction permanently failed for conv=%s after %d attempts — "
+                            "marking messages as extracted to stop retries",
+                            conv_id,
+                            _MAX_CONV_RETRIES,
+                        )
+                        await pool.execute(
+                            "UPDATE conversation_messages SET memory_extracted = TRUE "
+                            "WHERE conversation_id = $1 AND memory_extracted IS NOT TRUE",
+                            conv_row["conversation_id"],
+                        )
+                        _conv_failures[conv_id] = (
+                            _MAX_CONV_RETRIES + 1
+                        )  # Don't log again
                     continue
 
                 # Use Postgres advisory lock to prevent concurrent extraction
-                lock_id = hash(conv_id) & 0x7FFFFFFFFFFFFFFF  # Positive bigint
-                locked = await pool.fetchval(
-                    "SELECT pg_try_advisory_lock($1)", lock_id
-                )
+                lock_id = stable_lock_id(conv_id)
+                locked = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
                 if not locked:
                     continue
 
                 try:
+                    extraction_timeout = get_tuning(
+                        config, "extraction_timeout_seconds", 600
+                    )
                     start = time.monotonic()
-                    result = await _get_extraction_flow().ainvoke(
-                        {
-                            "conversation_id": conv_id,
-                            "config": config,
-                            "messages": [],
-                            "user_id": "",
-                            "extraction_text": "",
-                            "selected_message_ids": [],
-                            "fully_extracted_ids": [],
-                            "lock_key": "",
-                            "lock_token": None,
-                            "lock_acquired": True,  # We handle locking here
-                            "extracted_count": 0,
-                            "error": None,
-                        }
+                    result = await asyncio.wait_for(
+                        _get_extraction_flow().ainvoke(
+                            {
+                                "conversation_id": conv_id,
+                                "config": config,
+                                "messages": [],
+                                "user_id": "",
+                                "extraction_text": "",
+                                "selected_message_ids": [],
+                                "fully_extracted_ids": [],
+                                "lock_key": "",
+                                "lock_token": None,
+                                "lock_acquired": True,  # We handle locking here
+                                "extracted_count": 0,
+                                "error": None,
+                            }
+                        ),
+                        timeout=extraction_timeout,
                     )
                     duration = time.monotonic() - start
 
@@ -225,17 +282,38 @@ async def _extraction_worker(config: dict) -> None:
                         _conv_failures[conv_id] = _conv_failures.get(conv_id, 0) + 1
                         _log.error(
                             "Extraction failed for %s (attempt %d/%d): %s",
-                            conv_id, _conv_failures[conv_id], _MAX_CONV_RETRIES, result["error"],
+                            conv_id,
+                            _conv_failures[conv_id],
+                            _MAX_CONV_RETRIES,
+                            result["error"],
                         )
-                        JOBS_COMPLETED.labels(job_type="extract_memory", status="error").inc()
+                        JOBS_COMPLETED.labels(
+                            job_type="extract_memory", status="error"
+                        ).inc()
                     else:
                         _conv_failures.pop(conv_id, None)  # Reset on success
                         _log.info(
                             "Extraction complete: conv=%s extracted=%d duration_ms=%d",
-                            conv_id, result.get("extracted_count", 0), int(duration * 1000),
+                            conv_id,
+                            result.get("extracted_count", 0),
+                            int(duration * 1000),
                         )
                         JOB_DURATION.labels(job_type="extract_memory").observe(duration)
-                        JOBS_COMPLETED.labels(job_type="extract_memory", status="success").inc()
+                        JOBS_COMPLETED.labels(
+                            job_type="extract_memory", status="success"
+                        ).inc()
+                except asyncio.TimeoutError:
+                    _conv_failures[conv_id] = _conv_failures.get(conv_id, 0) + 1
+                    _log.error(
+                        "Extraction timed out for conv=%s after %ds (attempt %d/%d)",
+                        conv_id,
+                        extraction_timeout,
+                        _conv_failures[conv_id],
+                        _MAX_CONV_RETRIES,
+                    )
+                    JOBS_COMPLETED.labels(
+                        job_type="extract_memory", status="error"
+                    ).inc()
                 finally:
                     await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
 
@@ -253,6 +331,7 @@ async def _extraction_worker(config: dict) -> None:
 
 
 # ── Assembly check ───────────────────────────────────────────────────
+
 
 async def _check_assembly_needed(pool, config: dict, conv_ids: list[str]) -> None:
     """Check if any context windows need reassembly after new embeddings."""
@@ -291,31 +370,46 @@ async def _check_assembly_needed(pool, config: dict, conv_ids: list[str]) -> Non
 
             _log.info("Triggering assembly for window=%s", window_id)
             assembly_graph = get_assembly_graph(window["build_type"])
+            assembly_timeout = get_tuning(config, "assembly_timeout_seconds", 600)
             start = time.monotonic()
 
             try:
-                await assembly_graph.ainvoke(
-                    {
-                        "context_window_id": window_id,
-                        "conversation_id": conv_id,
-                        "config": config,
-                    }
+                await asyncio.wait_for(
+                    assembly_graph.ainvoke(
+                        {
+                            "context_window_id": window_id,
+                            "conversation_id": conv_id,
+                            "config": config,
+                        }
+                    ),
+                    timeout=assembly_timeout,
                 )
 
                 duration = time.monotonic() - start
                 _log.info(
                     "Assembly complete: window=%s duration_ms=%d",
-                    window_id, int(duration * 1000),
+                    window_id,
+                    int(duration * 1000),
                 )
-                JOBS_COMPLETED.labels(job_type="assemble_context", status="success").inc()
+                JOBS_COMPLETED.labels(
+                    job_type="assemble_context", status="success"
+                ).inc()
                 JOB_DURATION.labels(job_type="assemble_context").observe(duration)
 
+            except asyncio.TimeoutError:
+                _log.error(
+                    "Assembly timed out for window=%s after %ds",
+                    window_id,
+                    assembly_timeout,
+                )
+                JOBS_COMPLETED.labels(job_type="assemble_context", status="error").inc()
             except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
                 _log.error("Assembly failed for window=%s: %s", window_id, exc)
                 JOBS_COMPLETED.labels(job_type="assemble_context", status="error").inc()
 
 
 # ── Main entry point ────────────────────────────────────────────────
+
 
 async def _assembly_worker(config: dict) -> None:
     """Poll for context windows that need reassembly."""
@@ -329,8 +423,7 @@ async def _assembly_worker(config: dict) -> None:
             pool = get_pg_pool()
 
             # Find windows where new messages exist since last assembly
-            windows = await pool.fetch(
-                """
+            windows = await pool.fetch("""
                 SELECT cw.id, cw.conversation_id, cw.build_type,
                        cw.max_token_budget, cw.last_assembled_at
                 FROM context_windows cw
@@ -339,20 +432,24 @@ async def _assembly_worker(config: dict) -> None:
                     WHERE cm.conversation_id = cw.conversation_id
                     AND (cw.last_assembled_at IS NULL OR cm.created_at > cw.last_assembled_at)
                 )
+                ORDER BY cw.last_assembled_at ASC NULLS FIRST
                 LIMIT 5
-                """
-            )
+                """)
 
             ASSEMBLY_QUEUE_DEPTH.set(len(windows))
 
             if not windows:
-                await asyncio.sleep(poll_interval * 5)  # Poll less frequently for assembly
+                await asyncio.sleep(
+                    poll_interval * 5
+                )  # Poll less frequently for assembly
                 continue
 
             for window in windows:
                 conv_id = str(window["conversation_id"])
                 window_id = str(window["id"])
-                await _run_assembly(pool, config, window_id, conv_id, window["build_type"])
+                await _run_assembly(
+                    pool, config, window_id, conv_id, window["build_type"]
+                )
 
             await asyncio.sleep(poll_interval)
 
@@ -384,7 +481,8 @@ async def _run_assembly(pool, config, window_id, conv_id, build_type):
         duration = time.monotonic() - start
         _log.info(
             "Assembly complete: window=%s duration_ms=%d",
-            window_id, int(duration * 1000),
+            window_id,
+            int(duration * 1000),
         )
         JOBS_COMPLETED.labels(job_type="assemble_context", status="success").inc()
         JOB_DURATION.labels(job_type="assemble_context").observe(duration)
@@ -394,12 +492,117 @@ async def _run_assembly(pool, config, window_id, conv_id, build_type):
         JOBS_COMPLETED.labels(job_type="assemble_context", status="error").inc()
 
 
+# ── Log embedding worker ─────────────────────────────────────────────
+
+
+async def _log_embedding_worker(config: dict) -> None:
+    """Poll for unembedded log entries and embed in batches.
+
+    Only runs if log_embeddings is configured. Uses a separate embedding
+    model from conversation embeddings (typically a small local model).
+    """
+    _log.info("Log embedding worker started (DB-driven)")
+
+    poll_interval = get_tuning(config, "log_embedding_poll_interval_seconds", 10)
+    batch_size = get_tuning(config, "log_embedding_batch_size", 100)
+    consecutive_failures = 0
+
+    while True:
+        try:
+            config = await async_load_config()
+            log_emb_config = config.get("log_embeddings")
+            if not log_emb_config:
+                # Log vectorization not enabled — sleep and check again later
+                await asyncio.sleep(60)
+                continue
+
+            pool = get_pg_pool()
+
+            pending = await pool.fetchval(
+                "SELECT COUNT(*) FROM system_logs WHERE embedding IS NULL AND message IS NOT NULL"
+            )
+
+            if pending == 0:
+                await asyncio.sleep(poll_interval)
+                continue
+
+            rows = await pool.fetch(
+                """
+                SELECT ctid, message
+                FROM system_logs
+                WHERE embedding IS NULL AND message IS NOT NULL
+                ORDER BY log_timestamp DESC
+                LIMIT $1
+                """,
+                batch_size,
+            )
+
+            if not rows:
+                await asyncio.sleep(poll_interval)
+                continue
+
+            _log.info("Log embedding batch: %d entries", len(rows))
+            start = time.monotonic()
+
+            from app.config import get_embeddings_model
+
+            emb_model = get_embeddings_model(config, config_key="log_embeddings")
+            texts = [r["message"] for r in rows]
+
+            try:
+                vectors = await emb_model.aembed_documents(texts)
+            except (OSError, ValueError, RuntimeError) as exc:
+                _log.error("Log embedding batch failed: %s", exc)
+                consecutive_failures += 1
+                if consecutive_failures >= 5:
+                    _log.warning(
+                        "Log embedding failed %d times — skipping %d entries",
+                        consecutive_failures,
+                        len(rows),
+                    )
+                    # Delete the unembeddable log entries so they don't block
+                    for row in rows:
+                        await pool.execute(
+                            "DELETE FROM system_logs WHERE ctid = $1",
+                            row["ctid"],
+                        )
+                    consecutive_failures = 0
+                await asyncio.sleep(poll_interval)
+                continue
+
+            for row, vector in zip(rows, vectors):
+                vec_str = "[" + ",".join(str(v) for v in vector) + "]"
+                await pool.execute(
+                    "UPDATE system_logs SET embedding = $1::vector WHERE ctid = $2",
+                    vec_str,
+                    row["ctid"],
+                )
+
+            duration = time.monotonic() - start
+            _log.info(
+                "Log embedding batch complete: %d entries in %dms",
+                len(rows),
+                int(duration * 1000),
+            )
+
+        except asyncio.CancelledError:
+            _log.info("Log embedding worker cancelled")
+            raise
+        except Exception as exc:
+            _log.error("Log embedding worker error: %s: %s", type(exc).__name__, exc)
+            await asyncio.sleep(poll_interval)
+
+
 async def start_background_worker(config: dict) -> None:
     """Start all background worker loops concurrently."""
     _log.info("Background worker starting (DB-driven, no Redis)")
+
+    from app.workers.scheduler import scheduler_worker
 
     await asyncio.gather(
         _embedding_worker(config),
         _extraction_worker(config),
         _assembly_worker(config),
+        _log_embedding_worker(config),
+        scheduler_worker(config),
     )

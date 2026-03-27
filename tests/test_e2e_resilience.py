@@ -118,13 +118,11 @@ class TestStatePersistence:
         assert len(result["messages"]) >= 3
 
         # Verify each stored message appears in history
-        retrieved_contents = [
-            m.get("content", "") for m in result["messages"]
-        ]
+        retrieved_contents = [m.get("content", "") for m in result["messages"]]
         for content in message_contents:
-            assert content in retrieved_contents, (
-                f"Message '{content}' not found in history"
-            )
+            assert (
+                content in retrieved_contents
+            ), f"Message '{content}' not found in history"
 
     def test_context_window_persists(self, client):
         """Context window persists and is retrievable after creation."""
@@ -180,7 +178,9 @@ class TestStatePersistence:
         )
         assert search_resp.status_code == 200
         result = extract_mcp_result(search_resp)
-        conv_ids = [c.get("id", c.get("conversation_id", "")) for c in result["conversations"]]
-        assert conv_id in conv_ids, (
-            f"Conversation {conv_id} not found in search by flow_id={unique_flow}"
-        )
+        conv_ids = [
+            c.get("id", c.get("conversation_id", "")) for c in result["conversations"]
+        ]
+        assert (
+            conv_id in conv_ids
+        ), f"Conversation {conv_id} not found in search by flow_id={unique_flow}"

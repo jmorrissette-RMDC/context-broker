@@ -83,7 +83,6 @@ async def _postgres_retry_loop(application: FastAPI, config: dict) -> None:
             _log.warning("PostgreSQL retry failed: %s", exc)
 
 
-
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Manage application lifecycle: startup and shutdown."""
@@ -117,9 +116,16 @@ async def lifespan(application: FastAPI):
             get_build_type_config(config, bt_name)
         except (ValueError, KeyError) as exc:
             _log.error("Invalid build type config '%s': %s", bt_name, exc)
-            raise RuntimeError(
-                f"Invalid build type config '{bt_name}': {exc}"
-            ) from exc
+            raise RuntimeError(f"Invalid build type config '{bt_name}': {exc}") from exc
+
+    # REQ-001 §7.4 Fail Fast: Validate embedding_dims is set
+    embeddings_config = config.get("embeddings", {})
+    if not embeddings_config.get("embedding_dims"):
+        raise RuntimeError(
+            "embeddings.embedding_dims is required in config.yml. "
+            "Set it to match your embedding model's output dimensions "
+            "(e.g., 768 for nomic-embed-text, 3072 for gemini-embedding-001)."
+        )
 
     # Initialize database connections — Postgres failure is non-fatal
     pg_retry_task = None
@@ -162,6 +168,15 @@ async def lifespan(application: FastAPI):
                 _postgres_retry_loop(application, config)
             )
 
+    # Seed domain knowledge on first startup
+    if application.state.imperator_initialized:
+        try:
+            from context_broker_te.seed_knowledge import seed_domain_knowledge
+
+            await seed_domain_knowledge()
+        except (ImportError, OSError, RuntimeError) as exc:
+            _log.warning("Domain knowledge seeding skipped: %s", exc)
+
     _log.info("Context Broker startup complete")
 
     yield
@@ -169,9 +184,7 @@ async def lifespan(application: FastAPI):
     # Shutdown
     _log.info("Context Broker shutting down")
 
-    tasks_to_cancel = [
-        t for t in [worker_task, pg_retry_task] if t is not None
-    ]
+    tasks_to_cancel = [t for t in [worker_task, pg_retry_task] if t is not None]
     for t in tasks_to_cancel:
         t.cancel()
     for t in tasks_to_cancel:

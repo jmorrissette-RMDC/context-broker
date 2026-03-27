@@ -1,0 +1,161 @@
+# Context Broker — AE Configuration (Action Engine / Infrastructure)
+# Copy this file to config/config.yml and customize for your deployment.
+#
+# Cognitive settings (Imperator model, system prompt, persona) are in
+# te.yml (the TE configuration).
+
+# ============================================================
+# Logging
+# ============================================================
+
+log_level: INFO
+
+# ============================================================
+# Inference Providers (AE pipeline operations)
+# ============================================================
+# These LLMs are used by AE infrastructure pipelines, not by the Imperator.
+# The Imperator's model is configured in te.yml.
+
+# Summarization LLM — used for chunk summarization and archival consolidation
+summarization:
+  base_url: http://context-broker-ollama:11434/v1
+  model: qwen2.5:7b
+  # api_key_env: OPENAI_API_KEY   # env var holding the API key (omit for keyless)
+
+# Extraction LLM — used by Mem0 for memory extraction
+extraction:
+  base_url: http://context-broker-ollama:11434/v1
+  model: qwen2.5:7b
+  # api_key_env: OPENAI_API_KEY   # env var holding the API key (omit for keyless)
+
+# Embeddings — used for vector search and contextual embeddings
+embeddings:
+  base_url: http://context-broker-infinity:7997
+  model: nomic-ai/nomic-embed-text-v1.5
+  embedding_dims: 768               # REQUIRED — must match model output dimensions
+  tiktoken_enabled: false
+  check_embedding_ctx_length: false
+  context_window_size: 3
+
+# Reranker — used for hybrid search result refinement
+reranker:
+  provider: api
+  base_url: http://context-broker-infinity:7997
+  model: mixedbread-ai/mxbai-rerank-xsmall-v1
+  top_n: 10
+
+# ============================================================
+# Build Types
+# ============================================================
+
+build_types:
+
+  passthrough:
+    max_context_tokens: auto
+    fallback_tokens: 8192
+    effective_utilization: 0.85     # D-10: models degrade past ~85% fill
+
+  standard-tiered:
+    tier1_pct: 0.08
+    tier2_pct: 0.20
+    tier3_pct: 0.72
+    max_context_tokens: auto
+    fallback_tokens: 8192
+    effective_utilization: 0.85     # D-10: models degrade past ~85% fill
+    initial_lookback_multiplier: 3  # D-09: how far back to look for initial assembly
+
+  knowledge-enriched:
+    tier1_pct: 0.05
+    tier2_pct: 0.15
+    tier3_pct: 0.50
+    knowledge_graph_pct: 0.15
+    semantic_retrieval_pct: 0.15
+    max_context_tokens: auto
+    fallback_tokens: 16000
+    effective_utilization: 0.85
+    initial_lookback_multiplier: 3
+
+# ============================================================
+# Package Source (build-time only)
+# ============================================================
+# These settings control where pip installs dependencies at container startup
+# (via entrypoint.sh). Changing these values after the container is running
+# has no effect — the container must be rebuilt.
+
+packages:
+  source: local
+  local_path: /app/packages
+  devpi_url: null
+  stategraph_packages:             # REQ-001 §10: packages installed at startup
+    - context-broker-ae
+    - context-broker-te
+
+# ============================================================
+# Tuning Parameters (AE pipeline behavior)
+# ============================================================
+
+tuning:
+  verbose_logging: false
+
+  # Context assembly
+  chunk_size: 20
+  consolidation_threshold: 3
+  consolidation_keep_recent: 2
+  summarization_temperature: 0.1
+  trigger_threshold_percent: 0.1
+
+  # Memory extraction
+  extraction_max_chars: 90000
+
+  # Memory confidence scoring
+  memory_half_lives:
+    ephemeral: 3
+    contextual: 14
+    factual: 60
+    historical: 365
+    default: 30
+
+  # Retrieval
+  tokens_per_message_estimate: 150
+  content_truncation_chars: 500
+  query_truncation_chars: 200
+
+  # Search
+  rrf_constant: 60
+  search_candidate_limit: 100
+  recency_decay_days: 90
+  recency_max_penalty: 0.2
+
+  # LLM client
+  llm_timeout_seconds: 1800          # timeout for LLM API calls (30 minutes — covers long summarization)
+
+  # Embedding pipeline performance
+  embedding_batch_size: 50           # texts per embedding API call (APIs accept arrays)
+  embedding_concurrency: 3           # concurrent batch requests to embedding provider
+
+  # LLM pipeline concurrency
+  llm_concurrency: 2                 # concurrent LLM calls for summarization/extraction
+
+  # Worker resilience
+  failure_backoff_threshold: 3       # consecutive failures before backoff
+  failure_backoff_seconds: 5         # seconds to wait during backoff
+
+  # Worker timeouts (stuck job watchdog)
+  embedding_timeout_seconds: 300     # max time for an embedding batch (5 min)
+  extraction_timeout_seconds: 600    # max time for extraction per conversation (10 min)
+  assembly_timeout_seconds: 600      # max time for context assembly per window (10 min)
+
+# ============================================================
+# Workers (infrastructure — DB-driven background processing)
+# ============================================================
+
+workers:
+  poll_interval_seconds: 2
+
+# ============================================================
+# Database (infrastructure — requires restart to change)
+# ============================================================
+
+database:
+  pool_min_size: 2
+  pool_max_size: 10

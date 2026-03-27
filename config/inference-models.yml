@@ -1,0 +1,354 @@
+# Context Broker — Inference Models Catalog
+#
+# Curated list of tested models per inference slot.
+# Used by the change_inference tool to present available options.
+# Mount into the container alongside config.yml.
+#
+# DEPLOYMENT TIERS:
+#   Premium — best quality, highest cost
+#   Nominal — balanced quality/cost (recommended for production)
+#   Local   — no API keys, runs on Ollama/Infinity (default out-of-box)
+#
+# Each slot lists models by provider. Each model entry includes:
+#   model: model identifier (as passed to the API)
+#   base_url: API endpoint
+#   api_key_env: environment variable holding the API key ("" for keyless)
+#   context: context window size in tokens (approximate)
+#   embedding_dims: output dimensions (embeddings only)
+#   notes: any caveats or recommendations
+#
+# Providers:
+#   openai    — OpenAI (api.openai.com)
+#   google    — Google Gemini (generativelanguage.googleapis.com)
+#   anthropic — Anthropic Claude (api.anthropic.com, OpenAI-compatible endpoint)
+#   xai       — xAI Grok (api.x.ai)
+#   together  — Together AI (api.together.xyz)
+#   ollama    — Local Ollama (no API key, no internet required)
+#   infinity  — Local Infinity (no API key, embeddings + reranking)
+
+# ============================================================
+# Imperator — conversational agent LLM
+# ============================================================
+# Needs: strong reasoning, tool calling, long context.
+# Configured in te.yml (TE configuration).
+#
+# RECOMMENDED:
+#   Premium: google / gemini-3.1-pro
+#   Nominal: google / gemini-2.5-pro
+#   Local:   ollama / qwen2.5:7b
+
+imperator:
+  google:
+    - model: gemini-3.1-pro
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key_env: GOOGLE_API_KEY
+      context: 1048576
+      notes: PREMIUM. Best reasoning available.
+
+    - model: gemini-2.5-pro
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key_env: GOOGLE_API_KEY
+      context: 1048576
+      notes: NOMINAL. Strong reasoning, lower cost.
+
+    - model: gemini-2.5-flash
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key_env: GOOGLE_API_KEY
+      context: 1048576
+      notes: Fast, large context. May return empty responses intermittently.
+
+  openai:
+    - model: gpt-4.1
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      context: 1048576
+      notes: Flagship. Best tool calling.
+
+    - model: gpt-4.1-mini
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      context: 1048576
+      notes: Fast and cheap. Good tool calling.
+
+  anthropic:
+    - model: claude-sonnet-4-6
+      base_url: https://api.anthropic.com/v1
+      api_key_env: ANTHROPIC_API_KEY
+      context: 200000
+      notes: Strong reasoning and tool calling.
+
+    - model: claude-haiku-4-5-20251001
+      base_url: https://api.anthropic.com/v1
+      api_key_env: ANTHROPIC_API_KEY
+      context: 200000
+      notes: Fast and cheap.
+
+  xai:
+    - model: grok-3
+      base_url: https://api.x.ai/v1
+      api_key_env: XAI_API_KEY
+      context: 131072
+      notes: Flagship.
+
+    - model: grok-3-mini
+      base_url: https://api.x.ai/v1
+      api_key_env: XAI_API_KEY
+      context: 131072
+      notes: Fast and cheap.
+
+  together:
+    - model: meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8
+      base_url: https://api.together.xyz/v1
+      api_key_env: TOGETHER_API_KEY
+      context: 1048576
+      notes: Open-weight flagship on Together.
+
+    - model: meta-llama/Llama-4-Scout-17B-16E-Instruct
+      base_url: https://api.together.xyz/v1
+      api_key_env: TOGETHER_API_KEY
+      context: 524288
+      notes: Fast open-weight.
+
+  ollama:
+    - model: qwen2.5:7b
+      base_url: http://context-broker-ollama:11434/v1
+      api_key_env: ""
+      context: 32768
+      notes: LOCAL. Default out-of-box. No API key needed.
+
+    - model: llama3.1:8b
+      base_url: http://context-broker-ollama:11434/v1
+      api_key_env: ""
+      context: 131072
+      notes: LOCAL. Good local alternative.
+
+# ============================================================
+# Summarization — chunk and archival summarization
+# ============================================================
+# Needs: fast, cheap, good at compression. Runs in bulk.
+# Configured in config.yml (AE configuration).
+#
+# RECOMMENDED:
+#   Premium: google / gemini-3.1-pro
+#   Nominal: google / gemini-2.5-flash-lite
+#   Local:   ollama / qwen2.5:7b
+
+summarization:
+  google:
+    - model: gemini-3.1-pro
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key_env: GOOGLE_API_KEY
+      context: 1048576
+      notes: PREMIUM. Best quality summaries. Overkill for most use cases.
+
+    - model: gemini-2.5-flash-lite
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key_env: GOOGLE_API_KEY
+      context: 1048576
+      notes: NOMINAL. Cheapest cloud option. Fast. Good enough for compression.
+
+    - model: gemini-2.5-flash
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key_env: GOOGLE_API_KEY
+      context: 1048576
+      notes: Mid-tier. Better than Lite, cheaper than Pro.
+
+  openai:
+    - model: gpt-4.1-mini
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      context: 1048576
+      notes: Best cost/quality for bulk summarization.
+
+    - model: gpt-4.1-nano
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      context: 1048576
+      notes: Cheapest OpenAI option.
+
+  xai:
+    - model: grok-3-mini
+      base_url: https://api.x.ai/v1
+      api_key_env: XAI_API_KEY
+      context: 131072
+      notes: Fast and cheap.
+
+  together:
+    - model: meta-llama/Llama-4-Scout-17B-16E-Instruct
+      base_url: https://api.together.xyz/v1
+      api_key_env: TOGETHER_API_KEY
+      context: 524288
+      notes: Good open-weight option.
+
+  ollama:
+    - model: qwen2.5:7b
+      base_url: http://context-broker-ollama:11434/v1
+      api_key_env: ""
+      context: 32768
+      notes: LOCAL. Default out-of-box. No API key needed.
+
+# ============================================================
+# Extraction — memory extraction via Mem0
+# ============================================================
+# Needs: reliable JSON output (response_format enforcement).
+# Only providers with verified JSON mode are listed.
+# Configured in config.yml (AE configuration).
+#
+# NOT SUPPORTED for extraction:
+#   - Google Gemini via OpenAI endpoint (drops response_format)
+#   - Anthropic (no response_format support in OpenAI-compat mode)
+#
+# RECOMMENDED:
+#   Premium: openai / o3-mini — best structured reasoning
+#   Nominal: openai / gpt-4.1-mini — reliable JSON, fast
+#   Local:   ollama / qwen2.5:7b
+
+extraction:
+  openai:
+    - model: o3-mini
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      context: 200000
+      notes: PREMIUM. Best structured reasoning for knowledge extraction. Extracts implicit relationships.
+
+    - model: gpt-4.1-mini
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      context: 1048576
+      notes: NOMINAL. Verified JSON mode. Recommended for extraction.
+
+    - model: gpt-4.1-nano
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      context: 1048576
+      notes: Cheapest option with verified JSON mode.
+
+  xai:
+    - model: grok-3-mini
+      base_url: https://api.x.ai/v1
+      api_key_env: XAI_API_KEY
+      context: 131072
+      notes: Verified JSON mode.
+
+  together:
+    - model: meta-llama/Llama-4-Scout-17B-16E-Instruct
+      base_url: https://api.together.xyz/v1
+      api_key_env: TOGETHER_API_KEY
+      context: 524288
+      notes: JSON mode via Together API.
+
+  ollama:
+    - model: qwen2.5:7b
+      base_url: http://context-broker-ollama:11434/v1
+      api_key_env: ""
+      context: 32768
+      notes: LOCAL. Verified JSON mode. Default out-of-box.
+
+# ============================================================
+# Embeddings — vector embeddings for conversation search
+# ============================================================
+# Needs: consistent dimensions, fast batch processing, MRL support.
+# embedding_dims MUST match the model output or your MRL-requested dimensions.
+# Changing embedding models requires a full re-embed (wipe + regenerate).
+# Configured in config.yml (AE configuration).
+#
+# MRL (Matryoshka Representation Learning):
+#   Modern models (OpenAI v3, Gemini v2+) support requesting fewer dims
+#   via the API 'dimensions' parameter. This reduces DB storage and enables
+#   HNSW indexing (pgvector limit: 2000 dims for float32).
+#   Recommended: 1024 dims for conversations (retains nuance).
+#
+# RECOMMENDED:
+#   Premium: openai / text-embedding-3-large (MRL → 1024 dims)
+#   Nominal: google / gemini-embedding-001 (MRL → 1024 dims)
+#   Local:   infinity / nomic-ai/nomic-embed-text-v1.5 (768 dims, no MRL)
+
+embeddings:
+  openai:
+    - model: text-embedding-3-large
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      embedding_dims: 1024
+      notes: PREMIUM. Best semantic accuracy. Use MRL to request 1024 dims (native 3072).
+
+    - model: text-embedding-3-small
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      embedding_dims: 1024
+      notes: Good quality/cost. Supports MRL.
+
+  google:
+    - model: gemini-embedding-001
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_key_env: GOOGLE_API_KEY
+      embedding_dims: 1024
+      notes: NOMINAL. Supports MRL via dimensions parameter. Request 1024 dims.
+
+  infinity:
+    - model: nomic-ai/nomic-embed-text-v1.5
+      base_url: http://context-broker-infinity:7997
+      api_key_env: ""
+      embedding_dims: 768
+      notes: LOCAL. Default out-of-box. No MRL — fixed 768 dims.
+
+  together:
+    - model: togethercomputer/m2-bert-80M-8k-retrieval
+      base_url: https://api.together.xyz/v1
+      api_key_env: TOGETHER_API_KEY
+      embedding_dims: 768
+      notes: Fast, cheap. No MRL.
+
+# ============================================================
+# Log Embeddings — vector embeddings for system log search
+# ============================================================
+# Separate from conversation embeddings. Logs don't need high
+# granularity — use small dims (256 for cloud, 768 for local).
+# Configured in config.yml under log_embeddings section.
+#
+# MRL: Use 256 dims for logs — strips noise (timestamps, hex, UUIDs),
+#      keeps core semantic meaning of the error.
+#
+# RECOMMENDED:
+#   Premium: openai / text-embedding-3-large (MRL → 256 dims)
+#   Nominal: openai / text-embedding-3-small (MRL → 256 dims)
+#   Local:   ollama / nomic-embed-text (768 dims, no MRL)
+
+log_embeddings:
+  openai:
+    - model: text-embedding-3-large
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      embedding_dims: 256
+      notes: PREMIUM. Best log retrieval. MRL → 256 dims strips noise.
+
+    - model: text-embedding-3-small
+      base_url: https://api.openai.com/v1
+      api_key_env: OPENAI_API_KEY
+      embedding_dims: 256
+      notes: NOMINAL. Good enough for logs. MRL → 256 dims.
+
+  ollama:
+    - model: nomic-embed-text
+      base_url: http://context-broker-ollama:11434/v1
+      api_key_env: ""
+      embedding_dims: 768
+      notes: LOCAL. Default out-of-box. No MRL — fixed 768 dims.
+
+# ============================================================
+# Reranker — hybrid search result refinement
+# ============================================================
+# Optional. Set provider: none in config.yml to disable.
+# Local Infinity works for all tiers — no reason to use cloud.
+
+reranker:
+  infinity:
+    - model: mixedbread-ai/mxbai-rerank-xsmall-v1
+      base_url: http://context-broker-infinity:7997
+      api_key_env: ""
+      notes: Default for all tiers. Local, no API key needed.
+
+  together:
+    - model: Salesforce/Llama-Rank-V2
+      base_url: https://api.together.xyz/v1
+      api_key_env: TOGETHER_API_KEY
+      notes: Requires dedicated endpoint on Together (not serverless).

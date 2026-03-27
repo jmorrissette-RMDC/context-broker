@@ -43,9 +43,7 @@ class ImperatorStateManager:
         if saved_conv_id is not None:
             if await self._conversation_exists(saved_conv_id):
                 self._conversation_id = saved_conv_id
-                _log.info(
-                    "Imperator: resuming conversation %s", self._conversation_id
-                )
+                _log.info("Imperator: resuming conversation %s", self._conversation_id)
                 return
             else:
                 _log.warning(
@@ -56,12 +54,26 @@ class ImperatorStateManager:
         # Create new conversation
         self._conversation_id = await self._create_imperator_conversation()
         self._write_state_file(self._conversation_id)
-        _log.info(
-            "Imperator: created new conversation %s", self._conversation_id
-        )
+        _log.info("Imperator: created new conversation %s", self._conversation_id)
 
     async def get_conversation_id(self) -> Optional[uuid.UUID]:
-        """Return the Imperator's current conversation ID."""
+        """Return the Imperator's current conversation ID.
+
+        Verifies the conversation still exists in the DB (PG-43).
+        If it was deleted at runtime, creates a new one transparently.
+        """
+        if self._conversation_id is not None:
+            if not await self._conversation_exists(self._conversation_id):
+                _log.warning(
+                    "Imperator: conversation %s deleted at runtime, creating new",
+                    self._conversation_id,
+                )
+                self._conversation_id = await self._create_imperator_conversation()
+                self._write_state_file(self._conversation_id)
+                _log.info(
+                    "Imperator: created replacement conversation %s",
+                    self._conversation_id,
+                )
         return self._conversation_id
 
     async def get_context_window_id(self) -> Optional[uuid.UUID]:
@@ -70,8 +82,10 @@ class ImperatorStateManager:
         The chat route and tool dispatch use this. With D-03, context windows
         are created automatically by get_context. This returns the conversation_id
         which is used as the MemorySaver thread_id.
+
+        Delegates to get_conversation_id() for PG-43 runtime recovery.
         """
-        return self._conversation_id
+        return await self.get_conversation_id()
 
     def _read_state_file(self) -> Optional[uuid.UUID]:
         """Read the conversation ID from the state file."""

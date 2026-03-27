@@ -8,17 +8,17 @@ each triggering separate assembly work.
 
 # Standard buckets — doubling progression with 200K for common model sizes
 BUDGET_BUCKETS = [
-    4096,       # 4K
-    8192,       # 8K
-    16384,      # 16K
-    32768,      # 32K
-    65536,      # 64K
-    131072,     # 128K
-    204800,     # 200K (Anthropic Sonnet/Opus pre-1M)
-    262144,     # 256K
-    524288,     # 512K
-    1048576,    # 1M
-    2097152,    # 2M
+    4096,  # 4K
+    8192,  # 8K
+    16384,  # 16K
+    32768,  # 32K
+    65536,  # 64K
+    131072,  # 128K
+    204800,  # 200K (Anthropic Sonnet/Opus pre-1M)
+    262144,  # 256K
+    524288,  # 512K
+    1048576,  # 1M
+    2097152,  # 2M
 ]
 
 # Default effective utilization — models degrade past ~85% context fill.

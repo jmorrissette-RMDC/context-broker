@@ -20,6 +20,10 @@ from app.models import (
     CreateContextWindowInput,
     CreateConversationInput,
     GetHistoryInput,
+    DeleteConversationInput,
+    ListConversationsInput,
+    QueryLogsInput,
+    SearchLogsInput,
     MemAddInput,
     MemDeleteInput,
     MemGetContextInput,
@@ -247,6 +251,88 @@ async def _dispatch_tool_inner(
             raise ValueError(result["error"])
         return {"conversation_id": result["conversation_id"]}
 
+    elif tool_name == "conv_delete_conversation":
+        validated = DeleteConversationInput(**arguments)
+        from app.database import get_pg_pool
+
+        pool = get_pg_pool()
+        # Atomic delete — all or nothing
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM conversation_summaries WHERE context_window_id IN "
+                    "(SELECT id FROM context_windows WHERE conversation_id = $1)",
+                    validated.conversation_id,
+                )
+                await conn.execute(
+                    "DELETE FROM context_windows WHERE conversation_id = $1",
+                    validated.conversation_id,
+                )
+                await conn.execute(
+                    "DELETE FROM conversation_messages WHERE conversation_id = $1",
+                    validated.conversation_id,
+                )
+                result = await conn.execute(
+                    "DELETE FROM conversations WHERE id = $1",
+                    validated.conversation_id,
+                )
+        return {"deleted": result == "DELETE 1"}
+
+    elif tool_name == "conv_list_conversations":
+        validated = ListConversationsInput(**arguments)
+        from app.database import get_pg_pool
+
+        pool = get_pg_pool()
+
+        if validated.participant:
+            # Filter to conversations where participant appears as sender or recipient
+            rows = await pool.fetch(
+                """
+                SELECT DISTINCT c.id, c.title, c.flow_id, c.user_id, c.created_at,
+                       (SELECT COUNT(*) FROM conversation_messages cm
+                        WHERE cm.conversation_id = c.id) AS message_count
+                FROM conversations c
+                WHERE EXISTS (
+                    SELECT 1 FROM conversation_messages cm
+                    WHERE cm.conversation_id = c.id
+                    AND (cm.sender = $1 OR cm.recipient = $1)
+                )
+                ORDER BY c.created_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                validated.participant,
+                validated.limit,
+                validated.offset,
+            )
+        else:
+            rows = await pool.fetch(
+                """
+                SELECT c.id, c.title, c.flow_id, c.user_id, c.created_at,
+                       (SELECT COUNT(*) FROM conversation_messages cm
+                        WHERE cm.conversation_id = c.id) AS message_count
+                FROM conversations c
+                ORDER BY c.created_at DESC
+                LIMIT $1 OFFSET $2
+                """,
+                validated.limit,
+                validated.offset,
+            )
+
+        conversations = [
+            {
+                "id": str(row["id"]),
+                "title": row["title"],
+                "flow_id": row["flow_id"],
+                "user_id": row["user_id"],
+                "created_at": (
+                    row["created_at"].isoformat() if row["created_at"] else None
+                ),
+                "message_count": row["message_count"],
+            }
+            for row in rows
+        ]
+        return {"conversations": conversations}
+
     elif tool_name == "conv_store_message":
         validated = StoreMessageInput(**arguments)
         result = await _get_flow("message_pipeline").ainvoke(
@@ -461,6 +547,138 @@ async def _dispatch_tool_inner(
             raise ValueError(result["error"])
         return {"context_windows": result.get("results", [])}
 
+    elif tool_name == "query_logs":
+        validated = QueryLogsInput(**arguments)
+        from app.database import get_pg_pool as _get_pool
+
+        pool = _get_pool()
+        conditions = []
+        args: list = []
+        idx = 1
+
+        if validated.container_name:
+            conditions.append(f"container_name ILIKE ${idx}")
+            args.append(f"%{validated.container_name}%")
+            idx += 1
+        if validated.level:
+            conditions.append(f"data->>'level' = ${idx}")
+            args.append(validated.level.upper())
+            idx += 1
+        if validated.since:
+            conditions.append(f"log_timestamp >= ${idx}::timestamptz")
+            args.append(validated.since)
+            idx += 1
+        if validated.until:
+            conditions.append(f"log_timestamp <= ${idx}::timestamptz")
+            args.append(validated.until)
+            idx += 1
+        if validated.keyword:
+            conditions.append(f"message ILIKE ${idx}")
+            args.append(f"%{validated.keyword}%")
+            idx += 1
+
+        where = " AND ".join(conditions) if conditions else "1=1"
+        args.append(validated.limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT container_name, log_timestamp, message, data
+            FROM system_logs
+            WHERE {where}
+            ORDER BY log_timestamp DESC
+            LIMIT ${idx}
+            """,
+            *args,
+        )
+        entries = []
+        for row in rows:
+            data = row["data"] if isinstance(row["data"], dict) else {}
+            entries.append(
+                {
+                    "timestamp": (
+                        row["log_timestamp"].isoformat()
+                        if row["log_timestamp"]
+                        else None
+                    ),
+                    "container_name": row["container_name"],
+                    "level": data.get("level", "unknown"),
+                    "logger": data.get("logger", ""),
+                    "message": row["message"] or "",
+                }
+            )
+        return {"entries": entries, "count": len(entries)}
+
+    elif tool_name == "search_logs":
+        validated = SearchLogsInput(**arguments)
+        from app.config import async_load_config as _aload
+
+        cfg = await _aload()
+        log_emb_config = cfg.get("log_embeddings")
+        if not log_emb_config:
+            raise ValueError(
+                "Log vectorization is not enabled. "
+                "Add a 'log_embeddings' section to config.yml to enable semantic log search."
+            )
+
+        # Embed the query
+        from app.config import get_embeddings_model
+
+        emb_model = get_embeddings_model(cfg, config_key="log_embeddings")
+        query_vec = await emb_model.aembed_query(validated.query)
+        vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
+
+        from app.database import get_pg_pool as _get_pool2
+
+        pool = _get_pool2()
+        conditions = ["embedding IS NOT NULL"]
+        args_search: list = [vec_str]
+        idx_s = 2
+
+        if validated.container_name:
+            conditions.append(f"container_name ILIKE ${idx_s}")
+            args_search.append(f"%{validated.container_name}%")
+            idx_s += 1
+        if validated.level:
+            conditions.append(f"data->>'level' = ${idx_s}")
+            args_search.append(validated.level.upper())
+            idx_s += 1
+        if validated.since:
+            conditions.append(f"log_timestamp >= ${idx_s}::timestamptz")
+            args_search.append(validated.since)
+            idx_s += 1
+
+        where = " AND ".join(conditions)
+        args_search.append(validated.limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT container_name, log_timestamp, message, data,
+                   1 - (embedding <=> $1::vector) AS similarity
+            FROM system_logs
+            WHERE {where}
+            ORDER BY embedding <=> $1::vector
+            LIMIT ${idx_s}
+            """,
+            *args_search,
+        )
+        entries = []
+        for row in rows:
+            data = row["data"] if isinstance(row["data"], dict) else {}
+            entries.append(
+                {
+                    "timestamp": (
+                        row["log_timestamp"].isoformat()
+                        if row["log_timestamp"]
+                        else None
+                    ),
+                    "container_name": row["container_name"],
+                    "level": data.get("level", "unknown"),
+                    "message": row["message"] or "",
+                    "similarity": round(float(row["similarity"]), 4),
+                }
+            )
+        return {"entries": entries, "count": len(entries)}
+
     elif tool_name == "mem_search":
         validated = MemSearchInput(**arguments)
         result = await _get_flow("memory_search").ainvoke(
@@ -511,6 +729,7 @@ async def _dispatch_tool_inner(
         # Unique thread_id per invocation — MemorySaver persists within
         # a single ReAct execution, not across user turns.
         import uuid as _uuid
+
         thread_id = str(_uuid.uuid4())
 
         result = await _get_imperator_flow().ainvoke(

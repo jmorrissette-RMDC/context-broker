@@ -19,6 +19,8 @@ from typing_extensions import TypedDict
 
 from app.config import get_tuning, verbose_log
 from app.database import get_pg_pool
+from app.utils import stable_lock_id
+
 # Registration handled by register.py — no module-scope side effects
 from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
 
@@ -68,7 +70,7 @@ async def pt_acquire_lock(state: PassthroughAssemblyState) -> dict:
         state["context_window_id"],
     )
     pool = get_pg_pool()
-    lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+    lock_id = stable_lock_id(state["context_window_id"])
     acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
 
     if not acquired:
@@ -131,7 +133,8 @@ async def pt_release_lock(state: PassthroughAssemblyState) -> dict:
         except (ValueError, OSError) as exc:
             _log.warning(
                 "Failed to release assembly lock for window=%s: %s",
-                state.get("context_window_id"), exc,
+                state.get("context_window_id"),
+                exc,
             )
     return {}
 

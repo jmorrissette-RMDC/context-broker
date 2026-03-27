@@ -14,7 +14,6 @@ import json
 import logging
 import sys
 import time
-from pathlib import Path
 
 import httpx
 
@@ -55,11 +54,15 @@ async def mcp_call(client: httpx.AsyncClient, tool_name: str, arguments: dict) -
 
 async def create_conversation(client: httpx.AsyncClient, title: str) -> str:
     """Create a new conversation and return its ID."""
-    result = await mcp_call(client, "conv_create_conversation", {
-        "title": title,
-        "flow_id": "integration-test",
-        "user_id": "test-runner",
-    })
+    result = await mcp_call(
+        client,
+        "conv_create_conversation",
+        {
+            "title": title,
+            "flow_id": "integration-test",
+            "user_id": "test-runner",
+        },
+    )
     conv_id = result["conversation_id"]
     log.info(f"Created conversation: {title} ({conv_id})")
     return conv_id
@@ -67,12 +70,16 @@ async def create_conversation(client: httpx.AsyncClient, title: str) -> str:
 
 async def store_message(client: httpx.AsyncClient, conv_id: str, msg: dict) -> None:
     """Store a single message via MCP."""
-    await mcp_call(client, "store_message", {
-        "conversation_id": conv_id,
-        "role": msg["role"],
-        "content": msg["content"],
-        "sender": msg.get("sender", "unknown"),
-    })
+    await mcp_call(
+        client,
+        "store_message",
+        {
+            "conversation_id": conv_id,
+            "role": msg["role"],
+            "content": msg["content"],
+            "sender": msg.get("sender", "unknown"),
+        },
+    )
 
 
 async def get_pipeline_status(client: httpx.AsyncClient) -> dict:
@@ -108,24 +115,41 @@ async def get_db_counts() -> dict:
 
     def ssh_psql(query: str) -> str:
         result = subprocess.run(
-            ["ssh", "aristotle9@192.168.1.110",
-             f'docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c "{query}"'],
-            capture_output=True, text=True, timeout=10,
+            [
+                "ssh",
+                "aristotle9@192.168.1.110",
+                f'docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c "{query}"',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         return result.stdout.strip()
 
     def ssh_redis(cmd: str) -> str:
         result = subprocess.run(
-            ["ssh", "aristotle9@192.168.1.110",
-             f'docker exec context-broker-redis redis-cli {cmd}'],
-            capture_output=True, text=True, timeout=10,
+            [
+                "ssh",
+                "aristotle9@192.168.1.110",
+                f"docker exec context-broker-redis redis-cli {cmd}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         return result.stdout.strip()
 
     try:
         total_msgs = int(ssh_psql("SELECT COUNT(*) FROM conversation_messages") or "0")
-        total_embedded = int(ssh_psql("SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL") or "0")
-        total_summaries = int(ssh_psql("SELECT COUNT(*) FROM conversation_summaries") or "0")
+        total_embedded = int(
+            ssh_psql(
+                "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL"
+            )
+            or "0"
+        )
+        total_summaries = int(
+            ssh_psql("SELECT COUNT(*) FROM conversation_summaries") or "0"
+        )
     except (ValueError, subprocess.TimeoutExpired):
         total_msgs = total_embedded = total_summaries = -1
 
@@ -164,7 +188,9 @@ async def wait_for_pipeline(
         elapsed = time.monotonic() - start
 
         if elapsed > PIPELINE_TIMEOUT_SECONDS:
-            log.error(f"TIMEOUT: Pipeline did not complete in {PIPELINE_TIMEOUT_SECONDS}s")
+            log.error(
+                f"TIMEOUT: Pipeline did not complete in {PIPELINE_TIMEOUT_SECONDS}s"
+            )
             return False
 
         counts = await get_db_counts()
@@ -199,10 +225,7 @@ async def wait_for_pipeline(
                 return False
 
         # Success: embedding queue empty (extraction runs in background, may take longer)
-        if (
-            queues["embedding_queue"] == 0
-            and counts["total_embedded"] > 0
-        ):
+        if queues["embedding_queue"] == 0 and counts["total_embedded"] > 0:
             log.info(
                 f"Pipeline complete. "
                 f"Embedded: {counts['total_embedded']}, "
@@ -246,7 +269,9 @@ async def main():
 
                 # Early validation checkpoint
                 if total_messages == EARLY_VALIDATION_MESSAGES:
-                    log.info(f"--- Early validation at {EARLY_VALIDATION_MESSAGES} messages ---")
+                    log.info(
+                        f"--- Early validation at {EARLY_VALIDATION_MESSAGES} messages ---"
+                    )
                     await asyncio.sleep(5)  # Give pipeline a moment
                     counts = await get_db_counts()
                     if counts["total_embedded"] == 0:
@@ -274,11 +299,13 @@ async def main():
                     rate = total_messages / elapsed if elapsed > 0 else 0
                     log.info(f"  Stored {total_messages} messages ({rate:.0f} msg/s)")
 
-            conversations.append({
-                "file": data_file.name,
-                "conversation_id": conv_id,
-                "message_count": len(messages),
-            })
+            conversations.append(
+                {
+                    "file": data_file.name,
+                    "conversation_id": conv_id,
+                    "message_count": len(messages),
+                }
+            )
 
             load_elapsed = time.monotonic() - load_start
             log.info(

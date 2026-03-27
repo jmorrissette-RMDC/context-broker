@@ -142,14 +142,14 @@ async def create_context_window_node(state: CreateContextWindowState) -> dict:
         return {"error": f"Conversation {state['conversation_id']} not found"}
 
     # G5-08: Idempotent creation — use ON CONFLICT DO NOTHING on the
-    # unique constraint (conversation_id, participant_id, build_type).
+    # unique constraint (conversation_id, build_type, max_token_budget) per D-03/migration 013.
     # If the window already exists, return the existing ID.
     row = await pool.fetchrow(
         """
         INSERT INTO context_windows
             (conversation_id, participant_id, build_type, max_token_budget)
         VALUES ($1, $2, $3, $4)
-        ON CONFLICT (conversation_id, participant_id, build_type) DO NOTHING
+        ON CONFLICT (conversation_id, build_type, max_token_budget) DO NOTHING
         RETURNING id, conversation_id, participant_id, build_type, max_token_budget, created_at
         """,
         uuid.UUID(state["conversation_id"]),
@@ -418,9 +418,9 @@ class GetContextState(TypedDict):
     """State for the get_context core tool."""
 
     build_type: str
-    budget: int                          # raw requested budget
-    snapped_budget: int                  # after bucket snapping
-    conversation_id: Optional[str]       # None = create new
+    budget: int  # raw requested budget
+    snapped_budget: int  # after bucket snapping
+    conversation_id: Optional[str]  # None = create new
     config: dict
 
     # Resolved by flow
@@ -501,9 +501,7 @@ async def find_or_create_window_node(state: GetContextState) -> dict:
         "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1)", conv_id
     )
     if not conv_exists:
-        _log.warning(
-            "get_context: conversation %s not found — recreating", conv_id
-        )
+        _log.warning("get_context: conversation %s not found — recreating", conv_id)
         await pool.execute(
             "INSERT INTO conversations (id, title, flow_id, user_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
             conv_id,

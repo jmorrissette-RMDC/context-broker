@@ -44,14 +44,9 @@ class TestHealthEndpoint:
         body = resp.json()
         # Look for postgres in the response (various possible key structures)
         body_str = str(body).lower()
-        assert "database" in body or "postgres" in body_str, f"No postgres/database status in health: {body}"
-
-    def test_contains_redis_status(self, client):
-        """Health response includes redis dependency status."""
-        resp = client.get("/health")
-        body = resp.json()
-        body_str = str(body).lower()
-        assert "cache" in body or "redis" in body_str, f"No redis/cache status in health: {body}"
+        assert (
+            "database" in body or "postgres" in body_str
+        ), f"No postgres/database status in health: {body}"
 
     def test_contains_neo4j_status(self, client):
         """Health response includes neo4j dependency status."""
@@ -91,8 +86,7 @@ class TestMetricsEndpoint:
         content_type = resp.headers.get("content-type", "")
         # Prometheus format uses text/plain or the openmetrics content type
         assert any(
-            ct in content_type
-            for ct in ("text/plain", "text/", "openmetrics")
+            ct in content_type for ct in ("text/plain", "text/", "openmetrics")
         ), f"Unexpected content-type: {content_type}"
 
         text = resp.text
@@ -116,9 +110,9 @@ class TestMetricsEndpoint:
         resp = client.get("/metrics")
         text = resp.text
         # Should contain MCP-related metric names
-        assert "mcp_request" in text.lower() or "context_broker" in text.lower(), (
-            f"No MCP metrics found in:\n{text[:500]}"
-        )
+        assert (
+            "mcp_request" in text.lower() or "context_broker" in text.lower()
+        ), f"No MCP metrics found in:\n{text[:500]}"
 
     def test_contains_help_and_type_annotations(self, client):
         """Prometheus metrics include # HELP and # TYPE annotations."""

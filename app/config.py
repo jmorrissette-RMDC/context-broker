@@ -475,17 +475,22 @@ def get_chat_model(config: dict, role: str = "imperator") -> Any:
         return _llm_cache[cache_key]
 
 
-def get_embeddings_model(config: dict) -> Any:
+def get_embeddings_model(config: dict, config_key: str = "embeddings") -> Any:
     """Return a cached OpenAIEmbeddings instance keyed by (base_url, model).
 
     Avoids re-creating the client on every request.
     R5-M12: Uses _cache_lock around the full check-and-set to prevent
     two concurrent calls from both missing the cache and creating
     duplicate clients.
+
+    Args:
+        config: Full configuration dict.
+        config_key: Config section to read embedding settings from.
+                    Default "embeddings". Use "log_embeddings" for log vectorization.
     """
     from langchain_openai import OpenAIEmbeddings
 
-    embeddings_config = config.get("embeddings", {})
+    embeddings_config = config.get(config_key, {})
     api_key = get_api_key(embeddings_config)
     cache_key = f"{embeddings_config.get('base_url')}:{embeddings_config.get('model')}:{hashlib.sha256((api_key or 'default').encode()).hexdigest()[:16]}"
     with _cache_lock:
@@ -502,5 +507,10 @@ def get_embeddings_model(config: dict) -> Any:
                     "check_embedding_ctx_length", False
                 ),
             }
+            # MRL: pass dimensions parameter if configured, enabling
+            # Matryoshka truncation for models that support it (OpenAI v3, Gemini v2).
+            dims = embeddings_config.get("embedding_dims")
+            if dims:
+                kwargs["dimensions"] = int(dims)
             _embeddings_cache[cache_key] = OpenAIEmbeddings(**kwargs)
         return _embeddings_cache[cache_key]

@@ -10,7 +10,7 @@ import json
 import httpx
 import pytest
 
-from tests.conftest_e2e import BASE_URL, CHAT_URL
+from tests.conftest_e2e import BASE_URL
 
 pytestmark = pytest.mark.e2e
 
@@ -36,7 +36,10 @@ class TestChatNonStreaming:
             json={
                 "model": "context-broker",
                 "messages": [
-                    {"role": "user", "content": "Say the word 'hello' and nothing else."}
+                    {
+                        "role": "user",
+                        "content": "Say the word 'hello' and nothing else.",
+                    }
                 ],
                 "stream": False,
             },
@@ -63,7 +66,10 @@ class TestChatNonStreaming:
                 "model": "context-broker",
                 "messages": [
                     {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": "What is 2+2? Reply with just the number."},
+                    {
+                        "role": "user",
+                        "content": "What is 2+2? Reply with just the number.",
+                    },
                 ],
                 "stream": False,
             },
@@ -88,9 +94,7 @@ class TestChatStreaming:
             "/v1/chat/completions",
             json={
                 "model": "context-broker",
-                "messages": [
-                    {"role": "user", "content": "Say 'hi' and nothing else."}
-                ],
+                "messages": [{"role": "user", "content": "Say 'hi' and nothing else."}],
                 "stream": True,
             },
         ) as resp:
@@ -166,9 +170,7 @@ class TestChatErrors:
             "/v1/chat/completions",
             json={
                 "model": "context-broker",
-                "messages": [
-                    {"role": "system", "content": "System only, no user."}
-                ],
+                "messages": [{"role": "system", "content": "System only, no user."}],
             },
         )
         assert resp.status_code == 400
@@ -181,9 +183,7 @@ class TestChatErrors:
             "/v1/chat/completions",
             json={
                 "model": "context-broker",
-                "messages": [
-                    {"role": "invalid_role", "content": "Bad role"}
-                ],
+                "messages": [{"role": "invalid_role", "content": "Bad role"}],
             },
         )
         assert resp.status_code == 422

@@ -450,42 +450,41 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | PG-45 | Post | blocker | rank-bm25 missing from requirements.txt | `requirements.txt` | FIXED | Mem0 imports rank_bm25 at init. Missing dependency caused silent extraction failure. |
 | PG-46 | Post | blocker | Neo4j APOC plugin not installed | `docker-compose.yml` | FIXED | Mem0 uses apoc.meta.data() for graph operations. Added NEO4J_PLUGINS=["apoc"] to container env. |
 
+### Integration Testing
+
+| ID | Round | Reviewer | Severity | Description | File(s) | Status | Notes |
+|----|-------|----------|----------|-------------|---------|--------|-------|
+| PG-47 | Post | — | major | Embed pipeline processes one message per API call — 40 min for 10K | `arq_worker.py` | FIXED | Added batch embedding (embedding_batch_size=50, embedding_concurrency=3). 50/batch at 2.5s = ~60 emb/s. Embeddings keep pace with ingestion. |
+| PG-48 | Post | — | minor | Bulk load doesn't create context windows — assembly never triggers | `tests/integration/bulk_load.py` | NOTE | By design: get_context auto-creates windows (D-03). Bulk load must call get_context after loading, then store one trigger message per conversation to kick off assembly. |
+| PG-49 | Post | — | major | Bulk extraction logs extracted=N but Neo4j has few nodes | `memory_extraction.py`, `mem0_client.py` | FIXED | Rogers Fix 2: monkey-patch PGVector.insert with ON CONFLICT DO NOTHING + migration 016 unique index on mem0_memories. Mem0 client reset on error. 35+ memories, 6+ Neo4j nodes verified at scale. |
+| PG-50 | Post | — | blocker | Imperator returns cached/stale responses across turns | `imperator_wrapper.py` | FIXED | Unique UUID thread_id per invocation. MemorySaver no longer reuses stale state. |
+| PG-51 | Post | — | major | Imperator log_query tool returns empty response | `imperator_flow.py` | FIXED | Tool now handles string JSONB data (json.loads fallback). Verified in Phase 3: 1370 chars returned. |
+| PG-52 | Post | — | minor | Imperator context_introspection response doesn't contain expected keywords | `imperator_flow.py` | NOTE | Response format is LLM-dependent — keywords like "tier" and "tokens" may appear in different phrasing. Tool verified working (478 chars response). |
+| PG-53 | Post | — | major | admin_tools config change requires container restart (not hot-reloadable) | `imperator_flow.py` | FIXED | TE config mtime detection in imperator_wrapper.py. Admin tools re-evaluated on each call. |
+| PG-54 | Post | — | minor | Phase 2 turn 6: Imperator doesn't mention "Joshua26" when summarizing projects | N/A | NOTE | Quality issue — Imperator found relevant topics but didn't use exact term. Context assembly quality, not a bug. |
+| PG-55 | Post | — | minor | Phase 2 turn 7: Imperator can't find "AE/TE separation" via search | N/A | NOTE | Search term matching limitation. Related to extraction quality improvements (future work). |
+| PG-56 | Post | — | major | Standard-tiered retrieval returns only tier 1 for large conversations | `retrieval_flow.py` | NOTE | Only observed in initial run with stale data. Clean re-run (59/59) showed all build types returning correct context. Monitoring. |
+
+### Gate 3 Audit (2026-03-25)
+
+| ID | Round | Reviewer | Severity | Description | File(s) | Status | Notes |
+|----|-------|----------|----------|-------------|---------|--------|-------|
+| G3-01 | G3 | Opus | minor | `black --check` fails on 12 files — formatting violations | multiple | OPEN | REQ-001 §1.2 requires black formatting. 12 files need reformatting. |
+| G3-02 | G3 | Opus | minor | `ruff check` has 2 violations — unused import, import order | `base_contract.py`, `mcp.py` | OPEN | REQ-001 §1.3 requires ruff compliance. Unused import in base_contract.py, import order in mcp.py. |
+| G3-03 | G3 | Opus | minor | Dead code: `app/workers/arq_worker.py` still exists | `app/workers/arq_worker.py` | OPEN | Legacy Redis worker. Redis was removed — this file is dead code. Should be deleted. |
+| G3-04 | G3 | Opus | minor | Missing `embedding_dims` startup validation | `app/config.py`, `app/main.py` | OPEN | Config should fail fast at startup if embedding_dims not set. Currently only validated at embedding time. |
+
 ---
 
 ## Summary
 
-Updated 2026-03-24. Component tests 28/28 PASS. Cross-provider 3/3 PASS. State 4 validated.
+Updated 2026-03-25. 59/59 tests PASS. Gate 3 audit: 43/47 requirements passing, 4 findings (all minor).
 
 | Status | Count |
 |--------|-------|
-| OPEN | 1 |
-| FIXED | 223 |
+| OPEN | 4 (G3-01 through G3-04) |
+| FIXED | 230 |
 | WONTFIX | 36 |
 | FALSE_POSITIVE | 1 |
 | REMOVED | 1 |
-| NOTE | 1 |
-
-| PG-47 | Post | major | Embed pipeline processes one message per API call — 40 min for 10K | `arq_worker.py` | FIXED | Added batch embedding (embedding_batch_size=50, embedding_concurrency=3). 50/batch at 2.5s = ~60 emb/s. Embeddings keep pace with ingestion. |
-| PG-48 | Post | minor | Bulk load doesn't create context windows — assembly never triggers | `tests/integration/bulk_load.py` | NOTE | By design: get_context auto-creates windows (D-03). Bulk load must call get_context after loading, then store one trigger message per conversation to kick off assembly. |
-
-| PG-49 | Post | major | Bulk extraction logs extracted=N but Neo4j has few nodes | `memory_extraction.py`, `mem0_client.py` | OPEN | Extraction flow reports extracted=208 for conv-2 but Neo4j only has 12 nodes (from a manual test). Either Mem0 add() is silently failing at scale, or the extracted count is misleading. Needs investigation. |
-
-| PG-50 | Post | blocker | Imperator returns cached/stale responses across turns | `imperator_wrapper.py`, `tool_dispatch.py` | FIXED | MemorySaver reuses same thread_id for all calls to /v1/chat/completions. After the first tool-use turn completes, subsequent calls return the same cached response instead of processing the new message. Each HTTP request needs a unique invocation or MemorySaver state must be handled correctly for multi-turn. |
-
-### Open Items
-
-| PG-54 | Post | minor | Phase 2 turn 6: Imperator doesn't mention "Joshua26" when summarizing projects | N/A | NOTE | Quality issue — the Imperator found relevant topics but didn't use the exact term "Joshua26". Context assembly may not surface the system name prominently enough. |
-| PG-55 | Post | minor | Phase 2 turn 7: Imperator can't find "AE/TE separation" via search | N/A | NOTE | Either the term wasn't extracted to the knowledge graph, or search doesn't match partial concepts. Related to PG-49 (extraction quality). |
-| PG-51 | Post | major | Imperator log_query tool returns empty response | `imperator_flow.py` | OPEN | Phase 3 test: "Show me log entries" returned 0 chars. Either the tool wasn't called, the system_logs table is empty after container restart, or the tool errored silently. |
-| PG-52 | Post | minor | Imperator context_introspection response doesn't contain expected keywords | `imperator_flow.py` | OPEN | Phase 3 test: response missing "tier" and "tokens". The tool may not have been called, or the response format doesn't match expected keywords. Needs investigation. |
-| PG-53 | Post | major | admin_tools config change requires container restart (not hot-reloadable) | `imperator_flow.py` | OPEN | admin_tools=true/false is read at graph compilation time. Changing te.yml doesn't take effect because the Imperator graph is a lazy singleton compiled once. Need to invalidate the compiled graph on TE config change. |
-
-### Open Items
-
-| PG-56 | Post | major | Standard-tiered retrieval returns only tier 1 for large conversations | retrieval_flow.py | OPEN | c3164a6a (6264 msgs) has 152 summaries but get_context returns empty tiers. Sonnet rated POOR: "only tier 1 archival summary, no tier 2 or tier 3". Retrieval graph may not be loading tier 2/3 correctly at scale. |
-
-1 open major: PG-56 (standard-tiered retrieval returns only tier 1 for large conversations).
-PG-43 FIXED, PG-49 FIXED (Mem0 client reset on error), PG-50 FIXED, PG-51 FIXED, PG-53 FIXED.
-Phase 2: 10/10. Phase 3: 9/9. Phase 4a: 3/4 (PG-56).
-2 minor: PG-52 (introspection keywords).
-PG-50 FIXED — unique thread_id per invocation. Phase 2: 8/10, Phase 3: 6/9.
+| NOTE | 5 |

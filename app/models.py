@@ -65,6 +65,25 @@ class RetrieveContextInput(BaseModel):
     context_window_id: UUID
 
 
+class DeleteConversationInput(BaseModel):
+    """Input for conv_delete_conversation."""
+
+    conversation_id: UUID
+
+
+class ListConversationsInput(BaseModel):
+    """Input for conv_list_conversations."""
+
+    participant: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Filter by participant — returns conversations where this value "
+        "appears as sender or recipient on any message.",
+    )
+    limit: int = Field(50, ge=1, le=500)
+    offset: int = Field(0, ge=0)
+
+
 class SearchConversationsInput(BaseModel):
     """Input for conv_search."""
 
@@ -132,12 +151,18 @@ class GetContextInput(BaseModel):
     """Input for get_context — retrieve assembled context, auto-creating
     conversation and window as needed."""
 
-    build_type: str = Field(..., min_length=1, max_length=100,
-                            description="Context assembly strategy (e.g., 'passthrough', 'standard-tiered', 'knowledge-enriched')")
-    budget: int = Field(..., ge=1,
-                        description="Token budget — snapped to nearest bucket (4K-2M)")
+    build_type: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Context assembly strategy (e.g., 'passthrough', 'standard-tiered', 'knowledge-enriched')",
+    )
+    budget: int = Field(
+        ..., ge=1, description="Token budget — snapped to nearest bucket (4K-2M)"
+    )
     conversation_id: Optional[UUID] = Field(
-        None, description="Existing conversation ID. Omit to create a new conversation.")
+        None, description="Existing conversation ID. Omit to create a new conversation."
+    )
 
 
 class StoreMessageCoreInput(BaseModel):
@@ -181,6 +206,27 @@ class MemDeleteInput(BaseModel):
     memory_id: str = Field(..., min_length=1, max_length=255)
 
 
+class QueryLogsInput(BaseModel):
+    """Input for query_logs — SQL-based log filtering."""
+
+    container_name: Optional[str] = Field(None, max_length=255)
+    level: Optional[str] = Field(None, pattern="^(DEBUG|INFO|WARN|WARNING|ERROR)$")
+    since: Optional[str] = Field(None, description="ISO-8601 timestamp lower bound")
+    until: Optional[str] = Field(None, description="ISO-8601 timestamp upper bound")
+    keyword: Optional[str] = Field(None, max_length=500)
+    limit: int = Field(50, ge=1, le=500)
+
+
+class SearchLogsInput(BaseModel):
+    """Input for search_logs — semantic search over vectorized logs."""
+
+    query: str = Field(..., min_length=1, max_length=2000)
+    container_name: Optional[str] = Field(None, max_length=255)
+    level: Optional[str] = Field(None, pattern="^(DEBUG|INFO|WARN|WARNING|ERROR)$")
+    since: Optional[str] = Field(None, description="ISO-8601 timestamp lower bound")
+    limit: int = Field(20, ge=1, le=100)
+
+
 class ImperatorChatInput(BaseModel):
     """Input for imperator_chat."""
 
@@ -216,6 +262,7 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, ge=1)
+    user: Optional[str] = Field(None, max_length=255)
 
 
 # ============================================================

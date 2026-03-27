@@ -36,9 +36,14 @@ pytestmark = pytest.mark.e2e
 def _pg_query(sql: str) -> str:
     """Run a SQL query against Postgres via SSH + docker exec."""
     result = subprocess.run(
-        ["ssh", f"{SSH_USER}@{SSH_HOST}",
-         f"docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c \"{sql}\""],
-        capture_output=True, text=True, timeout=15
+        [
+            "ssh",
+            f"{SSH_USER}@{SSH_HOST}",
+            f'docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c "{sql}"',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     return result.stdout.strip()
 
@@ -119,9 +124,9 @@ class TestPipelineEmbedding:
                 break
             time.sleep(1)
 
-        assert has_embedding, (
-            f"Message {message_id} did not get an embedding vector within 30s"
-        )
+        assert (
+            has_embedding
+        ), f"Message {message_id} did not get an embedding vector within 30s"
 
 
 # ===================================================================
@@ -164,9 +169,7 @@ class TestPipelineIntermediateOutputs:
         """Verify created conversation exists in conversations table."""
         conv_id = _create_conversation(client)
 
-        output = _pg_query(
-            f"SELECT id FROM conversations WHERE id = '{conv_id}'"
-        )
+        output = _pg_query(f"SELECT id FROM conversations WHERE id = '{conv_id}'")
         assert conv_id in output, f"Conversation {conv_id} not found in DB: {output}"
 
     def test_context_window_exists_in_postgres(self, client):
@@ -216,9 +219,10 @@ class TestDuplicateDetection:
 
         # The system should detect the duplicate — was_collapsed should be True
         # or the message_id should be the same (idempotent)
-        assert result2.get("was_collapsed") is True or result2.get("message_id") == first_id, (
-            f"Second store was not collapsed: {result2}"
-        )
+        assert (
+            result2.get("was_collapsed") is True
+            or result2.get("message_id") == first_id
+        ), f"Second store was not collapsed: {result2}"
 
 
 # ===================================================================
@@ -261,6 +265,6 @@ class TestContextRetrievalFormat:
         # Context should be a list (messages array) or None if no assembly yet
         context = result["context"]
         if context is not None:
-            assert isinstance(context, list), (
-                f"Expected context to be a list, got {type(context)}"
-            )
+            assert isinstance(
+                context, list
+            ), f"Expected context to be a list, got {type(context)}"

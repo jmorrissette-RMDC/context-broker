@@ -18,27 +18,40 @@ from config import CB_MCP_URL, SONNET_MODEL
 
 SSH_TARGET = "aristotle9@192.168.1.110"
 
+
 def _discover_conv_ids() -> list[str]:
     """Discover test conversation IDs from the database."""
     import subprocess
+
     result = subprocess.run(
-        ["ssh", SSH_TARGET,
-         "docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c "
-         "\"SELECT id FROM conversations WHERE title LIKE 'conversation-%' ORDER BY created_at LIMIT 2\""],
-        capture_output=True, text=True, timeout=15,
+        [
+            "ssh",
+            SSH_TARGET,
+            "docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c "
+            "\"SELECT id FROM conversations WHERE title LIKE 'conversation-%' ORDER BY created_at LIMIT 2\"",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+
 
 CONV_IDS = _discover_conv_ids()
 
 
 def mcp_call(tool_name: str, arguments: dict) -> dict:
     with httpx.Client() as client:
-        resp = client.post(CB_MCP_URL, json={
-            "jsonrpc": "2.0", "id": 1,
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
-        }, timeout=60)
+        resp = client.post(
+            CB_MCP_URL,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": tool_name, "arguments": arguments},
+            },
+            timeout=60,
+        )
         body = resp.json()
         if "error" in body:
             return {"error": body["error"]}
@@ -60,10 +73,18 @@ def sonnet_evaluate(data_content: str, instruction: str) -> str:
         data_file.write_text(data_content, encoding="utf-8")
         prompt = f"Read the file at {data_file.absolute()} and follow the instructions inside it. {instruction}"
         result = subprocess.run(
-            ["claude", "--model", SONNET_MODEL, "--print",
-             "--allowedTools", "Read",
-             "-p", prompt],
-            capture_output=True, timeout=300,
+            [
+                "claude",
+                "--model",
+                SONNET_MODEL,
+                "--print",
+                "--allowedTools",
+                "Read",
+                "-p",
+                prompt,
+            ],
+            capture_output=True,
+            timeout=300,
         )
         stdout = (result.stdout or b"").decode("utf-8", errors="replace").strip()
         if not stdout:
@@ -79,11 +100,14 @@ def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
     print(f"\n  Evaluating {conv_id[:8]} / {build_type}...")
 
     # Get assembled context
-    ctx = mcp_call("get_context", {
-        "build_type": build_type,
-        "budget": 204800,
-        "conversation_id": conv_id,
-    })
+    ctx = mcp_call(
+        "get_context",
+        {
+            "build_type": build_type,
+            "budget": 204800,
+            "conversation_id": conv_id,
+        },
+    )
 
     if not ctx.get("context"):
         return {"passed": False, "detail": "No context returned"}
@@ -91,15 +115,26 @@ def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
     context_text = json.dumps(ctx["context"], ensure_ascii=False)
     total_tokens = ctx.get("total_tokens", 0)
     tiers = ctx.get("tiers", ctx.get("context_tiers", {}))
-    tier_summary = {k: len(v) if isinstance(v, list) else (len(v) if isinstance(v, str) and v else 0) for k, v in tiers.items()}
+    tier_summary = {
+        k: (
+            len(v)
+            if isinstance(v, list)
+            else (len(v) if isinstance(v, str) and v else 0)
+        )
+        for k, v in tiers.items()
+    }
 
     # Get some original messages for comparison
     rows_result = subprocess.run(
-        ["ssh", SSH_TARGET,
-         f"docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c "
-         f"\"SELECT LEFT(content, 200) FROM conversation_messages WHERE conversation_id='{conv_id}' "
-         f"AND role='user' AND LENGTH(content) > 50 ORDER BY sequence_number LIMIT 10\""],
-        capture_output=True, timeout=15,
+        [
+            "ssh",
+            SSH_TARGET,
+            f"docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c "
+            f"\"SELECT LEFT(content, 200) FROM conversation_messages WHERE conversation_id='{conv_id}' "
+            f"AND role='user' AND LENGTH(content) > 50 ORDER BY sequence_number LIMIT 10\"",
+        ],
+        capture_output=True,
+        timeout=15,
     )
     rows = (rows_result.stdout or b"").decode("utf-8", errors="replace")
 
@@ -133,7 +168,11 @@ Respond with ONLY a JSON object: {{"rating": "GOOD/ACCEPTABLE/POOR", "assessment
     try:
         result = json.loads(response)
         passed = result.get("rating", "POOR") != "POOR"
-        return {"passed": passed, "rating": result.get("rating"), "detail": result.get("assessment", "")}
+        return {
+            "passed": passed,
+            "rating": result.get("rating"),
+            "detail": result.get("assessment", ""),
+        }
     except json.JSONDecodeError:
         # Sonnet didn't return JSON — check for keywords
         passed = "GOOD" in response or "ACCEPTABLE" in response
@@ -147,18 +186,22 @@ def main():
     for conv_id in CONV_IDS:
         for bt in ["standard-tiered", "knowledge-enriched"]:
             result = evaluate_context_assembly(conv_id, bt)
-            results.append({
-                "conversation": conv_id[:8],
-                "build_type": bt,
-                **result,
-            })
+            results.append(
+                {
+                    "conversation": conv_id[:8],
+                    "build_type": bt,
+                    **result,
+                }
+            )
 
     # Summary
-    print(f"\n=== Results ===")
+    print("\n=== Results ===")
     passed = sum(1 for r in results if r["passed"])
     for r in results:
         status = "PASS" if r["passed"] else "FAIL"
-        print(f"  [{status}] {r['conversation']} / {r['build_type']}: {r.get('rating', '?')} — {r.get('detail', '')[:100]}")
+        print(
+            f"  [{status}] {r['conversation']} / {r['build_type']}: {r.get('rating', '?')} — {r.get('detail', '')[:100]}"
+        )
 
     print(f"\nPassed: {passed}/{len(results)}")
 
@@ -172,4 +215,5 @@ def main():
 
 if __name__ == "__main__":
     from config import PHASE2_DIR
+
     main()

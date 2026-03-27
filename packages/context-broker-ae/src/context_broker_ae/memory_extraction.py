@@ -88,7 +88,9 @@ async def acquire_extraction_lock(state: MemoryExtractionState) -> dict:
         state["conversation_id"],
     )
     pool = get_pg_pool()
-    lock_id = hash(state["conversation_id"]) & 0x7FFFFFFFFFFFFFFF
+    from app.utils import stable_lock_id
+
+    lock_id = stable_lock_id(state["conversation_id"])
     acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
 
     if not acquired:
@@ -98,7 +100,11 @@ async def acquire_extraction_lock(state: MemoryExtractionState) -> dict:
         )
         return {"lock_key": str(lock_id), "lock_token": None, "lock_acquired": False}
 
-    return {"lock_key": str(lock_id), "lock_token": "pg_advisory", "lock_acquired": True}
+    return {
+        "lock_key": str(lock_id),
+        "lock_token": "pg_advisory",
+        "lock_acquired": True,
+    }
 
 
 async def fetch_unextracted_messages(state: MemoryExtractionState) -> dict:
@@ -131,42 +137,135 @@ async def fetch_unextracted_messages(state: MemoryExtractionState) -> dict:
     return {"messages": [dict(r) for r in rows], "user_id": user_id}
 
 
+# Patterns for stripping noise from extraction text
+_CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```", re.MULTILINE)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]{10,}`")
+_FILE_PATH_RE = re.compile(
+    r"(?:[A-Z]:\\|/(?:mnt|home|usr|storage|app|tmp)/)[\w/\\._-]{10,}"
+)
+_URL_RE = re.compile(r"https?://\S{20,}")
+_MARKDOWN_HEADER_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+_MARKDOWN_HR_RE = re.compile(r"^\*{3,}$|^-{3,}$|^_{3,}$", re.MULTILINE)
+_MARKDOWN_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
+_MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+
+
+def _clean_for_extraction(text: str) -> str:
+    """Strip code blocks, file paths, URLs, and markdown noise.
+
+    Preserves conversational content — the signal Mem0 needs for
+    knowledge extraction. Removes noise that confuses the LLM and
+    wastes tokens.
+    """
+    # Remove code blocks (triple backtick fenced)
+    text = _CODE_BLOCK_RE.sub("[code removed]", text)
+    # Remove long inline code spans
+    text = _INLINE_CODE_RE.sub("[code]", text)
+    # Remove file paths
+    text = _FILE_PATH_RE.sub("[path]", text)
+    # Remove long URLs
+    text = _URL_RE.sub("[url]", text)
+    # Simplify markdown headers to plain text
+    text = _MARKDOWN_HEADER_RE.sub("", text)
+    # Remove horizontal rules
+    text = _MARKDOWN_HR_RE.sub("", text)
+    # Simplify bold markers
+    text = _MARKDOWN_BOLD_RE.sub(r"\1", text)
+    # Collapse excessive newlines
+    text = _MULTI_NEWLINE_RE.sub("\n\n", text)
+    return text.strip()
+
+
+def _chunk_text(text: str, max_chunk: int) -> list[str]:
+    """Split text into chunks that fit within max_chunk characters.
+
+    Splits on paragraph boundaries first, then sentence boundaries,
+    then hard-splits as a last resort.
+    """
+    if len(text) <= max_chunk:
+        return [text]
+
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_chunk:
+            chunks.append(remaining)
+            break
+        # Try to split on paragraph boundary
+        cut = remaining.rfind("\n\n", 0, max_chunk)
+        if cut < max_chunk // 4:
+            # Try sentence boundary
+            cut = remaining.rfind(". ", 0, max_chunk)
+        if cut < max_chunk // 4:
+            # Hard split
+            cut = max_chunk
+        chunk = remaining[: cut + 1].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[cut + 1 :].strip()
+    return chunks
+
+
 async def build_extraction_text(state: MemoryExtractionState) -> dict:
     """Build the text to send to Mem0 for extraction.
 
-    Limits text size to avoid overwhelming the LLM.
-    Selects messages newest-first up to the character budget.
+    Limits text size to fit the extraction model's capacity.
+    Large messages are split into chunks. All messages are marked as
+    fully extracted — no poison pills from oversized content.
+
+    Cleans content by stripping code blocks, file paths, and markdown
+    noise that wastes tokens and confuses structured JSON output.
     """
     messages = state["messages"]
-    max_chars = get_tuning(state["config"], "extraction_max_chars", 90000)
+    max_chars = get_tuning(state["config"], "extraction_max_chars", 8000)
 
-    lines = []
+    # Clean and collect all messages with their IDs
+    cleaned_messages = []
     for msg in reversed(messages):
-        # ARCH-01: Skip messages with NULL content (tool-call messages)
         msg_content = msg.get("content") or ""
         if not msg_content:
             continue
-        lines.append(
-            (str(msg["id"]), f"{msg['role']} ({msg['sender']}): {msg_content}")
+        cleaned = _clean_for_extraction(msg_content)
+        if not cleaned or len(cleaned) < 10:
+            # Skip empty/tiny messages but still mark them as extracted
+            cleaned_messages.append((str(msg["id"]), ""))
+            continue
+        cleaned_messages.append(
+            (str(msg["id"]), f"{msg['role']} ({msg['sender']}): {cleaned}")
         )
 
+    # Build extraction text within budget, chunking large messages
     selected_ids = []
-    fully_extracted_ids = []
     selected_lines = []
     total_chars = 0
 
-    for msg_id, line in lines:
-        if total_chars + len(line) + 1 > max_chars:
-            if not selected_ids:
-                # Always include at least one message, but it's truncated
-                selected_ids.append(msg_id)
-                selected_lines.append(line[:max_chars])
-                # Not fully extracted — truncated, so do NOT add to fully_extracted_ids
-            break
+    for msg_id, line in cleaned_messages:
         selected_ids.append(msg_id)
-        fully_extracted_ids.append(msg_id)
-        selected_lines.append(line)
-        total_chars += len(line) + 1
+        if not line:
+            continue
+
+        if len(line) > max_chars:
+            # Large message — take the first chunk that fits
+            chunks = _chunk_text(
+                line, max_chars - total_chars if total_chars > 0 else max_chars
+            )
+            if chunks:
+                selected_lines.append(chunks[0])
+                total_chars += len(chunks[0]) + 1
+            # Message is still marked as extracted even if we only took one chunk.
+            # The key facts are usually in the first part of a large message.
+            if total_chars >= max_chars:
+                break
+        elif total_chars + len(line) + 1 > max_chars:
+            break
+        else:
+            selected_lines.append(line)
+            total_chars += len(line) + 1
+
+    # All selected messages are marked as fully extracted — no poison pills.
+    # Even if a message was chunked, we mark it done. Re-extracting the same
+    # message forever is worse than missing some facts from the tail.
+    fully_extracted_ids = list(selected_ids)
 
     # Restore chronological order
     selected_ids.reverse()
@@ -239,6 +338,7 @@ async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
         # connection. Prevents poisoned transaction state from cascading.
         try:
             from context_broker_ae.memory.mem0_client import reset_mem0_client
+
             reset_mem0_client()
         except ImportError:
             pass

@@ -11,8 +11,6 @@ Usage:
 """
 
 import json
-import os
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -89,11 +87,13 @@ def process_conversation(source_path: Path) -> list[dict]:
             role = "user" if msg_type == "user" else "assistant"
             sender = "human" if role == "user" else inner.get("model", "claude")
 
-            messages.append({
-                "role": role,
-                "content": text,
-                "sender": sender,
-            })
+            messages.append(
+                {
+                    "role": role,
+                    "content": text,
+                    "sender": sender,
+                }
+            )
 
     return messages
 
@@ -152,11 +152,15 @@ def main():
         }
         conversation_meta.append(meta)
 
-        print(f"  {output_name}: {len(messages)} messages ({user_count} user, {asst_count} assistant)")
+        print(
+            f"  {output_name}: {len(messages)} messages ({user_count} user, {asst_count} assistant)"
+        )
 
     write_manifest(conversation_meta)
 
-    print(f"\nDone. Total: {total_messages} messages across {len(conversation_meta)} conversations.")
+    print(
+        f"\nDone. Total: {total_messages} messages across {len(conversation_meta)} conversations."
+    )
     print(f"Output: {OUTPUT_DIR}")
 
 

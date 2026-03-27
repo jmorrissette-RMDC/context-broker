@@ -7,7 +7,6 @@ invalid types against the deployed system at http://192.168.1.110:8080/mcp.
 Each test creates its own conversation to avoid interference.
 """
 
-import json
 import uuid
 
 import httpx
@@ -15,7 +14,6 @@ import pytest
 
 from tests.conftest_e2e import (
     BASE_URL,
-    MCP_URL,
     extract_mcp_result,
     mcp_call,
     mcp_call_raw,
@@ -120,7 +118,9 @@ class TestMCPProtocol:
 
     def test_invalid_json(self, client):
         """Malformed JSON returns parse error."""
-        resp = client.post("/mcp", content=b"not json", headers={"content-type": "application/json"})
+        resp = client.post(
+            "/mcp", content=b"not json", headers={"content-type": "application/json"}
+        )
         assert resp.status_code == 400
         body = resp.json()
         assert body["error"]["code"] == -32700
@@ -665,7 +665,7 @@ class TestConvSearchContextWindows:
     def test_by_conversation_id(self, client):
         """Search by conversation_id returns matching windows."""
         conv_id = _create_conversation(client)
-        cw_id = _create_context_window(client, conv_id)
+        _create_context_window(client, conv_id)
         resp = mcp_call(
             client,
             "conv_search_context_windows",

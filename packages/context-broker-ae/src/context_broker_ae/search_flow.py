@@ -60,9 +60,7 @@ async def _rerank_via_api(
         if idx < len(candidates):
             candidates[idx]["rerank_score"] = score
 
-    reranked = sorted(
-        candidates, key=lambda x: x.get("rerank_score", 0), reverse=True
-    )
+    reranked = sorted(candidates, key=lambda x: x.get("rerank_score", 0), reverse=True)
     return reranked[:top_n]
 
 

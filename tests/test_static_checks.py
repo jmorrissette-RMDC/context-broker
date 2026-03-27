@@ -126,7 +126,7 @@ class TestOTSBackingServices:
 
     @pytest.mark.parametrize(
         "service_name",
-        ["context-broker-postgres", "context-broker-neo4j", "context-broker-redis"],
+        ["context-broker-postgres", "context-broker-neo4j"],
     )
     def test_backing_service_uses_image(self, compose: dict, service_name: str):
         """Backing service uses 'image:' and not 'build:'."""
@@ -209,7 +209,6 @@ class TestTwoNetworkTopology:
             "context-broker-langgraph",
             "context-broker-postgres",
             "context-broker-neo4j",
-            "context-broker-redis",
         ],
     )
     def test_internal_services_only_on_internal_net(
@@ -231,12 +230,12 @@ class TestTwoNetworkTopology:
         Containers need outbound internet via Docker NAT for cloud LLM APIs.
         """
         net_def = compose.get("networks", {}).get("context-broker-net", {})
-        assert net_def.get("internal") is not True, (
-            "context-broker-net must NOT be internal:true — containers need outbound internet"
-        )
-        assert net_def.get("driver", "bridge") == "bridge", (
-            "context-broker-net must be a bridge network"
-        )
+        assert (
+            net_def.get("internal") is not True
+        ), "context-broker-net must NOT be internal:true — containers need outbound internet"
+        assert (
+            net_def.get("driver", "bridge") == "bridge"
+        ), "context-broker-net must be a bridge network"
 
 
 # ===================================================================
@@ -541,7 +540,14 @@ class TestBuildTypeRegistry:
 
     def test_build_type_modules_exist(self, project_root: Path):
         """Each build type has a corresponding module in the AE package."""
-        bt_dir = project_root / "packages" / "context-broker-ae" / "src" / "context_broker_ae" / "build_types"
+        bt_dir = (
+            project_root
+            / "packages"
+            / "context-broker-ae"
+            / "src"
+            / "context_broker_ae"
+            / "build_types"
+        )
         assert bt_dir.is_dir(), "AE package build_types/ directory not found"
 
         expected_modules = {
@@ -563,9 +569,9 @@ class TestBuildTypeRegistry:
         from importlib.metadata import entry_points
 
         ae_eps = entry_points(group="context_broker.ae")
-        assert len(list(ae_eps)) > 0, (
-            "No AE entry points found — context-broker-ae package not installed"
-        )
+        assert (
+            len(list(ae_eps)) > 0
+        ), "No AE entry points found — context-broker-ae package not installed"
 
     def test_ae_register_provides_build_types(self):
         """AE register() returns all three build types."""
@@ -574,9 +580,9 @@ class TestBuildTypeRegistry:
         registration = register()
         assert "build_types" in registration, "register() must return build_types"
         for bt_name in self._EXPECTED_BUILD_TYPES:
-            assert bt_name in registration["build_types"], (
-                f"Build type '{bt_name}' not in AE registration"
-            )
+            assert (
+                bt_name in registration["build_types"]
+            ), f"Build type '{bt_name}' not in AE registration"
             asm, ret = registration["build_types"][bt_name]
             assert callable(asm), f"{bt_name} assembly builder not callable"
             assert callable(ret), f"{bt_name} retrieval builder not callable"

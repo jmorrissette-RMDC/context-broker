@@ -14,17 +14,14 @@ ARCH-06: No MemorySaver — DB is the persistence layer.
 F-22:    Messages stored through conv_store_message pipeline.
 """
 
-import copy
 import logging
-import re
-import time
+import socket
 import uuid
-from typing import Annotated, AsyncGenerator, Optional
+from typing import Annotated, Optional
 
 import asyncpg
 import httpx
 import openai
-import yaml
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, StateGraph
@@ -36,7 +33,20 @@ from app.config import get_chat_model, get_tuning
 from app.database import get_pg_pool
 from app.prompt_loader import async_load_prompt
 
+from context_broker_te.tools.admin import get_tools as get_admin_tools
+from context_broker_te.tools.alerting import get_tools as get_alerting_tools
+from context_broker_te.tools.diagnostic import get_tools as get_diagnostic_tools
+from context_broker_te.tools.filesystem import get_tools as get_filesystem_tools
+from context_broker_te.tools.notify import get_tools as get_notify_tools
+from context_broker_te.tools.operational import get_tools as get_operational_tools
+from context_broker_te.tools.scheduling import get_tools as get_scheduling_tools
+from context_broker_te.tools.system import get_tools as get_system_tools
+from context_broker_te.tools.web import get_tools as get_web_tools
+
 _log = logging.getLogger("context_broker.flows.imperator")
+
+# MAD identity — hostname is the Docker container name
+_MAD_HOSTNAME = socket.gethostname()
 
 
 # ── State ────────────────────────────────────────────────────────────────
@@ -58,9 +68,8 @@ class ImperatorState(TypedDict):
     iteration_count: int
 
 
-# ── Tool singletons ─────────────────────────────────────────────────────
+# ── Core search tools (depend on AE flow singletons) ──────────────────
 
-# Lazy-initialized flow singletons for Imperator tool functions.
 _conv_search_flow_singleton = None
 _mem_search_flow_singleton = None
 
@@ -72,7 +81,9 @@ def _get_conv_search_flow():
 
         builder = get_flow_builder("conversation_search")
         if builder is None:
-            raise RuntimeError("AE package not loaded: conversation_search flow unavailable")
+            raise RuntimeError(
+                "AE package not loaded: conversation_search flow unavailable"
+            )
         _conv_search_flow_singleton = builder()
     return _conv_search_flow_singleton
 
@@ -90,7 +101,7 @@ def _get_mem_search_flow():
 
 
 @tool
-async def _conv_search_tool(query: str, limit: int = 5) -> str:
+async def conv_search(query: str, limit: int = 5) -> str:
     """Search conversation history for relevant messages and conversations.
 
     Use this when the user asks about what was said, discussed, or decided
@@ -104,7 +115,6 @@ async def _conv_search_tool(query: str, limit: int = 5) -> str:
 
     config = await async_load_config()
     flow = _get_conv_search_flow()
-    # R5-m11: Include all ConversationSearchState fields explicitly
     result = await flow.ainvoke(
         {
             "query": query,
@@ -135,9 +145,7 @@ async def _conv_search_tool(query: str, limit: int = 5) -> str:
 
 
 @tool
-async def _mem_search_tool(
-    query: str, user_id: str = "imperator", limit: int = 5
-) -> str:
+async def mem_search(query: str, user_id: str = "imperator", limit: int = 5) -> str:
     """Search extracted knowledge and memories from the knowledge graph.
 
     Use this when the user asks about facts, preferences, relationships,
@@ -174,361 +182,29 @@ async def _mem_search_tool(
     return "\n".join(lines)
 
 
-# Module-level tool singletons (M-10)
-# Core tools: always available. Diagnostic tools added after their definitions below.
-_imperator_tools: list = [_conv_search_tool, _mem_search_tool]
+# ── Tool assembly ──────────────────────────────────────────────────────
+
+# Core tools: always available
+_core_tools: list = [conv_search, mem_search]
 
 
-def _redact_config(config: dict) -> dict:
-    """Return a deep copy of *config* with sensitive values redacted (G5-16).
+def _collect_tools(imperator_config: dict) -> list:
+    """Collect all active tools based on config.
 
-    Removes the top-level ``credentials`` section entirely and replaces any
-    value whose key matches common secret patterns (api_key, secret, token,
-    password) with ``"***REDACTED***"``.
+    Discovers tools from the tools/ modules via get_tools().
     """
-    redacted = copy.deepcopy(config)
-    redacted.pop("credentials", None)
-
-    # R6-m10: Use word boundaries to avoid false positives on keys like
-    # "max_token_budget" — only match when the sensitive word is a distinct
-    # component of the key name (e.g., "api_key", "db_password").
-    _secret_key_re = re.compile(r"(api_key|secret|_token|password)", re.IGNORECASE)
-
-    def _walk(obj: dict | list) -> None:
-        if isinstance(obj, dict):
-            for key in list(obj.keys()):
-                if _secret_key_re.search(key) and obj[key]:
-                    obj[key] = "***REDACTED***"
-                elif isinstance(obj[key], (dict, list)):
-                    _walk(obj[key])
-        elif isinstance(obj, list):
-            for item in obj:
-                if isinstance(item, (dict, list)):
-                    _walk(item)
-
-    _walk(redacted)
-    return redacted
-
-
-@tool
-async def _config_read_tool() -> str:
-    """Read the current config.yml contents (sensitive values are redacted).
-
-    Admin-only tool. Returns the configuration as YAML text with credentials
-    and API keys redacted for safety.
-
-    R7-M2: File read wrapped in run_in_executor to avoid blocking the event loop.
-    """
-    import asyncio
-    from app.config import CONFIG_PATH
-
-    def _sync_read():
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            return yaml.safe_load(f)
-
-    try:
-        loop = asyncio.get_running_loop()
-        raw = await loop.run_in_executor(None, _sync_read)
-        sanitized = _redact_config(raw)
-        return yaml.dump(sanitized, default_flow_style=False)
-    except (FileNotFoundError, OSError, yaml.YAMLError) as exc:
-        return f"Error reading config: {exc}"
-
-
-@tool
-async def _db_query_tool(sql: str) -> str:
-    """Execute a read-only SQL query against the Context Broker database.
-
-    Admin-only tool. The transaction is set to READ ONLY mode, so any
-    DML/DDL will be rejected by PostgreSQL regardless of query structure.
-    A 5-second statement timeout prevents expensive queries.
-
-    Args:
-        sql: A SQL query to execute (enforced read-only at the DB level).
-    """
-    import asyncpg
-
-    # R5-M15: The real security boundary is SET TRANSACTION READ ONLY +
-    # statement_timeout below. The SELECT prefix check was bypassable via
-    # CTEs (e.g., WITH x AS (DELETE ...) SELECT ...) so it has been removed.
-    # READ ONLY mode causes PostgreSQL to reject any DML/DDL regardless of
-    # how the SQL is structured.
-    try:
-        pool = get_pg_pool()
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute("SET TRANSACTION READ ONLY")
-                await conn.execute("SET statement_timeout = '5000'")  # 5 second max
-                rows = await conn.fetch(sql)
-        if not rows:
-            return "No results."
-        # Format as text table
-        columns = list(rows[0].keys())
-        lines = [" | ".join(columns)]
-        for row in rows[:50]:  # Limit to 50 rows
-            lines.append(" | ".join(str(row[c]) for c in columns))
-        return "\n".join(lines)
-    except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
-        return f"Query error: {exc}"
-
-
-# ── Diagnostic tools (always available) ────────────────────────────────
-
-
-@tool
-async def _log_query_tool(container: str = "", level: str = "", search: str = "", limit: int = 50) -> str:
-    """Query MAD container logs from the system_logs table.
-
-    Logs are collected by the log shipper from all containers on
-    context-broker-net and stored in Postgres with resolved names.
-
-    Args:
-        container: Filter by container name (e.g., "langgraph", "postgres"). Empty = all.
-        level: Filter by log level in the structured data (e.g., "ERROR"). Empty = all.
-        search: Text search in message content. Empty = no filter.
-        limit: Maximum entries to return (default 50, max 200).
-    """
-    try:
-        pool = get_pg_pool()
-        conditions = []
-        args: list = []
-        idx = 1
-
-        if container:
-            conditions.append(f"container_name ILIKE ${idx}")
-            args.append(f"%{container}%")
-            idx += 1
-        if level:
-            conditions.append(f"data->>'level' = ${idx}")
-            args.append(level.upper())
-            idx += 1
-        if search:
-            conditions.append(f"message ILIKE ${idx}")
-            args.append(f"%{search}%")
-            idx += 1
-
-        where = " AND ".join(conditions) if conditions else "1=1"
-        args.append(min(limit, 200))
-
-        rows = await pool.fetch(
-            f"""
-            SELECT container_name, log_timestamp, message, data
-            FROM system_logs
-            WHERE {where}
-            ORDER BY log_timestamp DESC
-            LIMIT ${idx}
-            """,
-            *args,
-        )
-        if not rows:
-            return "No log entries found matching the filters."
-        lines = []
-        for row in rows:
-            ts = row["log_timestamp"].isoformat() if row["log_timestamp"] else "?"
-            data = row["data"] if isinstance(row["data"], dict) else {}
-            lvl = data.get("level", "?")
-            msg = row["message"] or str(row["data"] or "")[:200]
-            lines.append(f"[{ts}] [{row['container_name']}] [{lvl}] {msg}")
-        return "\n".join(lines)
-    except (asyncpg.PostgresError, OSError, KeyError) as exc:
-        return f"Log query error: {exc}"
-
-
-@tool
-async def _context_introspection_tool(conversation_id: str, build_type: str = "standard-tiered") -> str:
-    """Show the assembled context breakdown for a conversation.
-
-    Displays tier allocation, token usage, summary counts, and last
-    assembly time for the specified conversation and build type.
-
-    Args:
-        conversation_id: The conversation to inspect.
-        build_type: The build type to inspect (default: standard-tiered).
-    """
-    import uuid as _uuid
-
-    try:
-        pool = get_pg_pool()
-
-        # Find the window
-        window = await pool.fetchrow(
-            """
-            SELECT id, build_type, max_token_budget, last_assembled_at, created_at
-            FROM context_windows
-            WHERE conversation_id = $1 AND build_type = $2
-            ORDER BY created_at DESC LIMIT 1
-            """,
-            _uuid.UUID(conversation_id),
-            build_type,
-        )
-        if not window:
-            return f"No context window found for conversation {conversation_id} with build type {build_type}"
-
-        # Count summaries
-        summary_count = await pool.fetchval(
-            "SELECT COUNT(*) FROM conversation_summaries WHERE context_window_id = $1",
-            window["id"],
-        )
-
-        # Count messages
-        msg_count = await pool.fetchval(
-            "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = $1",
-            _uuid.UUID(conversation_id),
-        )
-
-        total_tokens = await pool.fetchval(
-            "SELECT COALESCE(SUM(token_count), 0) FROM conversation_messages WHERE conversation_id = $1",
-            _uuid.UUID(conversation_id),
-        )
-
-        from app.budget import EFFECTIVE_UTILIZATION_DEFAULT
-        effective = int(window["max_token_budget"] * EFFECTIVE_UTILIZATION_DEFAULT)
-
-        lines = [
-            f"Context Window: {window['id']}",
-            f"Build Type: {window['build_type']}",
-            f"Raw Budget: {window['max_token_budget']} tokens",
-            f"Effective Budget (85%): {effective} tokens",
-            f"Total Messages: {msg_count}",
-            f"Total Message Tokens: {total_tokens}",
-            f"Summaries: {summary_count}",
-            f"Last Assembled: {window['last_assembled_at'].isoformat() if window['last_assembled_at'] else 'never'}",
-            f"Created: {window['created_at'].isoformat() if window['created_at'] else '?'}",
-        ]
-        return "\n".join(lines)
-    except (asyncpg.PostgresError, OSError, KeyError) as exc:
-        return f"Introspection error: {exc}"
-
-
-@tool
-async def _pipeline_status_tool() -> str:
-    """Show the status of background processing pipelines.
-
-    Displays queue depths for embedding, assembly, and extraction jobs,
-    plus dead letter counts and recent activity.
-    """
-    try:
-        pool = get_pg_pool()
-
-        # Pending work (DB-driven — the database IS the queue)
-        pending_embed = await pool.fetchval(
-            "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NULL AND content IS NOT NULL"
-        )
-        pending_extract = await pool.fetchval(
-            "SELECT COUNT(*) FROM conversation_messages WHERE memory_extracted IS NOT TRUE"
-        )
-
-        # Recent activity
-        recent_assembly = await pool.fetchval(
-            "SELECT COUNT(*) FROM conversation_summaries WHERE created_at > NOW() - INTERVAL '1 hour'"
-        )
-        recent_embeddings = await pool.fetchval(
-            "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL AND created_at > NOW() - INTERVAL '1 hour'"
-        )
-
-        # Totals
-        total_messages = await pool.fetchval("SELECT COUNT(*) FROM conversation_messages")
-        total_embedded = await pool.fetchval("SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL")
-
-        lines = [
-            "Pipeline Status (DB-driven):",
-            f"  Pending embedding: {pending_embed} messages",
-            f"  Pending extraction: {pending_extract} messages",
-            f"  Total messages: {total_messages}",
-            f"  Total embedded: {total_embedded}",
-            "",
-            "Recent Activity (last hour):",
-            f"  Summaries created: {recent_assembly}",
-            f"  Messages embedded: {recent_embeddings}",
-        ]
-        return "\n".join(lines)
-    except (asyncpg.PostgresError, OSError, KeyError) as exc:
-        return f"Pipeline status error: {exc}"
-
-
-# Diagnostic tool list — always available to the Imperator
-_diagnostic_tools: list = [_log_query_tool, _context_introspection_tool, _pipeline_status_tool]
-
-# Extend the core tool list with diagnostic tools
-_imperator_tools.extend(_diagnostic_tools)
-
-
-# ── Admin tools (gated by admin_tools config) ─────────────────────────
-
-
-@tool
-async def _config_write_tool(key: str, value: str) -> str:
-    """Write a value to the AE configuration (config.yml).
-
-    Changes are hot-reloaded — they take effect on the next operation
-    without a container restart. Only AE config keys are writable;
-    TE config (Identity, Purpose, system prompt) cannot be modified.
-
-    Args:
-        key: Dot-notation config path (e.g., "summarization.model", "tuning.verbose_logging").
-        value: New value as a string. Numbers and booleans are auto-converted.
-    """
-    from app.config import CONFIG_PATH
-
-    # Refuse TE config modifications
-    te_keys = ["imperator", "system_prompt", "identity", "purpose"]
-    if any(key.startswith(k) for k in te_keys):
-        return f"Cannot modify TE config key '{key}'. TE configuration is the architect's domain."
-
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-
-        # Navigate dot-notation path
-        parts = key.split(".")
-        target = config
-        for part in parts[:-1]:
-            if part not in target or not isinstance(target[part], dict):
-                return f"Config path '{key}' not found."
-            target = target[part]
-
-        if parts[-1] not in target:
-            return f"Config key '{key}' not found. Available keys at this level: {list(target.keys())}"
-
-        # Auto-convert value types
-        old_value = target[parts[-1]]
-        if isinstance(old_value, bool):
-            value_typed = value.lower() in ("true", "1", "yes")
-        elif isinstance(old_value, int):
-            value_typed = int(value)
-        elif isinstance(old_value, float):
-            value_typed = float(value)
-        else:
-            value_typed = value
-
-        target[parts[-1]] = value_typed
-
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            yaml.dump(config, f, default_flow_style=False)
-
-        return f"Updated '{key}': {old_value} → {value_typed}. Change will take effect on next operation (hot-reload)."
-    except (FileNotFoundError, OSError, yaml.YAMLError, ValueError) as exc:
-        return f"Config write error: {exc}"
-
-
-@tool
-async def _verbose_toggle_tool() -> str:
-    """Toggle verbose pipeline logging on or off.
-
-    Reads the current value of tuning.verbose_logging from config and
-    writes the opposite. Changes take effect immediately (hot-reload).
-    """
-    from app.config import load_config, get_tuning
-
-    current = get_tuning(load_config(), "verbose_logging", False)
-    new_value = "false" if current else "true"
-    return await _config_write_tool.ainvoke(
-        {"key": "tuning.verbose_logging", "value": new_value}
-    )
-
-
-# Admin tool singletons — gated by config
-_admin_tools: list = [_config_read_tool, _db_query_tool, _config_write_tool, _verbose_toggle_tool]
+    active = list(_core_tools)
+    active.extend(get_diagnostic_tools())
+    active.extend(get_scheduling_tools())
+    active.extend(get_web_tools())
+    active.extend(get_filesystem_tools())
+    active.extend(get_system_tools())
+    active.extend(get_notify_tools(imperator_config))
+    if imperator_config.get("admin_tools", False):
+        active.extend(get_admin_tools())
+    active.extend(get_operational_tools(imperator_config))
+    active.extend(get_alerting_tools(imperator_config))
+    return active
 
 
 # ── Message pipeline singleton ──────────────────────────────────────────
@@ -547,7 +223,9 @@ def _get_message_pipeline():
 
         builder = get_flow_builder("message_pipeline")
         if builder is None:
-            raise RuntimeError("AE package not loaded: message_pipeline flow unavailable")
+            raise RuntimeError(
+                "AE package not loaded: message_pipeline flow unavailable"
+            )
         _message_pipeline_singleton = builder()
     return _message_pipeline_singleton
 
@@ -564,7 +242,6 @@ async def _load_conversation_history(context_window_id: str, config: dict) -> st
     history_limit = get_tuning(config, "imperator_history_limit", 20)
     try:
         pool = get_pg_pool()
-        # Look up conversation_id from context_windows
         cw_row = await pool.fetchrow(
             "SELECT conversation_id FROM context_windows WHERE id = $1",
             uuid.UUID(context_window_id),
@@ -616,22 +293,18 @@ async def agent_node(state: ImperatorState) -> dict:
     """
     config = state["config"]
 
-    # R7-m14: Use the pre-bound LLM from graph compilation (set by build_imperator_flow).
+    # R7-m14: Use the pre-bound LLM from graph compilation.
     # Falls back to runtime binding if _prebound_llm is not available (e.g., tests).
     llm_with_tools = _prebound_llm
     if llm_with_tools is None:
         imperator_config = config.get("imperator", {})
-        active_tools = list(_imperator_tools)
-        if imperator_config.get("admin_tools", False):
-            active_tools.extend(_admin_tools)
+        active_tools = _collect_tools(imperator_config)
         llm = get_chat_model(config, role="imperator")
         llm_with_tools = llm.bind_tools(active_tools)
 
     messages = list(state["messages"])
 
     # First call: prepend system prompt with DB history context
-    # PG-13: System prompt contains Identity, Purpose, Persona (REQ-001 §11.2)
-    # The prompt name is configured in te.yml; defaults to "imperator_identity"
     has_system = any(isinstance(m, SystemMessage) for m in messages)
     if not has_system:
         imperator_cfg = config.get("imperator", {})
@@ -647,13 +320,11 @@ async def agent_node(state: ImperatorState) -> dict:
             }
 
         # D-07: Load context via the get_context core tool (self-consumption).
-        # The Imperator uses the same tool interface any external agent would.
-        conversation_id = state.get("context_window_id")  # legacy name in state
+        conversation_id = state.get("context_window_id")
         if conversation_id:
             try:
                 from app.flows.tool_dispatch import dispatch_tool
 
-                imperator_cfg = config.get("imperator", {})
                 build_type = imperator_cfg.get("build_type", "standard-tiered")
                 budget = imperator_cfg.get("max_context_tokens", 8192)
                 if not isinstance(budget, int):
@@ -671,7 +342,6 @@ async def agent_node(state: ImperatorState) -> dict:
                 )
                 context_messages = ctx_result.get("context", [])
                 if context_messages:
-                    # Format context messages as history text for the system prompt
                     history_lines = []
                     for msg in context_messages:
                         role = msg.get("role", "unknown")
@@ -686,40 +356,69 @@ async def agent_node(state: ImperatorState) -> dict:
             except (ValueError, RuntimeError, OSError) as exc:
                 _log.warning("Failed to load context via get_context: %s", exc)
 
-        messages = [SystemMessage(content=system_content)] + messages
+        system_msg = SystemMessage(content=system_content)
+        messages = [system_msg] + messages
+        _first_call = True
+    else:
+        _first_call = False
 
     # CB-R3-06: Truncate older messages if the list exceeds the limit.
-    # M9: When truncating, ensure we don't split a tool-call sequence by
-    # starting the kept portion on a ToolMessage. Scan backwards from the
-    # cut point until we find a non-ToolMessage boundary.
     max_react_messages = get_tuning(config, "imperator_max_react_messages", 40)
     if len(messages) > max_react_messages:
         from langchain_core.messages import ToolMessage
 
-        # Start with the default cut index (keep last max_react_messages-1)
         cut_index = len(messages) - (max_react_messages - 1)
-        # Walk backwards until the message at cut_index is not a ToolMessage
         while cut_index < len(messages) and isinstance(
             messages[cut_index], ToolMessage
         ):
             cut_index += 1
         messages = [messages[0]] + messages[cut_index:]
 
-    try:
-        response = await llm_with_tools.ainvoke(messages)
-    except (openai.APIError, httpx.HTTPError, ValueError, RuntimeError) as exc:
-        _log.error("Imperator LLM call failed: %s", exc, exc_info=True)
-        return {
-            "messages": [
-                AIMessage(content="I encountered an error processing your request.")
-            ],
-            "response_text": "I encountered an error processing your request.",
-            "error": str(exc),
-        }
+    # Retry on empty response — Gemini occasionally returns valid but empty
+    # completions (content="" with no tool_calls). This is never a valid
+    # agent response, so retry up to 2 times before accepting it.
+    max_retries = 2
+    response = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = await llm_with_tools.ainvoke(messages)
+        except (openai.APIError, httpx.HTTPError, ValueError, RuntimeError) as exc:
+            _log.error("Imperator LLM call failed: %s", exc, exc_info=True)
+            return {
+                "messages": [
+                    AIMessage(
+                        content="I encountered an error processing your request."
+                    )
+                ],
+                "response_text": "I encountered an error processing your request.",
+                "error": str(exc),
+            }
 
-    # Return the AI response — add_messages reducer will append it
+        # Valid response: has text content or tool calls
+        if (response.content and response.content.strip()) or response.tool_calls:
+            break
+
+        if attempt < max_retries:
+            _log.warning(
+                "Imperator LLM returned empty response (attempt %d/%d) — retrying",
+                attempt + 1,
+                max_retries + 1,
+            )
+        else:
+            _log.error(
+                "Imperator LLM returned empty response after %d attempts",
+                max_retries + 1,
+            )
+
+    # On first call, include SystemMessage in returned messages so
+    # add_messages persists it in state. Prevents re-executing get_context
+    # on subsequent ReAct iterations.
+    returned_messages = [response]
+    if _first_call:
+        returned_messages = [system_msg] + returned_messages
+
     return {
-        "messages": [response],
+        "messages": returned_messages,
         "iteration_count": state.get("iteration_count", 0) + 1,
     }
 
@@ -739,7 +438,6 @@ def should_continue(state: ImperatorState) -> str:
 
     last_message = messages[-1]
     if isinstance(last_message, AIMessage) and last_message.tool_calls:
-        # Check iteration limit to prevent unbounded loops
         max_iterations = get_tuning(
             state.get("config", {}), "imperator_max_iterations", 5
         )
@@ -748,10 +446,29 @@ def should_continue(state: ImperatorState) -> str:
                 "Imperator hit max iterations (%d) — forcing end",
                 max_iterations,
             )
-            return "store_user_message"
+            return "max_iterations_fallback"
         return "tool_node"
 
     return "store_user_message"
+
+
+async def max_iterations_fallback(state: ImperatorState) -> dict:
+    """Inject a fallback text response when max iterations is reached.
+
+    Without this, the last message is an AIMessage with tool_calls but no
+    text content, causing the chat endpoint to return an empty response.
+    """
+    return {
+        "messages": [
+            AIMessage(
+                content=(
+                    "I was unable to complete that request within the allowed "
+                    "number of steps. Please try again, or break the request "
+                    "into smaller parts."
+                )
+            )
+        ]
+    }
 
 
 async def store_user_message(state: ImperatorState) -> dict:
@@ -759,8 +476,9 @@ async def store_user_message(state: ImperatorState) -> dict:
 
     D-01: Split into separate node for MemorySaver compatibility.
     D-07: Uses dispatch_tool("store_message") — self-consumption.
+    Uses hostname as recipient, user field from config as sender.
     """
-    conversation_id = state.get("context_window_id")  # legacy name in state
+    conversation_id = state.get("context_window_id")
     if not conversation_id:
         return {}
 
@@ -772,6 +490,11 @@ async def store_user_message(state: ImperatorState) -> dict:
     if not user_content:
         return {}
 
+    # Sender is whoever sent the message to the Imperator
+    user_identity = (
+        state.get("config", {}).get("imperator", {}).get("_request_user", "unknown")
+    )
+
     try:
         from app.flows.tool_dispatch import dispatch_tool
 
@@ -780,7 +503,8 @@ async def store_user_message(state: ImperatorState) -> dict:
             {
                 "conversation_id": str(conversation_id),
                 "role": "user",
-                "sender": "imperator_user",
+                "sender": user_identity,
+                "recipient": _MAD_HOSTNAME,
                 "content": user_content,
             },
             state.get("config", {}),
@@ -797,6 +521,7 @@ async def store_assistant_message(state: ImperatorState) -> dict:
 
     D-01: Second persistence node.
     D-07: Uses dispatch_tool("store_message") — self-consumption.
+    Uses hostname as sender, user field from config as recipient.
     """
     last_ai = None
     for msg in reversed(state["messages"]):
@@ -806,7 +531,35 @@ async def store_assistant_message(state: ImperatorState) -> dict:
 
     response_text = last_ai.content if last_ai else ""
 
-    conversation_id = state.get("context_window_id")  # legacy name in state
+    # Guard against empty responses — LLM provider errors, rate limits, or
+    # tool-call-only final turns can produce AIMessages with empty content.
+    if not response_text.strip():
+        # Log the full message list to diagnose WHY it's empty
+        msg_summary = []
+        for i, msg in enumerate(state["messages"]):
+            msg_type = type(msg).__name__
+            has_tool_calls = bool(getattr(msg, "tool_calls", None))
+            content_len = len(msg.content) if msg.content else 0
+            content_preview = (msg.content[:80] if msg.content else "None")
+            msg_summary.append(
+                f"  [{i}] {msg_type}: content_len={content_len}, "
+                f"tool_calls={has_tool_calls}, preview={content_preview!r}"
+            )
+        _log.warning(
+            "Imperator produced empty response. Message chain (%d messages):\n%s",
+            len(state["messages"]),
+            "\n".join(msg_summary),
+        )
+        response_text = (
+            "I was unable to generate a response. This may be due to a "
+            "temporary provider issue. Please try again."
+        )
+
+    conversation_id = state.get("context_window_id")
+    user_identity = (
+        state.get("config", {}).get("imperator", {}).get("_request_user", "unknown")
+    )
+
     if conversation_id and response_text:
         try:
             from app.flows.tool_dispatch import dispatch_tool
@@ -816,7 +569,8 @@ async def store_assistant_message(state: ImperatorState) -> dict:
                 {
                     "conversation_id": str(conversation_id),
                     "role": "assistant",
-                    "sender": "imperator",
+                    "sender": _MAD_HOSTNAME,
+                    "recipient": user_identity,
                     "content": response_text,
                 },
                 state.get("config", {}),
@@ -836,26 +590,21 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
 
     ARCH-05: Proper graph structure with agent_node <-> tool_node loop
              via conditional edges.  No while loops inside nodes.
-    D-01:    MemorySaver checkpointer for graph execution state —
-             interrupt/resume, tool call tracking, mid-execution persistence.
-             Long-term conversation persistence handled by Context Broker pipeline.
+    D-01:    MemorySaver checkpointer for graph execution state.
     F-22:    Results stored via conv_store_message in store_and_end.
+
+    Tools are discovered from tools/ modules via get_tools().
     """
     # R6-M14: Build the ToolNode with only the tools that match the config.
-    # If admin_tools=false (or no config), the ToolNode only gets base tools,
-    # so even if the LLM hallucinated an admin tool call, ToolNode would reject it.
     if config is None:
         from app.config import load_merged_config
 
         config = load_merged_config()
     imperator_config = config.get("imperator", {})
-    active_tools = list(_imperator_tools)
-    if imperator_config.get("admin_tools", False):
-        active_tools.extend(_admin_tools)
+    active_tools = _collect_tools(imperator_config)
     tool_node_instance = ToolNode(active_tools)
 
-    # R7-m14: Pre-bind tools to the LLM at graph compilation time so
-    # agent_node doesn't call bind_tools on every invocation.
+    # R7-m14: Pre-bind tools to the LLM at graph compilation time
     global _prebound_llm
     llm = get_chat_model(config, role="imperator")
     _prebound_llm = llm.bind_tools(active_tools)
@@ -864,30 +613,27 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
 
     workflow.add_node("agent_node", agent_node)
     workflow.add_node("tool_node", tool_node_instance)
+    workflow.add_node("max_iterations_fallback", max_iterations_fallback)
     workflow.add_node("store_user_message", store_user_message)
     workflow.add_node("store_assistant_message", store_assistant_message)
 
     workflow.set_entry_point("agent_node")
 
-    # ARCH-05: Conditional edge — tool_calls route to tool_node, else persist
     workflow.add_conditional_edges(
         "agent_node",
         should_continue,
         {
             "tool_node": "tool_node",
+            "max_iterations_fallback": "max_iterations_fallback",
             "store_user_message": "store_user_message",
         },
     )
 
-    # tool_node -> back to agent_node for the next reasoning step
     workflow.add_edge("tool_node", "agent_node")
-
-    # D-01: Split persistence into separate nodes (one subgraph per node)
+    workflow.add_edge("max_iterations_fallback", "store_user_message")
     workflow.add_edge("store_user_message", "store_assistant_message")
     workflow.add_edge("store_assistant_message", END)
 
-    # D-01: MemorySaver for graph execution state (interrupt/resume, tool tracking).
-    # No infrastructure dependency — works for eMADs and standalone TEs.
     from langgraph.checkpoint.memory import MemorySaver
 
     return workflow.compile(checkpointer=MemorySaver())

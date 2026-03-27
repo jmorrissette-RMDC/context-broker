@@ -10,7 +10,6 @@ Usage:
 
 import logging
 import subprocess
-import sys
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
@@ -25,7 +24,9 @@ def ssh_cmd(cmd: str) -> str:
     """Run a command on irina via SSH and return output."""
     result = subprocess.run(
         ["ssh", SSH_TARGET, cmd],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     if result.returncode != 0 and result.stderr.strip():
         log.warning(f"  stderr: {result.stderr.strip()}")
@@ -45,12 +46,12 @@ def reset_postgres():
     ]
     for table in tables:
         output = ssh_cmd(
-            f'docker exec context-broker-postgres psql -U context_broker -d context_broker '
+            f"docker exec context-broker-postgres psql -U context_broker -d context_broker "
             f'-t -c "SELECT COUNT(*) FROM {table}" 2>/dev/null || echo "0"'
         )
         count = output.strip()
         ssh_cmd(
-            f'docker exec context-broker-postgres psql -U context_broker -d context_broker '
+            f"docker exec context-broker-postgres psql -U context_broker -d context_broker "
             f'-c "TRUNCATE {table} CASCADE" 2>/dev/null || true'
         )
         log.info(f"  Truncated {table} ({count} rows)")
@@ -65,7 +66,7 @@ def reset_redis():
 def reset_neo4j():
     """Clear Neo4j knowledge graph via docker exec cypher-shell."""
     output = ssh_cmd(
-        'docker exec context-broker-neo4j cypher-shell --non-interactive '
+        "docker exec context-broker-neo4j cypher-shell --non-interactive "
         '"MATCH (n) DETACH DELETE n" 2>/dev/null || echo "neo4j reset skipped"'
     )
     log.info(f"  Neo4j: {output or 'cleared'}")
@@ -94,7 +95,9 @@ def main():
     log.info("Imperator state:")
     reset_imperator_state()
 
-    log.info("\nIMPORTANT: Restart the langgraph container for Imperator to create a new conversation:")
+    log.info(
+        "\nIMPORTANT: Restart the langgraph container for Imperator to create a new conversation:"
+    )
     log.info("  docker compose restart context-broker-langgraph")
 
     log.info("=== Reset complete ===")

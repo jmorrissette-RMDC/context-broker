@@ -32,9 +32,10 @@ from app.config import (
 )
 from context_broker_ae.memory_scoring import filter_and_rank_memories
 from app.database import get_pg_pool
+from app.utils import stable_lock_id
+
 # Registration handled by register.py — no module-scope side effects
 from context_broker_ae.build_types.standard_tiered import (
-    build_standard_tiered_assembly,
     _estimate_tokens,
 )
 from context_broker_ae.build_types.tier_scaling import scale_tier_percentages
@@ -142,7 +143,7 @@ async def ke_wait_for_assembly(state: KnowledgeEnrichedRetrievalState) -> dict:
     R6-M9: If Redis is unavailable, proceed without waiting rather than crashing.
     """
     pool = get_pg_pool()
-    lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+    lock_id = stable_lock_id(state["context_window_id"])
 
     timeout = get_tuning(state["config"], "assembly_wait_timeout_seconds", 50)
     poll_interval = get_tuning(state["config"], "assembly_poll_interval_seconds", 2)

@@ -15,7 +15,7 @@ import importlib.metadata
 import logging
 import sys
 import threading
-from typing import Any, Callable
+from typing import Callable
 
 _log = logging.getLogger("context_broker.stategraph_registry")
 _lock = threading.Lock()
@@ -147,9 +147,7 @@ def _evict_package_modules(package_name: str) -> None:
     for key in to_remove:
         del sys.modules[key]
     if to_remove:
-        _log.info(
-            "Evicted %d modules for package '%s'", len(to_remove), package_name
-        )
+        _log.info("Evicted %d modules for package '%s'", len(to_remove), package_name)
 
 
 def _get_package_version(package_name: str) -> str:

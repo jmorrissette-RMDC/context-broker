@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 # ------------------------------------------------------------------
 # Custom markers for e2e / integration tests
 # ------------------------------------------------------------------
@@ -23,6 +22,7 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "integration: integration tests requiring SSH or direct DB access"
     )
+
 
 # ------------------------------------------------------------------
 # Sample configuration

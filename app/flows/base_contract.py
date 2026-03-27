@@ -8,14 +8,14 @@ but not on any specific AE implementation.
 See also contracts.py for build type graph contracts (ARCH-18).
 """
 
-from typing import Annotated, Any, Callable, Optional
+from typing import Annotated, Callable, Optional
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
-
 # ── What the AE passes to the TE on invocation (§13.2) ─────────────
+
 
 class TEInputState(TypedDict, total=False):
     """Standard input state for TE invocation.
@@ -32,6 +32,7 @@ class TEInputState(TypedDict, total=False):
 
 # ── What the TE returns to the AE (§13.3) ──────────────────────────
 
+
 class TEOutputState(TypedDict, total=False):
     """Standard output state from TE invocation.
 
@@ -46,6 +47,7 @@ class TEOutputState(TypedDict, total=False):
 
 # ── What a TE package's register() function returns ─────────────────
 
+
 class TERegistration(TypedDict, total=False):
     """Registration dict returned by a TE package's entry point.
 
@@ -53,13 +55,14 @@ class TERegistration(TypedDict, total=False):
     register the Imperator builder and any tools the TE requires.
     """
 
-    identity: str                      # What the Imperator is
-    purpose: str                       # What the Imperator is for
-    imperator_builder: Callable        # () -> compiled StateGraph
-    tools_required: list[str]          # Tool names the TE needs from AE
+    identity: str  # What the Imperator is
+    purpose: str  # What the Imperator is for
+    imperator_builder: Callable  # () -> compiled StateGraph
+    tools_required: list[str]  # Tool names the TE needs from AE
 
 
 # ── What an AE package's register() function returns ────────────────
+
 
 class AERegistration(TypedDict, total=False):
     """Registration dict returned by an AE package's entry point.
@@ -69,4 +72,4 @@ class AERegistration(TypedDict, total=False):
     """
 
     build_types: dict[str, tuple[Callable, Callable]]  # name -> (assembly, retrieval)
-    flows: dict[str, Callable]                          # name -> builder callable
+    flows: dict[str, Callable]  # name -> builder callable

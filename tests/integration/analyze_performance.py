@@ -10,7 +10,6 @@ Usage:
 
 import json
 import subprocess
-import sys
 
 import httpx
 
@@ -23,7 +22,9 @@ def sonnet_evaluate(prompt: str) -> str:
     """Call Claude Sonnet via CLI for analysis."""
     result = subprocess.run(
         ["claude", "--model", SONNET_MODEL, "--print", "-p", prompt],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     if result.returncode != 0:
         return f"Sonnet CLI error: {result.stderr[:200]}"
@@ -33,9 +34,14 @@ def sonnet_evaluate(prompt: str) -> str:
 def collect_pipeline_logs() -> str:
     """Get pipeline-related logs from the container."""
     result = subprocess.run(
-        ["ssh", SSH_TARGET,
-         "docker logs context-broker-langgraph 2>&1 | grep -E 'duration_ms|Batch embedding|Assembly|Extraction|embed_message|assembly_job' | tail -50"],
-        capture_output=True, text=True, timeout=15,
+        [
+            "ssh",
+            SSH_TARGET,
+            "docker logs context-broker-langgraph 2>&1 | grep -E 'duration_ms|Batch embedding|Assembly|Extraction|embed_message|assembly_job' | tail -50",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     return result.stdout
 
@@ -57,19 +63,26 @@ def main():
 
     print("Collecting metrics...")
     metrics = collect_metrics()
-    metrics_lines = [l for l in metrics.splitlines() if l.startswith("context_broker_")]
+    metrics_lines = [
+        line for line in metrics.splitlines() if line.startswith("context_broker_")
+    ]
     print(f"  {len(metrics_lines)} metric lines")
 
     # DB stats
     print("Collecting DB stats...")
     db_stats = subprocess.run(
-        ["ssh", SSH_TARGET,
-         'docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c '
-         '"SELECT \'messages\', COUNT(*) FROM conversation_messages '
-         'UNION ALL SELECT \'embedded\', COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL '
-         'UNION ALL SELECT \'summaries\', COUNT(*) FROM conversation_summaries '
-         'UNION ALL SELECT \'windows\', COUNT(*) FROM context_windows"'],
-        capture_output=True, text=True, timeout=10,
+        [
+            "ssh",
+            SSH_TARGET,
+            "docker exec context-broker-postgres psql -U context_broker -d context_broker -t -c "
+            "\"SELECT 'messages', COUNT(*) FROM conversation_messages "
+            "UNION ALL SELECT 'embedded', COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL "
+            "UNION ALL SELECT 'summaries', COUNT(*) FROM conversation_summaries "
+            "UNION ALL SELECT 'windows', COUNT(*) FROM context_windows\"",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
     ).stdout
     print(f"  DB: {db_stats.strip()}")
 

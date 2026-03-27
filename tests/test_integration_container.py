@@ -25,15 +25,19 @@ pytestmark = pytest.mark.integration
 SSH_TIMEOUT = 30
 
 
-def ssh_exec(command: str, *, timeout: int = SSH_TIMEOUT) -> subprocess.CompletedProcess:
+def ssh_exec(
+    command: str, *, timeout: int = SSH_TIMEOUT
+) -> subprocess.CompletedProcess:
     """Execute a command on irina via SSH and return the result.
 
     Uses the default SSH key configured for the aristotle9 user.
     """
     ssh_cmd = [
         "ssh",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "ConnectTimeout=10",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "ConnectTimeout=10",
         f"{SSH_USER}@{SSH_HOST}",
         command,
     ]
@@ -58,16 +62,16 @@ class TestNonRootUser:
         result = ssh_exec("docker exec context-broker-langgraph whoami")
         assert result.returncode == 0, f"SSH failed: {result.stderr}"
         username = result.stdout.strip()
-        assert username != "root", (
-            f"Container is running as root! whoami returned: '{username}'"
-        )
+        assert (
+            username != "root"
+        ), f"Container is running as root! whoami returned: '{username}'"
 
     def test_process_uid_not_zero(self):
         """Application process UID should not be 0 (root)."""
         result = ssh_exec("docker exec context-broker-langgraph id -u")
         assert result.returncode == 0, f"SSH failed: {result.stderr}"
         uid = result.stdout.strip()
-        assert uid != "0", f"Container UID is 0 (root)"
+        assert uid != "0", "Container UID is 0 (root)"
 
 
 # ===================================================================
@@ -80,14 +84,12 @@ class TestFileOwnership:
 
     def test_app_directory_ownership(self):
         """Files in /app/ should be owned by context-broker user, not root."""
-        result = ssh_exec(
-            "docker exec context-broker-langgraph ls -la /app/"
-        )
+        result = ssh_exec("docker exec context-broker-langgraph ls -la /app/")
         assert result.returncode == 0, f"SSH failed: {result.stderr}"
         lines = result.stdout.strip().splitlines()
 
         # Skip the "total" line and check file ownership
-        file_lines = [l for l in lines if not l.startswith("total")]
+        file_lines = [line for line in lines if not line.startswith("total")]
         assert len(file_lines) > 0, "No files found in /app/"
 
         for line in file_lines:
@@ -99,9 +101,7 @@ class TestFileOwnership:
                     continue
                 owner = parts[2]
                 # Owner should not be root (may be context-broker or a numeric UID)
-                assert owner != "root", (
-                    f"File owned by root: {line}"
-                )
+                assert owner != "root", f"File owned by root: {line}"
 
     def test_app_files_not_world_writable(self):
         """Application files should not be world-writable."""
@@ -110,9 +110,9 @@ class TestFileOwnership:
         )
         assert result.returncode == 0, f"SSH failed: {result.stderr}"
         writable_files = result.stdout.strip()
-        assert writable_files == "", (
-            f"World-writable files found in /app:\n{writable_files}"
-        )
+        assert (
+            writable_files == ""
+        ), f"World-writable files found in /app:\n{writable_files}"
 
 
 # ===================================================================
@@ -125,12 +125,8 @@ class TestDataVolumes:
 
     def test_data_directory_exists(self):
         """The /data directory should exist inside the langgraph container."""
-        result = ssh_exec(
-            "docker exec context-broker-langgraph ls /data/"
-        )
-        assert result.returncode == 0, (
-            f"Cannot list /data/ directory: {result.stderr}"
-        )
+        result = ssh_exec("docker exec context-broker-langgraph ls /data/")
+        assert result.returncode == 0, f"Cannot list /data/ directory: {result.stderr}"
 
     def test_data_subdirectories(self):
         """Host data directory should contain postgres, neo4j, redis subdirs."""
@@ -149,9 +145,9 @@ class TestDataVolumes:
             )
             assert result.returncode == 0, f"SSH failed: {result.stderr}"
             mounts = result.stdout.strip()
-            assert "/data" in mounts, (
-                f"No /data mount found in container mounts:\n{mounts}"
-            )
+            assert (
+                "/data" in mounts
+            ), f"No /data mount found in container mounts:\n{mounts}"
 
     def test_config_mount_readonly(self):
         """The /config mount should be read-only."""
@@ -162,9 +158,9 @@ class TestDataVolumes:
         assert result.returncode == 0, f"SSH failed: {result.stderr}"
         mounts = result.stdout.strip()
         # /config should have RW=false
-        assert "/config:false" in mounts or "/config: false" in mounts, (
-            f"/config mount is not read-only. Mounts: {mounts}"
-        )
+        assert (
+            "/config:false" in mounts or "/config: false" in mounts
+        ), f"/config mount is not read-only. Mounts: {mounts}"
 
 
 # ===================================================================
@@ -184,7 +180,8 @@ class TestNoAnonymousVolumes:
         # Anonymous volumes have hex-string names (64 chars)
         # Named volumes from compose have project prefix
         anonymous = [
-            v for v in volumes
+            v
+            for v in volumes
             if len(v) == 64 and all(c in "0123456789abcdef" for c in v)
         ]
 
@@ -218,9 +215,9 @@ class TestNoAnonymousVolumes:
             # OTS images (neo4j, postgres) may declare internal VOLUMEs that
             # Docker creates alongside our bind mounts. This is expected per
             # EX-NEO4J-001/EX-POSTGRES-001. Verify at least one bind mount exists.
-            assert "bind" in mount_types, (
-                f"{container} has no bind mounts: {mount_types}"
-            )
+            assert (
+                "bind" in mount_types
+            ), f"{container} has no bind mounts: {mount_types}"
 
 
 # ===================================================================
@@ -233,9 +230,7 @@ class TestStructuredLogging:
 
     def test_logs_are_json(self):
         """Recent docker logs should be valid JSON objects."""
-        result = ssh_exec(
-            "docker logs context-broker-langgraph --tail 20 2>&1"
-        )
+        result = ssh_exec("docker logs context-broker-langgraph --tail 20 2>&1")
         assert result.returncode == 0, f"SSH failed: {result.stderr}"
 
         lines = result.stdout.strip().splitlines()
@@ -248,22 +243,19 @@ class TestStructuredLogging:
             if not line:
                 continue
             try:
-                obj = json.loads(line)
+                json.loads(line)  # Validate JSON structure
                 json_lines += 1
             except json.JSONDecodeError:
                 parse_errors.append(line)
 
         # At least some lines should be valid JSON
-        assert json_lines > 0, (
-            f"No valid JSON log lines found. Lines:\n"
-            + "\n".join(parse_errors[:5])
+        assert json_lines > 0, "No valid JSON log lines found. Lines:\n" + "\n".join(
+            parse_errors[:5]
         )
 
     def test_log_fields_present(self):
         """JSON log entries should contain timestamp, level, and message fields."""
-        result = ssh_exec(
-            "docker logs context-broker-langgraph --tail 50 2>&1"
-        )
+        result = ssh_exec("docker logs context-broker-langgraph --tail 50 2>&1")
         assert result.returncode == 0, f"SSH failed: {result.stderr}"
 
         lines = result.stdout.strip().splitlines()
@@ -285,9 +277,7 @@ class TestStructuredLogging:
             has_level = any(
                 k in obj for k in ("level", "severity", "log_level", "levelname")
             )
-            has_message = any(
-                k in obj for k in ("message", "msg", "event")
-            )
+            has_message = any(k in obj for k in ("message", "msg", "event"))
 
             assert has_timestamp, f"Log entry missing timestamp field: {obj}"
             assert has_level, f"Log entry missing level field: {obj}"

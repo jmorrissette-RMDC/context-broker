@@ -29,6 +29,8 @@ from typing_extensions import TypedDict
 
 from app.config import get_build_type_config, get_chat_model, get_tuning, verbose_log
 from app.database import get_pg_pool
+from app.utils import stable_lock_id
+
 # Registration handled by register.py — no module-scope side effects
 from context_broker_ae.build_types.tier_scaling import scale_tier_percentages
 from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
@@ -108,13 +110,20 @@ async def acquire_assembly_lock(state: StandardTieredAssemblyState) -> dict:
     # R7-M5: Wrap Redis calls in try/except — return error state if unavailable
     try:
         pool = get_pg_pool()  # Advisory lock (Redis removed)
-        lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+        lock_id = stable_lock_id(state["context_window_id"])
         acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
     except (RuntimeError, OSError, ConnectionError) as exc:
-        _log.error("Redis unavailable during lock acquisition for window=%s: %s",
-                    state["context_window_id"], exc)
-        return {"lock_key": lock_key, "lock_token": None, "lock_acquired": False,
-                "error": f"Redis unavailable: {exc}"}
+        _log.error(
+            "Redis unavailable during lock acquisition for window=%s: %s",
+            state["context_window_id"],
+            exc,
+        )
+        return {
+            "lock_key": lock_key,
+            "lock_token": None,
+            "lock_acquired": False,
+            "error": f"Redis unavailable: {exc}",
+        }
 
     if not acquired:
         _log.info(
@@ -195,7 +204,9 @@ async def load_messages(state: StandardTieredAssemblyState) -> dict:
             uuid.UUID(str(window_id)),
         )
         if existing_summaries == 0:
-            lookback_multiplier = build_type_config.get("initial_lookback_multiplier", 3)
+            lookback_multiplier = build_type_config.get(
+                "initial_lookback_multiplier", 3
+            )
             lookback_tokens = int(max_budget * lookback_multiplier)
             adaptive_limit = max(adaptive_limit, lookback_tokens // tokens_per_message)
 
@@ -314,7 +325,9 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
 
     # F-06: Use build-type-specific LLM config if available, else summarization role
     effective_config = _resolve_llm_config(config, build_type_config)
-    llm_config = effective_config.get("llm", config.get("inference", {}).get("summarization", {}))
+    llm_config = effective_config.get(
+        "llm", config.get("inference", {}).get("summarization", {})
+    )
     llm = get_chat_model(effective_config, role="summarization")
 
     pool = get_pg_pool()
@@ -326,11 +339,8 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
         _log.error("Failed to load chunk_summarization prompt: %s", exc)
         return {"tier2_summaries": [], "error": f"Prompt loading failed: {exc}"}
 
-    # R5-M13: Prepare Redis client and lock info for TTL renewal during summarization
-    pool = get_pg_pool()  # Advisory lock (Redis removed)
-    lock_key = state.get("lock_key", "")
-    lock_token = state.get("lock_token")
-    lock_ttl = get_tuning(config, "assembly_lock_ttl_seconds", 300)
+    # Advisory lock (Redis removed — no TTL renewal needed)
+    pool = get_pg_pool()
 
     async def _summarize_chunk(chunk: list[dict]) -> tuple[list[dict], str | None]:
         # Advisory locks: no TTL renewal needed
@@ -368,7 +378,9 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
     # R7-M11: Budget guard — stop inserting summaries if cumulative tier1+tier2
     # tokens would exceed their allocation within the max token budget.
     max_budget = state.get("max_token_budget", 0)
-    scaled_config = scale_tier_percentages(build_type_config, len(state.get("all_messages", [])))
+    scaled_config = scale_tier_percentages(
+        build_type_config, len(state.get("all_messages", []))
+    )
     tier1_pct = scaled_config.get("tier1_pct", 0.08)
     tier2_pct = scaled_config.get("tier2_pct", 0.20)
     summary_budget = int(max_budget * (tier1_pct + tier2_pct))
@@ -382,10 +394,15 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
 
         # R7-M11: Check cumulative token budget before inserting
         summary_token_count = max(1, len(summary_text) // 4)
-        if summary_budget > 0 and cumulative_summary_tokens + summary_token_count > summary_budget:
+        if (
+            summary_budget > 0
+            and cumulative_summary_tokens + summary_token_count > summary_budget
+        ):
             _log.info(
                 "Budget guard: stopping tier 2 summarization at %d tokens (budget=%d) for window=%s",
-                cumulative_summary_tokens, summary_budget, state["context_window_id"],
+                cumulative_summary_tokens,
+                summary_budget,
+                state["context_window_id"],
             )
             break
 
@@ -638,7 +655,7 @@ async def release_assembly_lock(state: StandardTieredAssemblyState) -> dict:
     if lock_key and state.get("lock_acquired"):
         try:
             pool = get_pg_pool()
-            lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+            lock_id = stable_lock_id(state["context_window_id"])
             await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
         except (ValueError, OSError) as exc:
             _log.debug("Lock release failed: %s", exc)
@@ -843,15 +860,13 @@ async def ret_wait_for_assembly(state: StandardTieredRetrievalState) -> dict:
         _log.warning("Retrieval: Redis not available, proceeding without assembly wait")
         return {"assembly_status": "ready"}
 
-    lock_key = f"assembly_in_progress:{state['context_window_id']}"
-
     timeout = get_tuning(state["config"], "assembly_wait_timeout_seconds", 50)
     poll_interval = get_tuning(state["config"], "assembly_poll_interval_seconds", 2)
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+            lock_id = stable_lock_id(state["context_window_id"])
             acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
             if acquired:
                 await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)

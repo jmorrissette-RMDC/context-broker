@@ -83,9 +83,7 @@ async def install_stategraph(
 def _run_pip(cmd: list[str]) -> dict:
     """Run pip as a subprocess with timeout."""
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=120
-        )
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         return {
             "returncode": proc.returncode,
             "stdout": proc.stdout,

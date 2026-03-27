@@ -313,7 +313,9 @@ async def _migration_013(conn) -> None:
         ON context_windows (conversation_id, build_type, max_token_budget)
     """)
 
-    _log.info("Migration 013 complete — context_windows unique constraint updated for D-03")
+    _log.info(
+        "Migration 013 complete — context_windows unique constraint updated for D-03"
+    )
 
 
 async def _migration_014(conn) -> None:
@@ -375,6 +377,99 @@ async def _migration_016(conn) -> None:
     _log.info("Migration 016 complete — mem0_memories dedup index")
 
 
+async def _migration_017(conn) -> None:
+    """Migration 17: Add embedding column to system_logs for log vectorization.
+
+    Enables semantic search over logs. The column is nullable — logs without
+    embeddings are not yet vectorized. A background worker polls for NULL
+    embeddings and fills them in batches.
+    """
+    has_col = await conn.fetchval("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'system_logs' AND column_name = 'embedding'
+        )
+    """)
+    if not has_col:
+        await conn.execute("ALTER TABLE system_logs ADD COLUMN embedding vector")
+    _log.info("Migration 017 complete — system_logs embedding column")
+
+
+async def _migration_018(conn) -> None:
+    """Migration 18: Add domain_information table for Imperator domain knowledge.
+
+    TE-owned: the Imperator stores learned facts about its operational domain.
+    Searched semantically via pgvector cosine similarity.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS domain_information (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            content         TEXT NOT NULL,
+            embedding       vector,
+            source          VARCHAR(255),
+            created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )
+    """)
+    _log.info("Migration 018 complete — domain_information table")
+
+
+async def _migration_019(conn) -> None:
+    """Migration 19: Add schedules and schedule_history tables.
+
+    Built-in scheduler — fires StateGraphs on cron/interval schedules.
+    The Imperator can create/manage schedules at runtime via tools.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS schedules (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name            VARCHAR(255) NOT NULL,
+            schedule_type   VARCHAR(20) NOT NULL CHECK (schedule_type IN ('cron', 'interval')),
+            schedule_expr   VARCHAR(255) NOT NULL,
+            message         TEXT NOT NULL,
+            target          VARCHAR(255) NOT NULL DEFAULT 'imperator',
+            enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS schedule_history (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            schedule_id     UUID NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+            started_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            completed_at    TIMESTAMP WITH TIME ZONE,
+            status          VARCHAR(20) NOT NULL DEFAULT 'running',
+            summary         TEXT,
+            error           TEXT
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_schedule_history_schedule_id
+        ON schedule_history (schedule_id, started_at DESC)
+    """)
+    _log.info("Migration 019 complete — schedules and schedule_history tables")
+
+
+async def _migration_020(conn) -> None:
+    """Migration 20: Add last_fired_at to schedules for DB-based coordination.
+
+    Prevents double-firing across container restarts or multiple workers.
+    The scheduler uses optimistic locking: UPDATE WHERE last_fired_at = old_value.
+    """
+    has_col = await conn.fetchval("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'schedules' AND column_name = 'last_fired_at'
+        )
+    """)
+    if not has_col:
+        await conn.execute(
+            "ALTER TABLE schedules ADD COLUMN last_fired_at TIMESTAMP WITH TIME ZONE"
+        )
+    _log.info("Migration 020 complete — schedules.last_fired_at column")
+
+
 # Migration registry: version -> (description, migration_function)
 # Add new migrations here. Never modify existing entries.
 # IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
@@ -422,6 +517,26 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
         16,
         "Add mem0_memories dedup index (hash+user_id) — from Rogers Fix 2",
         _migration_016,
+    ),
+    (
+        17,
+        "Add embedding column to system_logs for log vectorization",
+        _migration_017,
+    ),
+    (
+        18,
+        "Add domain_information table for Imperator domain knowledge",
+        _migration_018,
+    ),
+    (
+        19,
+        "Add schedules and schedule_history tables for built-in scheduler",
+        _migration_019,
+    ),
+    (
+        20,
+        "Add last_fired_at to schedules for DB-based coordination",
+        _migration_020,
     ),
 ]
 
