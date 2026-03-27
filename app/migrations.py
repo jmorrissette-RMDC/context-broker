@@ -125,10 +125,16 @@ async def _migration_009(conn) -> None:
         "SELECT vector_dims(embedding) FROM conversation_messages WHERE embedding IS NOT NULL LIMIT 1"
     )
     if dim is not None:
-        await conn.execute(f"""
-            CREATE INDEX IF NOT EXISTS idx_messages_embedding
-            ON conversation_messages USING hnsw ((embedding::vector({dim})) vector_cosine_ops)
-            """)
+        # Type the column so HNSW can index it directly (no expression cast).
+        # Queries use `embedding <=> $1::vector` — the index must match.
+        await conn.execute(
+            f"ALTER TABLE conversation_messages "
+            f"ALTER COLUMN embedding TYPE vector({dim})"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_embedding "
+            "ON conversation_messages USING hnsw (embedding vector_cosine_ops)"
+        )
         _log.info("HNSW index created for %d-dimensional embeddings", dim)
     else:
         _log.info("No embeddings yet — HNSW index deferred to next startup")

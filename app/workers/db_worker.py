@@ -174,6 +174,11 @@ async def _embedding_worker(config: dict) -> None:
             # TA-03: Create HNSW index after first successful embedding batch.
             # Migration 009 skips index creation on fresh deploys (no embeddings
             # yet). We check once after the first batch and create if missing.
+            #
+            # pgvector HNSW requires a typed vector column (not untyped 'vector').
+            # We ALTER the column to vector(dim) first, then create the index
+            # directly on the column (no expression cast needed). This ensures
+            # queries using `embedding <=> $1::vector` match the index.
             if vectors:
                 try:
                     idx_exists = await pool.fetchval("""
@@ -185,11 +190,16 @@ async def _embedding_worker(config: dict) -> None:
                     """)
                     if not idx_exists:
                         dim = len(vectors[0])
-                        await pool.execute(f"""
-                            CREATE INDEX IF NOT EXISTS idx_messages_embedding
-                            ON conversation_messages
-                            USING hnsw ((embedding::vector({dim})) vector_cosine_ops)
-                        """)
+                        # Type the column so HNSW can index it directly
+                        await pool.execute(
+                            f"ALTER TABLE conversation_messages "
+                            f"ALTER COLUMN embedding TYPE vector({dim})"
+                        )
+                        await pool.execute(
+                            "CREATE INDEX IF NOT EXISTS idx_messages_embedding "
+                            "ON conversation_messages "
+                            "USING hnsw (embedding vector_cosine_ops)"
+                        )
                         _log.info(
                             "HNSW index created after first embedding batch (dim=%d)",
                             dim,
