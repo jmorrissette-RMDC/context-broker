@@ -49,7 +49,7 @@ imperator:
 
   # admin_tools: false = read-only access to system state
   # admin_tools: true = can read/write config and run DB queries
-  # NOTE: Requires container restart to take effect (Imperator graph compiled once).
+  # Hot-reloadable — takes effect on next request (no restart needed).
   admin_tools: false
 
   # Cognitive tuning
