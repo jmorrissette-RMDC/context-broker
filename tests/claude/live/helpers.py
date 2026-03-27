@@ -55,9 +55,16 @@ PIPELINE_STALL_SECONDS = 180
 # ---------------------------------------------------------------------------
 
 def _run_on_docker_host(cmd: str, timeout: int = 120) -> str:
-    """Run a shell command on the Docker host (via SSH if remote)."""
+    """Run a shell command on the Docker host (via SSH if remote).
+
+    Uses double-quote wrapping for the SSH command so that single quotes
+    inside the command (e.g. SQL literals) pass through correctly.
+    """
     if SSH_TARGET:
-        full_cmd = f"ssh {SSH_TARGET} '{cmd}'"
+        # Escape any double quotes and backslashes in the command for the
+        # outer double-quote wrapping.
+        escaped = cmd.replace("\\", "\\\\").replace('"', '\\"')
+        full_cmd = f'ssh {SSH_TARGET} "{escaped}"'
     else:
         full_cmd = cmd
     result = subprocess.run(
@@ -86,11 +93,21 @@ def docker_exec(service: str, cmd: str, timeout: int = 30) -> str:
 
 
 def docker_psql(query: str) -> str:
-    """Run a psql query against the test Postgres container."""
-    escaped = query.replace('"', '\\"').replace("'", "'\\''")
+    """Run a psql query against the test Postgres container.
+
+    Quoting traverses: local shell -> SSH (double-quote wrapped) -> remote shell
+    -> docker compose exec -> psql.
+
+    _run_on_docker_host escapes inner double-quotes and backslashes, then wraps
+    the whole command in double quotes for SSH.  So we use double quotes around
+    the SQL in the -c flag, and they will be properly escaped/unescaped at
+    each layer.
+    """
+    # No need to pre-escape: _run_on_docker_host handles it.
+    # The SQL queries used in tests do not contain double quotes or backslashes.
     return docker_exec(
         "context-broker-postgres",
-        f'psql -U context_broker -d context_broker -t -c "{escaped}"',
+        f'psql -U context_broker -d context_broker -t -A -c "{query}"',
     )
 
 
@@ -200,6 +217,12 @@ def get_pipeline_status(client: httpx.Client) -> dict:
     return status
 
 
+def _parse_int(raw: str) -> int:
+    """Extract the first integer from psql output, defaulting to 0."""
+    m = re.search(r"(\d+)", raw)
+    return int(m.group(1)) if m else 0
+
+
 def get_db_counts() -> dict:
     """Get pipeline progress counts from PostgreSQL."""
     total = docker_psql("SELECT COUNT(*) FROM conversation_messages").strip()
@@ -211,10 +234,10 @@ def get_db_counts() -> dict:
         "SELECT COUNT(*) FROM conversation_messages WHERE memory_extracted = TRUE"
     ).strip()
     return {
-        "total": int(total or "0"),
-        "embedded": int(embedded or "0"),
-        "summaries": int(summaries or "0"),
-        "extracted": int(extracted or "0"),
+        "total": _parse_int(total),
+        "embedded": _parse_int(embedded),
+        "summaries": _parse_int(summaries),
+        "extracted": _parse_int(extracted),
     }
 
 

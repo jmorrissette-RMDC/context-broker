@@ -77,6 +77,47 @@ def test_stack(http_client):
     print("[SETUP] Test stack healthy")
 
     # ------------------------------------------------------------------
+    # Step 2a: Create mem0_memories stub if missing
+    # ------------------------------------------------------------------
+    # Migration 016 expects this table to exist but Mem0 creates it
+    # lazily. On a fresh DB, migrations loop forever without this stub.
+    docker_psql(
+        "CREATE TABLE IF NOT EXISTS mem0_memories ("
+        "id UUID PRIMARY KEY DEFAULT gen_random_uuid(), "
+        "memory TEXT, payload JSONB, user_id VARCHAR(255), "
+        "embedding vector)"
+    )
+    # Restart langgraph so migrations can complete with the table present
+    compose_cmd("restart context-broker-langgraph", timeout=60)
+    time.sleep(10)
+
+    # ------------------------------------------------------------------
+    # Step 2b: Wait for MCP readiness (Postgres middleware)
+    # ------------------------------------------------------------------
+    # /health can return 200 while the langgraph app's Postgres middleware
+    # still returns 503. Wait until an MCP call succeeds.
+    print("[SETUP] Waiting for MCP readiness...")
+    mcp_ready = False
+    mcp_deadline = time.time() + 120
+    while time.time() < mcp_deadline:
+        try:
+            resp = mcp_call(
+                http_client, "metrics_get", {},
+            )
+            if resp.status_code == 200:
+                mcp_ready = True
+                break
+        except Exception:
+            pass
+        time.sleep(3)
+
+    if not mcp_ready:
+        logs = compose_cmd("logs --tail 50")
+        pytest.fail(f"MCP endpoint not ready within 120s.\nLogs:\n{logs}")
+
+    print("[SETUP] MCP endpoint ready")
+
+    # ------------------------------------------------------------------
     # Step 3: Bulk load Phase 1 data
     # ------------------------------------------------------------------
     loaded_conversations = {}
