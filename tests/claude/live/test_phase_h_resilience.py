@@ -61,7 +61,7 @@ class TestConfigHotReload:
 
     def test_config_hot_reload(self, http_client):
         """Modify te.yml temperature via docker exec, call chat, then restore."""
-        container = "claude-test-langgraph"
+        container = "context-broker-langgraph"
 
         # Read current temperature
         original = docker_exec(

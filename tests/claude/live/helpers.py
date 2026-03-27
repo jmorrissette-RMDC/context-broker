@@ -20,6 +20,7 @@ import httpx
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]  # ContextBroker/
 COMPOSE_FILE = str(PROJECT_ROOT / "docker-compose.claude-test.yml")
+COMPOSE_PROJECT = "claude-test"
 TEST_DATA_DIR = Path(r"Z:\test-data\conversational-memory")
 PHASE1_DIR = TEST_DATA_DIR / "phase1-bulk-load"
 PHASE2_DIR = TEST_DATA_DIR / "phase2-agent-conversation"
@@ -49,7 +50,7 @@ PIPELINE_STALL_SECONDS = 180
 
 def compose_cmd(cmd: str, timeout: int = 120) -> str:
     """Run a docker compose command against the test stack."""
-    full_cmd = f"docker compose -f {COMPOSE_FILE} {cmd}"
+    full_cmd = f"docker compose -p {COMPOSE_PROJECT} -f {COMPOSE_FILE} {cmd}"
     result = subprocess.run(
         full_cmd, shell=True, capture_output=True, text=True,
         timeout=timeout, cwd=str(PROJECT_ROOT),
@@ -60,11 +61,24 @@ def compose_cmd(cmd: str, timeout: int = 120) -> str:
     return result.stdout.strip()
 
 
-def docker_exec(container: str, cmd: str, timeout: int = 30) -> str:
-    """Execute a command inside a running test container."""
-    full_cmd = f"docker exec {container} {cmd}"
+def _container_name(service: str) -> str:
+    """Map a service short name to its docker compose container name.
+
+    With -p claude-test, containers are named claude-test-<service>-1.
+    We use docker compose exec which takes the service name directly.
+    """
+    return service
+
+
+def docker_exec(service: str, cmd: str, timeout: int = 30) -> str:
+    """Execute a command inside a running test container via compose exec."""
+    full_cmd = (
+        f"docker compose -p {COMPOSE_PROJECT} -f {COMPOSE_FILE} "
+        f"exec -T {service} {cmd}"
+    )
     result = subprocess.run(
-        full_cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+        full_cmd, shell=True, capture_output=True, text=True,
+        timeout=timeout, cwd=str(PROJECT_ROOT),
     )
     return result.stdout.strip()
 
@@ -73,16 +87,20 @@ def docker_psql(query: str) -> str:
     """Run a psql query against the test Postgres container."""
     escaped = query.replace('"', '\\"')
     return docker_exec(
-        "claude-test-postgres",
+        "context-broker-postgres",
         f'psql -U context_broker -d context_broker -t -c "{escaped}"',
     )
 
 
-def docker_logs(container: str, lines: int = 50) -> str:
+def docker_logs(service: str, lines: int = 50) -> str:
     """Get recent logs from a test container."""
+    full_cmd = (
+        f"docker compose -p {COMPOSE_PROJECT} -f {COMPOSE_FILE} "
+        f"logs --tail {lines} {service}"
+    )
     result = subprocess.run(
-        f"docker logs --tail {lines} {container}",
-        shell=True, capture_output=True, text=True, timeout=15,
+        full_cmd, shell=True, capture_output=True, text=True,
+        timeout=15, cwd=str(PROJECT_ROOT),
     )
     return result.stdout + result.stderr
 

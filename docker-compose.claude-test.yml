@@ -1,13 +1,19 @@
 # Context Broker — Isolated Test Stack
 # Runs alongside the production stack with no conflicts.
 #
-# Usage:
-#   docker compose -f docker-compose.claude-test.yml up -d --build
-#   docker compose -f docker-compose.claude-test.yml down -v
+# IMPORTANT: Always use --project-name to avoid collision with production:
+#   docker compose -p claude-test -f docker-compose.claude-test.yml up -d --build
+#   docker compose -p claude-test -f docker-compose.claude-test.yml down -v
+#
+# The -p flag gives all containers a claude-test- prefix and creates
+# a separate project namespace. Internal hostnames stay the same
+# (context-broker-postgres, etc.) for DNS resolution within the
+# isolated claude-test-net bridge network.
 #
 # Differences from production:
+#   - Project name: claude-test (vs contextbroker)
 #   - Network: claude-test-net (isolated from context-broker-net)
-#   - Gateway: claude-test-broker on port 8081 (production is 8080)
+#   - Gateway port: 8081 (production is 8080)
 #   - Data: ./data-test/ (separate from ./data/)
 #   - Config: ./config-test/ (nominal models baked in)
 #   - No UI container (not needed for testing)

@@ -121,14 +121,14 @@ class TestBackgroundWorker:
 
     def test_background_worker_started(self):
         """Docker logs should show the background worker starting."""
-        logs = docker_logs("claude-test-app", lines=200)
+        logs = docker_logs("context-broker-langgraph", lines=200)
         assert "Background worker starting" in logs or "background worker" in logs.lower(), (
             "Could not find 'Background worker starting' in app container logs"
         )
 
     def test_no_pipeline_errors_in_recent_logs(self):
         """Check recent app logs for error-level entries and log any found."""
-        logs = docker_logs("claude-test-app", lines=50)
+        logs = docker_logs("context-broker-langgraph", lines=50)
         lines = logs.splitlines()
         error_lines = [
             line for line in lines

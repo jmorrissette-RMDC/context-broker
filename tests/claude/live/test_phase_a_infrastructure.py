@@ -378,7 +378,7 @@ class TestMigrationsRan:
 
     def test_migration_log_message(self, http_client):
         """A-13: Docker logs contain migration completion message."""
-        logs = docker_logs("claude-test-context-broker", lines=200)
+        logs = docker_logs("context-broker-langgraph", lines=200)
         assert (
             "Schema migrations complete" in logs
             or "Schema is up to date" in logs
