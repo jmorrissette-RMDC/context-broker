@@ -84,6 +84,10 @@ def test_stack(http_client):
     # ------------------------------------------------------------------
     # Step 1: Check if stack is already running; deploy if not
     # ------------------------------------------------------------------
+    # Clear issues from previous runs
+    if ISSUES_JSON.exists():
+        ISSUES_JSON.unlink()
+
     print(f"\n[SETUP] Checking if stack '{COMPOSE_PROJECT}' is already running...")
     already_running = False
     try:
