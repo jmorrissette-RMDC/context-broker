@@ -71,6 +71,13 @@ class DeleteConversationInput(BaseModel):
     conversation_id: UUID
 
 
+class RenameConversationInput(BaseModel):
+    """Input for conv_rename_conversation."""
+
+    conversation_id: UUID
+    title: str
+
+
 class ListConversationsInput(BaseModel):
     """Input for conv_list_conversations."""
 

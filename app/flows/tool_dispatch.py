@@ -278,6 +278,20 @@ async def _dispatch_tool_inner(
                 )
         return {"deleted": result == "DELETE 1"}
 
+    elif tool_name == "conv_rename_conversation":
+        from app.models import RenameConversationInput
+
+        validated = RenameConversationInput(**arguments)
+        from app.database import get_pg_pool
+
+        pool = get_pg_pool()
+        result = await pool.execute(
+            "UPDATE conversations SET title = $1 WHERE id = $2",
+            validated.title,
+            validated.conversation_id,
+        )
+        return {"renamed": result == "UPDATE 1", "title": validated.title}
+
     elif tool_name == "conv_list_conversations":
         validated = ListConversationsInput(**arguments)
         from app.database import get_pg_pool

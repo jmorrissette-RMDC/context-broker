@@ -541,6 +541,25 @@ def _get_tool_list() -> list[dict]:
             },
         },
         {
+            "name": "conv_rename_conversation",
+            "description": "Rename a conversation by updating its title.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["conversation_id", "title"],
+                "properties": {
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "ID of the conversation to rename",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "New title for the conversation",
+                    },
+                },
+            },
+        },
+        {
             "name": "conv_list_conversations",
             "description": "List conversations. Optional participant filter returns only conversations where the participant appears as sender or recipient on any message.",
             "inputSchema": {

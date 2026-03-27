@@ -194,17 +194,13 @@ async def on_rename_conversation(conv_choice, new_name, mad_name):
     if not conv_id:
         return gr.update(), ""
 
-    # Rename via MCP — update conversation title
     try:
         await client._mcp_call(
-            "conv_update_conversation",
+            "conv_rename_conversation",
             {"conversation_id": conv_id, "title": new_name},
         )
     except (RuntimeError, OSError) as exc:
-        _log.warning("Rename failed: %s — trying direct approach", exc)
-        # Fallback: some versions may not have conv_update_conversation
-        # Just refresh the list without renaming
-        pass
+        _log.warning("Rename failed: %s", exc)
 
     choices = await _get_conv_choices(client)
     return gr.update(choices=choices), ""
