@@ -82,58 +82,62 @@ def _run_deploy_script(args: str, timeout: int = 600) -> tuple[int, str, str]:
 def test_stack(http_client):
     """Deploy the test stack, load data, yield, then tear down."""
     # ------------------------------------------------------------------
-    # Step 1: Deploy via deploy.sh
+    # Step 1: Check if stack is already running; deploy if not
     # ------------------------------------------------------------------
-    print(f"\n[SETUP] Deploying stack '{COMPOSE_PROJECT}' via deploy.sh...")
-    rc, stdout, stderr = _run_deploy_script(
-        f"{COMPOSE_PROJECT} {BASE_PORT} ./config-test",
-        timeout=600,
-    )
+    print(f"\n[SETUP] Checking if stack '{COMPOSE_PROJECT}' is already running...")
+    already_running = False
+    try:
+        resp = mcp_call(http_client, "metrics_get", {})
+        if resp.status_code == 200:
+            already_running = True
+            print("[SETUP] Stack already running and MCP ready — skipping deploy")
+    except Exception:
+        pass
 
-    # Print deploy output so it's visible in pytest -s
-    if stdout:
-        for line in stdout.splitlines():
-            print(f"  {line}")
-    if stderr:
-        for line in stderr.splitlines():
-            print(f"  [stderr] {line}")
-
-    if rc != 0:
-        print(f"[SETUP] deploy.sh failed (exit {rc}), attempting teardown...")
-        _run_deploy_script(f"--down {COMPOSE_PROJECT}", timeout=60)
-        pytest.fail(
-            f"deploy.sh failed with exit code {rc}.\n"
-            f"stdout:\n{stdout}\nstderr:\n{stderr}"
+    if not already_running:
+        print(f"[SETUP] Deploying stack '{COMPOSE_PROJECT}' via deploy.sh...")
+        rc, stdout, stderr = _run_deploy_script(
+            f"{COMPOSE_PROJECT} {BASE_PORT} ./config-test",
+            timeout=600,
         )
 
-    print("[SETUP] Stack deployed successfully")
+        if stdout:
+            for line in stdout.splitlines():
+                print(f"  {line}")
+        if stderr:
+            for line in stderr.splitlines():
+                print(f"  [stderr] {line}")
 
-    # ------------------------------------------------------------------
-    # Step 2: Verify MCP readiness from test runner
-    # ------------------------------------------------------------------
-    # deploy.sh checks from the Docker host (localhost). We need to verify
-    # from the test runner machine as well (may be different host).
-    print("[SETUP] Verifying MCP readiness from test runner...")
-    mcp_ready = False
-    mcp_deadline = time.time() + 60
-    while time.time() < mcp_deadline:
-        try:
-            resp = mcp_call(http_client, "metrics_get", {})
-            if resp.status_code == 200:
-                mcp_ready = True
-                break
-        except Exception:
-            pass
-        time.sleep(3)
+        if rc != 0:
+            print(f"[SETUP] deploy.sh failed (exit {rc}), attempting teardown...")
+            _run_deploy_script(f"--down {COMPOSE_PROJECT}", timeout=60)
+            pytest.fail(
+                f"deploy.sh failed with exit code {rc}.\n"
+                f"stdout:\n{stdout}\nstderr:\n{stderr}"
+            )
 
-    if not mcp_ready:
-        pytest.fail(
-            f"MCP endpoint at {BASE_URL}/mcp not reachable from test runner. "
-            f"deploy.sh succeeded on the Docker host but the test runner "
-            f"cannot reach port {BASE_PORT}."
-        )
+        print("[SETUP] Stack deployed successfully")
 
-    print("[SETUP] MCP endpoint verified from test runner")
+        # Verify MCP readiness from test runner
+        print("[SETUP] Verifying MCP readiness from test runner...")
+        mcp_ready = False
+        mcp_deadline = time.time() + 60
+        while time.time() < mcp_deadline:
+            try:
+                resp = mcp_call(http_client, "metrics_get", {})
+                if resp.status_code == 200:
+                    mcp_ready = True
+                    break
+            except Exception:
+                pass
+            time.sleep(3)
+
+        if not mcp_ready:
+            pytest.fail(
+                f"MCP endpoint at {BASE_URL}/mcp not reachable from test runner."
+            )
+
+        print("[SETUP] MCP endpoint verified from test runner")
 
     # ------------------------------------------------------------------
     # Step 3: Bulk load Phase 1 data
@@ -261,17 +265,15 @@ def test_stack(http_client):
     }
 
     # ------------------------------------------------------------------
-    # Teardown
+    # Teardown — generate issues log but leave stack running
     # ------------------------------------------------------------------
     print("\n[TEARDOWN] Generating issues log...")
     generate_issues_md()
 
-    print(f"[TEARDOWN] Tearing down stack '{COMPOSE_PROJECT}'...")
-    rc, stdout, stderr = _run_deploy_script(f"--down {COMPOSE_PROJECT}", timeout=120)
-    if stdout:
-        for line in stdout.splitlines():
-            print(f"  {line}")
-    print("[TEARDOWN] Done")
+    # Stack is left running for faster re-runs.
+    # Tear down manually with: deploy.sh --down claude-test
+    print("[TEARDOWN] Stack left running for re-use. Tear down with:")
+    print(f"  deploy.sh --down {COMPOSE_PROJECT}")
 
 
 # ---------------------------------------------------------------------------

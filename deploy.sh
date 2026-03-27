@@ -296,8 +296,8 @@ else
     warn "Could not verify tool count (tools/list may have returned unexpected format)"
 fi
 
-# Check chat endpoint
-CHAT_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+# Check chat endpoint (non-blocking — timeout after 10s)
+CHAT_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
     -X POST "http://localhost:${PORT}/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -d '{"model":"context-broker","messages":[{"role":"user","content":"ping"}],"stream":false}' \
@@ -306,7 +306,7 @@ CHAT_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
 if [[ "${CHAT_CODE}" == "200" ]]; then
     log "Chat endpoint responding"
 else
-    warn "Chat endpoint returned ${CHAT_CODE} (may still be initializing)"
+    warn "Chat endpoint returned ${CHAT_CODE} (may be busy — this is not a failure)"
 fi
 
 # ============================================================================
