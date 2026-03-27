@@ -215,7 +215,7 @@ def run_provider_test(provider_name: str, config: dict) -> tuple[bool, str]:
         ctx = mcp_call(
             "get_context",
             {
-                "build_type": "passthrough",
+                "build_type": "sliding-window",
                 "budget": 4096,
                 "conversation_id": conv_id,
             },

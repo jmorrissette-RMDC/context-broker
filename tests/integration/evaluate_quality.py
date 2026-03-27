@@ -154,8 +154,8 @@ def evaluate_context_assembly(conv_id: str, build_type: str) -> dict:
 ## Instructions
 Evaluate this assembled context:
 1. Does it preserve the key themes and topics from the original messages?
-2. For standard-tiered: are there clear tier 1 (archival summary), tier 2 (chunk summaries), and tier 3 (recent verbatim)?
-3. For knowledge-enriched: are there knowledge graph facts and semantic messages in addition to tiers?
+2. For tiered-summary: are there clear tier 1 (archival summary), tier 2 (chunk summaries), and tier 3 (recent verbatim)?
+3. For enriched: are there knowledge graph facts and semantic messages in addition to tiers?
 4. Is any critical information obviously lost?
 5. Rate the overall quality: GOOD, ACCEPTABLE, or POOR.
 
@@ -184,7 +184,7 @@ def main():
     results = []
 
     for conv_id in CONV_IDS:
-        for bt in ["standard-tiered", "knowledge-enriched"]:
+        for bt in ["tiered-summary", "enriched"]:
             result = evaluate_context_assembly(conv_id, bt)
             results.append(
                 {

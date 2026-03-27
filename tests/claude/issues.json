@@ -1,43 +1,79 @@
 [
   {
-    "test_name": "setup_pipeline_wait",
-    "timestamp": "2026-03-27T05:27:05.085231+00:00",
+    "test_name": "test_mem_add_embedding_persisted",
+    "timestamp": "2026-03-27T17:21:50.030193+00:00",
     "severity": "error",
+    "category": "mem0",
+    "description": "mem_add accepted call but stored 0 rows for user_id=live-test-embed-ed17a501 \u2014 Mem0 silently failed to persist (TA-04)",
+    "expected": ">=1 row",
+    "actual": "0 rows"
+  },
+  {
+    "test_name": "test_mem_search_finds_added_memory",
+    "timestamp": "2026-03-27T17:22:04.231039+00:00",
+    "severity": "warning",
+    "category": "mem0",
+    "description": "mem_search returned no results for a just-added memory after retries; Mem0 may not be fully functional (table schema mismatch)",
+    "expected": "",
+    "actual": ""
+  },
+  {
+    "test_name": "test_mem_list_returns_memories",
+    "timestamp": "2026-03-27T17:22:27.106361+00:00",
+    "severity": "warning",
+    "category": "mem0",
+    "description": "Expected at least 1 memory from mem_list, got 0; Mem0 may not be fully functional (table schema mismatch)",
+    "expected": "",
+    "actual": ""
+  },
+  {
+    "test_name": "test_mem_delete_removes_memory",
+    "timestamp": "2026-03-27T17:22:38.261162+00:00",
+    "severity": "warning",
+    "category": "mem0",
+    "description": "Could not determine memory_id from add result: {'status': 'added', 'result': {'results': [], 'relations': [{'source': 'live-test-del-d87ffb08', 'relationship': 'has_property', 'target': 'temporary_memory_to_be_deleted'}]}}; Mem0 may not be fully functional (table schema mismatch)",
+    "expected": "",
+    "actual": ""
+  },
+  {
+    "test_name": "test_mem0_memories_has_entries",
+    "timestamp": "2026-03-27T17:22:45.497567+00:00",
+    "severity": "warning",
+    "category": "mem0",
+    "description": "mem0_memories table is empty; extraction may not have run or Mem0 table schema mismatch prevents storage",
+    "expected": ">0 rows",
+    "actual": "0"
+  },
+  {
+    "test_name": "test_no_pipeline_errors_in_recent_logs",
+    "timestamp": "2026-03-27T17:22:49.372781+00:00",
+    "severity": "warning",
     "category": "pipeline",
-    "description": "Pipeline stalled for 180s. Embedded: 0/10430",
-    "expected": "10430 embeddings",
-    "actual": "{'total': 0, 'embedded': 0, 'summaries': 0, 'extracted': 0}"
+    "description": "Error in recent logs: claude-test-langgraph  | {\"timestamp\": \"2026-03-27T17:22:29.635340+00:00\", \"level\": \"ERROR\", \"message\": \"Extraction failed for 76667b9a-783e-4167-81c3-e70f464833a9 (attempt 3/3): Mem0 returned empty r",
+    "expected": "",
+    "actual": ""
   },
   {
     "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T05:28:16.925171+00:00",
+    "timestamp": "2026-03-27T17:22:50.750478+00:00",
     "severity": "warning",
     "category": "assembly",
-    "description": "Conversation conversation-1 (398b1230-4b6b-4769-8902-a80f1753d9dd) has no summaries",
+    "description": "Conversation conversation-2 (4ed21aee-2d10-4a43-b32a-db60fdddfd3d) has no summaries",
     "expected": ">0 summaries",
     "actual": "0"
   },
   {
     "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T05:28:17.230440+00:00",
+    "timestamp": "2026-03-27T17:22:51.276311+00:00",
     "severity": "warning",
     "category": "assembly",
-    "description": "Conversation conversation-2 (417616cb-f534-452a-aca5-b5d1760ff653) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T05:28:17.568927+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-3 (e8946e2b-cd56-422c-8d57-b13014b059e5) has no summaries",
+    "description": "Conversation conversation-3 (0810fc79-2104-4b8c-834a-0f2bcac29217) has no summaries",
     "expected": ">0 summaries",
     "actual": "0"
   },
   {
     "test_name": "test_tool_turn_0",
-    "timestamp": "2026-03-27T05:30:36.811883+00:00",
+    "timestamp": "2026-03-27T17:25:31.008679+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 0: expected tool 'get_context' not detected in response",
@@ -46,7 +82,7 @@
   },
   {
     "test_name": "test_tool_turn_1",
-    "timestamp": "2026-03-27T05:30:36.823593+00:00",
+    "timestamp": "2026-03-27T17:25:31.019021+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 1: expected tool 'search_messages' not detected in response",
@@ -55,7 +91,7 @@
   },
   {
     "test_name": "test_tool_turn_2",
-    "timestamp": "2026-03-27T05:30:36.831545+00:00",
+    "timestamp": "2026-03-27T17:25:31.029329+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 2: expected tool 'search_messages' not detected in response",
@@ -64,7 +100,7 @@
   },
   {
     "test_name": "test_tool_turn_3",
-    "timestamp": "2026-03-27T05:30:36.839868+00:00",
+    "timestamp": "2026-03-27T17:25:31.039437+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 3: expected tool 'search_messages' not detected in response",
@@ -73,7 +109,7 @@
   },
   {
     "test_name": "test_tool_turn_4",
-    "timestamp": "2026-03-27T05:30:36.847978+00:00",
+    "timestamp": "2026-03-27T17:25:31.047815+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 4: expected tool 'search_messages' not detected in response",
@@ -82,7 +118,7 @@
   },
   {
     "test_name": "test_tool_turn_6",
-    "timestamp": "2026-03-27T05:30:36.856506+00:00",
+    "timestamp": "2026-03-27T17:25:31.058097+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 6: expected tool 'search_messages' not detected in response",
@@ -91,187 +127,7 @@
   },
   {
     "test_name": "test_tool_turn_7",
-    "timestamp": "2026-03-27T05:30:36.864498+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 7: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "setup_pipeline_wait",
-    "timestamp": "2026-03-27T05:41:22.757113+00:00",
-    "severity": "error",
-    "category": "pipeline",
-    "description": "Pipeline stalled for 180s. Embedded: 0/10430",
-    "expected": "10430 embeddings",
-    "actual": "{'total': 0, 'embedded': 0, 'summaries': 0, 'extracted': 0}"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T05:42:32.589198+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-1 (a411331b-2503-4fef-800b-509b4604518a) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T05:42:32.942018+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-2 (0ccf4a12-e56d-458b-8c7a-2205aee68550) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T05:42:33.278777+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-3 (793596a6-5a39-4029-ba29-6c1776bc08af) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_tool_turn_0",
-    "timestamp": "2026-03-27T05:44:17.727186+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 0: expected tool 'get_context' not detected in response",
-    "expected": "Tool 'get_context' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_1",
-    "timestamp": "2026-03-27T05:44:17.738032+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 1: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_2",
-    "timestamp": "2026-03-27T05:44:17.746738+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 2: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_3",
-    "timestamp": "2026-03-27T05:44:17.755199+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 3: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_4",
-    "timestamp": "2026-03-27T05:44:17.763272+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 4: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_6",
-    "timestamp": "2026-03-27T05:44:17.770862+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 6: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_7",
-    "timestamp": "2026-03-27T05:44:17.781415+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 7: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T06:16:42.021493+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-2 (ac252b1d-e669-4a83-804d-d732ad358877) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T06:16:42.505868+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-3 (e26dd76d-cc77-46e3-b141-2c8cb7c1bf1a) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_tool_turn_0",
-    "timestamp": "2026-03-27T06:18:43.752435+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 0: expected tool 'get_context' not detected in response",
-    "expected": "Tool 'get_context' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_1",
-    "timestamp": "2026-03-27T06:18:43.763442+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 1: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_2",
-    "timestamp": "2026-03-27T06:18:43.774783+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 2: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_3",
-    "timestamp": "2026-03-27T06:18:43.786182+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 3: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_4",
-    "timestamp": "2026-03-27T06:18:43.798174+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 4: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_6",
-    "timestamp": "2026-03-27T06:18:43.810479+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 6: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_7",
-    "timestamp": "2026-03-27T06:18:43.820853+00:00",
+    "timestamp": "2026-03-27T17:25:31.066546+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 7: expected tool 'search_messages' not detected in response",
@@ -280,740 +136,74 @@
   },
   {
     "test_name": "test_tool_file_write",
-    "timestamp": "2026-03-27T06:19:15.313573+00:00",
+    "timestamp": "2026-03-27T17:26:05.037449+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "None of expected keywords ['written', 'created', 'saved', 'success', 'wrote'] found in response",
     "expected": "written, created, saved, success, wrote",
-    "actual": "I am sorry, but I was unable to write the file. The system returned a \"Permission denied\" error.\n\nThis indicates that the application does not have the necessary filesystem permissions to write to the `/data/downloads` directory on the host machine. An administrator may need to adjust the directory'"
+    "actual": "I'm sorry, I was unable to write the file. The system returned a \"Permission denied\" error.\n\nIt appears that the application, running inside its container, does not have the necessary write permissions for the `/data/downloads` directory on the host system. You will need to adjust the directory's pe"
   },
   {
     "test_name": "test_tool_update_system_prompt",
-    "timestamp": "2026-03-27T06:19:22.701330+00:00",
+    "timestamp": "2026-03-27T17:26:10.046203+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "update_system_prompt not found in tools/list",
     "expected": "update_system_prompt in tool list",
-    "actual": "['get_context', 'store_message', 'search_messages', 'search_knowledge', 'conv_create_conversation', 'conv_delete_conversation', 'conv_list_conversations', 'conv_store_message', 'conv_retrieve_context', 'conv_create_context_window', 'conv_search', 'conv_search_messages', 'conv_get_history', 'conv_search_context_windows', 'query_logs', 'search_logs', 'mem_search', 'mem_get_context', 'mem_add', 'mem_list']"
-  },
-  {
-    "test_name": "test_tool_create_schedule",
-    "timestamp": "2026-03-27T06:20:57.582927+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['created', 'schedule', 'heartbeat', 'claude-test'] found in response",
-    "expected": "created, schedule, heartbeat, claude-test",
-    "actual": "I have searched my domain knowledge graph for information about \"test suite\".\n\nHere is the relevant information I found:\n*   The Claude test suite runs on port 8081."
+    "actual": "['get_context', 'store_message', 'search_messages', 'search_knowledge', 'conv_create_conversation', 'conv_delete_conversation', 'conv_rename_conversation', 'conv_list_conversations', 'conv_store_message', 'conv_retrieve_context', 'conv_create_context_window', 'conv_search', 'conv_search_messages', 'conv_get_history', 'conv_search_context_windows', 'query_logs', 'search_logs', 'mem_search', 'mem_get_context', 'mem_add']"
   },
   {
     "test_name": "test_diagnostic_context_introspection",
-    "timestamp": "2026-03-27T06:22:55.723143+00:00",
+    "timestamp": "2026-03-27T17:29:41.317983+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "Expected keyword 'context' not found in response",
     "expected": "context",
-    "actual": "Of course. To do that, I need to know which conversation you're referring to.\n\nI can see several conversations in your history. Please tell me the ID of the one you'd like me to inspect:\n\n*   **claude"
+    "actual": "Of course. I can do that, but I will need the conversation ID.\n\nWhich conversation would you like me to inspect? If you're not sure of the ID, I can list your recent conversations for you."
   },
   {
     "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-27T06:24:01.527233+00:00",
+    "timestamp": "2026-03-27T17:30:50.001005+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "Expected keyword 'verbose' not found in response",
     "expected": "verbose",
-    "actual": "I am sorry, but I was unable to modify the configuration file. The system returned a \"Permission denied\" error.\n\nThis indicates that I do not have the necessary filesystem permissions to write to `/co"
+    "actual": "I'm sorry, I was unable to change the setting. The system returned a \"Permission denied\" error, just as it did before.\n\nThis is a security and stability feature of the system. My role as the Tenant En"
   },
   {
     "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-27T06:24:01.537528+00:00",
+    "timestamp": "2026-03-27T17:30:50.012670+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "Expected keyword 'toggle' not found in response",
     "expected": "toggle",
-    "actual": "I am sorry, but I was unable to modify the configuration file. The system returned a \"Permission denied\" error.\n\nThis indicates that I do not have the necessary filesystem permissions to write to `/co"
+    "actual": "I'm sorry, I was unable to change the setting. The system returned a \"Permission denied\" error, just as it did before.\n\nThis is a security and stability feature of the system. My role as the Tenant En"
   },
   {
     "test_name": "test_verbose_logging_toggle",
-    "timestamp": "2026-03-27T06:24:15.427638+00:00",
+    "timestamp": "2026-03-27T17:31:03.787868+00:00",
     "severity": "warning",
     "category": "imperator",
     "description": "Response does not mention verbose/toggle/logging",
     "expected": "verbose or toggle or logging",
-    "actual": "i am sorry, but i was unable to modify the configuration file. the system returned a \"permission denied\" error.\n\nthis indicates that i do not have the necessary filesystem permissions to write to `/co"
+    "actual": "i'm sorry, i was unable to change the setting. the system returned a \"permission denied\" error, just as it did before.\n\nthis is a security and stability feature of the system. my role as the tenant en"
   },
   {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T06:33:44.063545+00:00",
+    "test_name": "performance_report",
+    "timestamp": "2026-03-27T17:31:20.691727+00:00",
     "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-2 (fc79a804-cb8c-4942-b03d-55e361ba1df0) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
+    "category": "performance",
+    "description": "conv_search_messages averages 8.6s per call",
+    "expected": "<5s",
+    "actual": "8.6s"
   },
   {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T06:33:44.540754+00:00",
+    "test_name": "performance_report",
+    "timestamp": "2026-03-27T17:31:20.701464+00:00",
     "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-3 (fd589508-6a56-42c8-b32e-195e02f5cf41) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_tool_turn_0",
-    "timestamp": "2026-03-27T06:36:13.758107+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 0: expected tool 'get_context' not detected in response",
-    "expected": "Tool 'get_context' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_1",
-    "timestamp": "2026-03-27T06:36:13.767464+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 1: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_2",
-    "timestamp": "2026-03-27T06:36:13.775777+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 2: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_3",
-    "timestamp": "2026-03-27T06:36:13.783987+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 3: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_4",
-    "timestamp": "2026-03-27T06:36:13.792324+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 4: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_6",
-    "timestamp": "2026-03-27T06:36:13.800521+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 6: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_7",
-    "timestamp": "2026-03-27T06:36:13.808841+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 7: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_file_write",
-    "timestamp": "2026-03-27T06:36:48.551025+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['written', 'created', 'saved', 'success', 'wrote'] found in response",
-    "expected": "written, created, saved, success, wrote",
-    "actual": "I am sorry, but I was unable to write the file. The system returned a \"Permission denied\" error for the `/data/downloads` directory.\n\nThis indicates that the user running the application does not have the necessary OS-level permissions to write to that location. You may need to adjust the folder per"
-  },
-  {
-    "test_name": "test_tool_update_system_prompt",
-    "timestamp": "2026-03-27T06:36:53.459662+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "update_system_prompt not found in tools/list",
-    "expected": "update_system_prompt in tool list",
-    "actual": "['get_context', 'store_message', 'search_messages', 'search_knowledge', 'conv_create_conversation', 'conv_delete_conversation', 'conv_list_conversations', 'conv_store_message', 'conv_retrieve_context', 'conv_create_context_window', 'conv_search', 'conv_search_messages', 'conv_get_history', 'conv_search_context_windows', 'query_logs', 'search_logs', 'mem_search', 'mem_get_context', 'mem_add', 'mem_list']"
-  },
-  {
-    "test_name": "test_diagnostic_context_introspection",
-    "timestamp": "2026-03-27T06:40:06.202652+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "Expected keyword 'context' not found in response",
-    "expected": "context",
-    "actual": "Of course. I can do that, but I'll need the ID of this conversation.\n\nCould you please provide the conversation ID? It's usually visible in the user interface."
-  },
-  {
-    "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-27T06:41:06.554745+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "Expected keyword 'verbose' not found in response",
-    "expected": "verbose",
-    "actual": "I am sorry, but I was unable to modify the configuration. The system returned a \"Permission denied\" error when trying to write to `/config/config.yml`.\n\nThis indicates that the user running the applic"
-  },
-  {
-    "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-27T06:41:06.564469+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "Expected keyword 'toggle' not found in response",
-    "expected": "toggle",
-    "actual": "I am sorry, but I was unable to modify the configuration. The system returned a \"Permission denied\" error when trying to write to `/config/config.yml`.\n\nThis indicates that the user running the applic"
-  },
-  {
-    "test_name": "test_verbose_logging_toggle",
-    "timestamp": "2026-03-27T06:41:18.079630+00:00",
-    "severity": "warning",
-    "category": "imperator",
-    "description": "Response does not mention verbose/toggle/logging",
-    "expected": "verbose or toggle or logging",
-    "actual": "i am sorry, but i was unable to modify the configuration. the system returned a \"permission denied\" error when trying to write to `/config/config.yml`.\n\nthis indicates that the user running the applic"
-  },
-  {
-    "test_name": "test_mem_search_finds_added_memory",
-    "timestamp": "2026-03-27T06:54:39.396205+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "mem_search returned no results for a just-added memory after retries; Mem0 may not be fully functional (table schema mismatch)",
-    "expected": "",
-    "actual": ""
-  },
-  {
-    "test_name": "test_mem_list_returns_memories",
-    "timestamp": "2026-03-27T06:55:00.307976+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "Expected at least 1 memory from mem_list, got 0; Mem0 may not be fully functional (table schema mismatch)",
-    "expected": "",
-    "actual": ""
-  },
-  {
-    "test_name": "test_mem_delete_removes_memory",
-    "timestamp": "2026-03-27T06:55:10.737605+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "Could not determine memory_id from add result: {'status': 'added', 'result': {'results': [], 'relations': []}}; Mem0 may not be fully functional (table schema mismatch)",
-    "expected": "",
-    "actual": ""
-  },
-  {
-    "test_name": "test_mem0_memories_has_entries",
-    "timestamp": "2026-03-27T06:55:19.988744+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "mem0_memories table is empty; extraction may not have run or Mem0 table schema mismatch prevents storage",
-    "expected": ">0 rows",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T06:55:24.972126+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-2 (30b245e1-7e57-4b83-8b5b-fb9470b1615f) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T06:55:25.477203+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-3 (dd9fa427-b673-41b3-bf77-af2e6e6c63ab) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_tool_turn_0",
-    "timestamp": "2026-03-27T06:58:03.159960+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 0: expected tool 'get_context' not detected in response",
-    "expected": "Tool 'get_context' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_1",
-    "timestamp": "2026-03-27T06:58:03.169537+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 1: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_2",
-    "timestamp": "2026-03-27T06:58:03.177958+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 2: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_3",
-    "timestamp": "2026-03-27T06:58:03.186760+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 3: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_4",
-    "timestamp": "2026-03-27T06:58:03.195178+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 4: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_6",
-    "timestamp": "2026-03-27T06:58:03.204276+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 6: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_7",
-    "timestamp": "2026-03-27T06:58:03.213175+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 7: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_file_list",
-    "timestamp": "2026-03-27T06:58:18.062231+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['config.yml', 'te.yml'] found in response",
-    "expected": "config.yml, te.yml",
-    "actual": "The `credentials` directory contains:\n\n*   `postgres_password.txt`\n\nAnd the `prompts` directory contains:\n\n*   `archival_consolidation.md`\n*   `chunk_summarization.md`\n*   `imperator_identity.md`"
-  },
-  {
-    "test_name": "test_tool_file_write",
-    "timestamp": "2026-03-27T06:58:44.068719+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['written', 'created', 'saved', 'success', 'wrote'] found in response",
-    "expected": "written, created, saved, success, wrote",
-    "actual": "It appears I was unable to write the file. The system returned a \"Permission denied\" error. It seems I do not have the correct permissions to write to the `/data/downloads/` directory.\n\nI can try to inspect the directory's permissions to understand why. Would you like me to run `ls -la /data` to che"
-  },
-  {
-    "test_name": "test_tool_update_system_prompt",
-    "timestamp": "2026-03-27T06:58:51.183020+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "update_system_prompt not found in tools/list",
-    "expected": "update_system_prompt in tool list",
-    "actual": "['get_context', 'store_message', 'search_messages', 'search_knowledge', 'conv_create_conversation', 'conv_delete_conversation', 'conv_list_conversations', 'conv_store_message', 'conv_retrieve_context', 'conv_create_context_window', 'conv_search', 'conv_search_messages', 'conv_get_history', 'conv_search_context_windows', 'query_logs', 'search_logs', 'mem_search', 'mem_get_context', 'mem_add', 'mem_list']"
-  },
-  {
-    "test_name": "test_tool_delete_alert_instruction",
-    "timestamp": "2026-03-27T07:01:49.072368+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['deleted', 'removed', 'alert', 'instruction'] found in response",
-    "expected": "deleted, removed, alert, instruction",
-    "actual": "I was unable to complete that request within the allowed number of steps. Please try again, or break the request into smaller parts."
-  },
-  {
-    "test_name": "test_diagnostic_context_introspection",
-    "timestamp": "2026-03-27T07:03:12.798014+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "Expected keyword 'context' not found in response",
-    "expected": "context",
-    "actual": "Of course. I can do that, but I'll need the conversation's ID.\n\nCould you please provide the ID of the conversation you'd like me to inspect? If you're not sure, I can list the recent conversations fo"
-  },
-  {
-    "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-27T07:04:24.040935+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "Expected keyword 'verbose' not found in response",
-    "expected": "verbose",
-    "actual": "I am sorry, but I was unable to modify the configuration. The system returned a \"Permission denied\" error when I tried to write to `/config/config.yml`.\n\nAs we have discovered in previous interactions"
-  },
-  {
-    "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-27T07:04:24.051345+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "Expected keyword 'toggle' not found in response",
-    "expected": "toggle",
-    "actual": "I am sorry, but I was unable to modify the configuration. The system returned a \"Permission denied\" error when I tried to write to `/config/config.yml`.\n\nAs we have discovered in previous interactions"
-  },
-  {
-    "test_name": "test_verbose_logging_toggle",
-    "timestamp": "2026-03-27T07:04:39.599838+00:00",
-    "severity": "warning",
-    "category": "imperator",
-    "description": "Response does not mention verbose/toggle/logging",
-    "expected": "verbose or toggle or logging",
-    "actual": "i am sorry, but i was unable to modify the configuration. the system returned a \"permission denied\" error when i tried to write to `/config/config.yml`.\n\nas we've seen before, i do not have the necess"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T07:12:30.559859+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-1 (3552aac4-67de-413f-be53-21c5bd93a048) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T07:12:31.019170+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-2 (58a99f63-49b7-4dac-ae6b-1409c3d97227) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T07:12:31.477384+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-3 (5ebf9f8d-d8e1-4693-9edf-3a472fd26c62) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_mem_search_finds_added_memory",
-    "timestamp": "2026-03-27T07:21:54.636755+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "mem_search returned no results for a just-added memory after retries; Mem0 may not be fully functional (table schema mismatch)",
-    "expected": "",
-    "actual": ""
-  },
-  {
-    "test_name": "test_mem_list_returns_memories",
-    "timestamp": "2026-03-27T07:22:16.394183+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "Expected at least 1 memory from mem_list, got 0; Mem0 may not be fully functional (table schema mismatch)",
-    "expected": "",
-    "actual": ""
-  },
-  {
-    "test_name": "test_mem_delete_removes_memory",
-    "timestamp": "2026-03-27T07:22:28.890379+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "Could not determine memory_id from add result: {'status': 'added', 'result': {'results': [], 'relations': [{'source': 'live-test-del-8cc04d8e', 'relationship': 'has_property', 'target': 'temporary_memory_to_be_deleted'}]}}; Mem0 may not be fully functional (table schema mismatch)",
-    "expected": "",
-    "actual": ""
-  },
-  {
-    "test_name": "test_mem0_memories_has_entries",
-    "timestamp": "2026-03-27T07:22:36.294799+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "mem0_memories table is empty; extraction may not have run or Mem0 table schema mismatch prevents storage",
-    "expected": ">0 rows",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T07:22:41.056182+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-2 (e266f09e-b7e0-43f3-8a0f-0a04635efd37) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T07:22:41.501550+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-3 (90fabd0a-e40e-4db4-a9eb-5bd23a17c927) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_tool_turn_0",
-    "timestamp": "2026-03-27T07:25:17.509500+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 0: expected tool 'get_context' not detected in response",
-    "expected": "Tool 'get_context' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_1",
-    "timestamp": "2026-03-27T07:25:17.519606+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 1: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_2",
-    "timestamp": "2026-03-27T07:25:17.528228+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 2: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_3",
-    "timestamp": "2026-03-27T07:25:17.537195+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 3: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_4",
-    "timestamp": "2026-03-27T07:25:17.545755+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 4: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_6",
-    "timestamp": "2026-03-27T07:25:17.555178+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 6: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_7",
-    "timestamp": "2026-03-27T07:25:17.563881+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 7: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_file_write",
-    "timestamp": "2026-03-27T07:26:26.418388+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['written', 'created', 'saved', 'success', 'wrote'] found in response",
-    "expected": "written, created, saved, success, wrote",
-    "actual": "I attempted to write the file, but the operation failed with a \"Permission denied\" error.\n\nThis means that the directory `/data/downloads` inside the container does not have the correct write permissions for the application to create files there. You may need to check the file system permissions on "
-  },
-  {
-    "test_name": "test_tool_update_system_prompt",
-    "timestamp": "2026-03-27T07:26:34.005547+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "update_system_prompt not found in tools/list",
-    "expected": "update_system_prompt in tool list",
-    "actual": "['get_context', 'store_message', 'search_messages', 'search_knowledge', 'conv_create_conversation', 'conv_delete_conversation', 'conv_list_conversations', 'conv_store_message', 'conv_retrieve_context', 'conv_create_context_window', 'conv_search', 'conv_search_messages', 'conv_get_history', 'conv_search_context_windows', 'query_logs', 'search_logs', 'mem_search', 'mem_get_context', 'mem_add', 'mem_list']"
-  },
-  {
-    "test_name": "test_mem_search_finds_added_memory",
-    "timestamp": "2026-03-27T07:41:47.207144+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "mem_search returned no results for a just-added memory after retries; Mem0 may not be fully functional (table schema mismatch)",
-    "expected": "",
-    "actual": ""
-  },
-  {
-    "test_name": "test_mem_list_returns_memories",
-    "timestamp": "2026-03-27T07:42:09.228300+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "Expected at least 1 memory from mem_list, got 0; Mem0 may not be fully functional (table schema mismatch)",
-    "expected": "",
-    "actual": ""
-  },
-  {
-    "test_name": "test_mem_delete_removes_memory",
-    "timestamp": "2026-03-27T07:42:20.634882+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "Could not determine memory_id from add result: {'status': 'added', 'result': {'results': [], 'relations': []}}; Mem0 may not be fully functional (table schema mismatch)",
-    "expected": "",
-    "actual": ""
-  },
-  {
-    "test_name": "test_mem0_memories_has_entries",
-    "timestamp": "2026-03-27T07:42:32.370348+00:00",
-    "severity": "warning",
-    "category": "mem0",
-    "description": "mem0_memories table is empty; extraction may not have run or Mem0 table schema mismatch prevents storage",
-    "expected": ">0 rows",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T07:42:37.518379+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-2 (a3d4a7fd-9f06-46ac-a3b5-92ec2bc4ca05) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T07:42:37.950504+00:00",
-    "severity": "warning",
-    "category": "assembly",
-    "description": "Conversation conversation-3 (8693da2e-639c-4e08-bd2f-8a0a3eadc96e) has no summaries",
-    "expected": ">0 summaries",
-    "actual": "0"
-  },
-  {
-    "test_name": "test_tool_turn_0",
-    "timestamp": "2026-03-27T07:47:37.803681+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 0: expected tool 'get_context' not detected in response",
-    "expected": "Tool 'get_context' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_1",
-    "timestamp": "2026-03-27T07:47:37.813789+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 1: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_2",
-    "timestamp": "2026-03-27T07:47:37.823096+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 2: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_3",
-    "timestamp": "2026-03-27T07:47:37.832175+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 3: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_4",
-    "timestamp": "2026-03-27T07:47:37.840640+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 4: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_6",
-    "timestamp": "2026-03-27T07:47:37.849730+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 6: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_turn_7",
-    "timestamp": "2026-03-27T07:47:37.858787+00:00",
-    "severity": "info",
-    "category": "imperator",
-    "description": "Turn 7: expected tool 'search_messages' not detected in response",
-    "expected": "Tool 'search_messages' used",
-    "actual": "Tools used: none detected"
-  },
-  {
-    "test_name": "test_tool_file_list",
-    "timestamp": "2026-03-27T07:48:50.506184+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['config.yml', 'te.yml'] found in response",
-    "expected": "config.yml, te.yml",
-    "actual": "Of course. I've read the configuration file.\n\nThe system is configured to use two different embedding models:\n\n1.  **Primary Embeddings**: `gemini-embedding-001` from Google, with `1024` dimensions. This is used for conversations and documents.\n2.  **Log Embeddings**: `text-embedding-3-small` from O"
-  },
-  {
-    "test_name": "test_tool_file_write",
-    "timestamp": "2026-03-27T07:50:10.994214+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['written', 'created', 'saved', 'success', 'wrote'] found in response",
-    "expected": "written, created, saved, success, wrote",
-    "actual": "It appears I was unable to write the file. The system returned a \"Permission denied\" error for the `/data/downloads` directory.\n\nThis means the application does not have the necessary filesystem permissions to create or modify files in that specific location. I apologize for the inconvenience."
-  },
-  {
-    "test_name": "test_tool_update_system_prompt",
-    "timestamp": "2026-03-27T07:50:18.869198+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "update_system_prompt not found in tools/list",
-    "expected": "update_system_prompt in tool list",
-    "actual": "['get_context', 'store_message', 'search_messages', 'search_knowledge', 'conv_create_conversation', 'conv_delete_conversation', 'conv_list_conversations', 'conv_store_message', 'conv_retrieve_context', 'conv_create_context_window', 'conv_search', 'conv_search_messages', 'conv_get_history', 'conv_search_context_windows', 'query_logs', 'search_logs', 'mem_search', 'mem_get_context', 'mem_add', 'mem_list']"
-  },
-  {
-    "test_name": "test_tool_migrate_embeddings_dry_run",
-    "timestamp": "2026-03-27T07:55:22.120592+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['dry run', 'wipe', 'migration', 'embedding', 'dimension', 'preview', '1536'] found in response",
-    "expected": "dry run, wipe, migration, embedding, dimension, preview, 1536",
-    "actual": "It appears there are currently no models configured for the summarization slot in the `inference-models.yml` catalog. To make models available, they would need to be added to that configuration file."
-  },
-  {
-    "test_name": "test_diagnostic_context_introspection",
-    "timestamp": "2026-03-27T07:55:53.510939+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "Expected keyword 'context' not found in response",
-    "expected": "context",
-    "actual": "Of course. To do that, I'll need the ID of your current conversation. I've found a few recent conversation threads.\n\nCould you please provide the ID of the one you'd like me to inspect? Here are the m"
-  },
-  {
-    "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-27T07:57:45.373871+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "Expected keyword 'verbose' not found in response",
-    "expected": "verbose",
-    "actual": "It appears I was unable to modify the configuration. The system returned a \"Permission denied\" error for the `/config/config.yml` file.\n\nThis means the application does not have the necessary filesyst"
-  },
-  {
-    "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-27T07:57:45.383390+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "Expected keyword 'toggle' not found in response",
-    "expected": "toggle",
-    "actual": "It appears I was unable to modify the configuration. The system returned a \"Permission denied\" error for the `/config/config.yml` file.\n\nThis means the application does not have the necessary filesyst"
-  },
-  {
-    "test_name": "test_verbose_logging_toggle",
-    "timestamp": "2026-03-27T07:58:02.935302+00:00",
-    "severity": "warning",
-    "category": "imperator",
-    "description": "Response does not mention verbose/toggle/logging",
-    "expected": "verbose or toggle or logging",
-    "actual": "it appears i was unable to modify the configuration. the system returned a \"permission denied\" error for the `/config/config.yml` file.\n\nthis means the application does not have the necessary filesyst"
+    "category": "performance",
+    "description": "extract_memory has 100% error rate",
+    "expected": "<10%",
+    "actual": "100%"
   }
 ]

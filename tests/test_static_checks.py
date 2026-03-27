@@ -534,9 +534,9 @@ class TestStructuredLogging:
 
 
 class TestBuildTypeRegistry:
-    """Three build types must be registered: passthrough, standard-tiered, knowledge-enriched."""
+    """Three build types must be registered: sliding_window, tiered-summary, enriched."""
 
-    _EXPECTED_BUILD_TYPES = {"passthrough", "standard-tiered", "knowledge-enriched"}
+    _EXPECTED_BUILD_TYPES = {"sliding-window", "tiered-summary", "enriched"}
 
     def test_build_type_modules_exist(self, project_root: Path):
         """Each build type has a corresponding module in the AE package."""
@@ -551,7 +551,7 @@ class TestBuildTypeRegistry:
         assert bt_dir.is_dir(), "AE package build_types/ directory not found"
 
         expected_modules = {
-            "passthrough.py",
+            "sliding_window.py",
             "standard_tiered.py",
             "knowledge_enriched.py",
         }

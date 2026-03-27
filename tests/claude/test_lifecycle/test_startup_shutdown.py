@@ -15,7 +15,7 @@ import pytest
 _VALID_CONFIG = {
     "log_level": "INFO",
     "build_types": {
-        "passthrough": {"tier1_pct": 0, "tier2_pct": 0, "tier3_pct": 1.0},
+        "sliding-window": {"tier1_pct": 0, "tier2_pct": 0, "tier3_pct": 1.0},
     },
     "embeddings": {"embedding_dims": 768},
     "tuning": {"postgres_retry_interval_seconds": 0},

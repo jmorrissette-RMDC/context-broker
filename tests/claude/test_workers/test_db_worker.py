@@ -402,7 +402,7 @@ class TestAssemblyWorker:
             return_value=[
                 {
                     "id": window_id,
-                    "build_type": "passthrough",
+                    "build_type": "sliding-window",
                     "max_token_budget": 10000,
                     "last_assembled_at": datetime.now(timezone.utc),
                 }
@@ -438,7 +438,7 @@ class TestAssemblyWorker:
             from app.workers.db_worker import _run_assembly
 
             await _run_assembly(
-                pool, SAMPLE_CONFIG, "win-1", "conv-1", "passthrough"
+                pool, SAMPLE_CONFIG, "win-1", "conv-1", "sliding-window"
             )
 
         assembly_graph.ainvoke.assert_called_once()
@@ -458,7 +458,7 @@ class TestAssemblyWorker:
 
             # Should not raise
             await _run_assembly(
-                pool, SAMPLE_CONFIG, "win-1", "conv-1", "passthrough"
+                pool, SAMPLE_CONFIG, "win-1", "conv-1", "sliding-window"
             )
 
 
@@ -602,7 +602,7 @@ class TestCheckAssemblyNeeded:
             return_value=[
                 {
                     "id": window_id,
-                    "build_type": "passthrough",
+                    "build_type": "sliding-window",
                     "max_token_budget": 10000,
                     "last_assembled_at": datetime.now(timezone.utc),
                 }

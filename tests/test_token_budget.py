@@ -37,7 +37,7 @@ class TestResolveTokenBudget:
     @pytest.mark.asyncio
     async def test_caller_override_beats_auto(self, sample_config):
         """Caller override takes priority over auto resolution."""
-        build_type_config = sample_config["build_types"]["standard-tiered"]
+        build_type_config = sample_config["build_types"]["tiered-summary"]
         result = await resolve_token_budget(
             config=sample_config,
             build_type_config=build_type_config,
@@ -90,7 +90,7 @@ class TestResolveTokenBudget:
     @pytest.mark.asyncio
     async def test_auto_queries_provider(self, sample_config):
         """Auto mode queries the provider model list endpoint."""
-        build_type_config = sample_config["build_types"]["standard-tiered"]
+        build_type_config = sample_config["build_types"]["tiered-summary"]
         assert build_type_config["max_context_tokens"] == "auto"
 
         with patch(
@@ -110,7 +110,7 @@ class TestResolveTokenBudget:
     @pytest.mark.asyncio
     async def test_auto_fallback_on_provider_failure(self, sample_config):
         """Auto mode falls back to fallback_tokens when provider query fails."""
-        build_type_config = sample_config["build_types"]["standard-tiered"]
+        build_type_config = sample_config["build_types"]["tiered-summary"]
 
         with patch(
             "app.token_budget._query_provider_context_length",

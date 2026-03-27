@@ -162,7 +162,7 @@ class GetContextInput(BaseModel):
         ...,
         min_length=1,
         max_length=100,
-        description="Context assembly strategy (e.g., 'passthrough', 'standard-tiered', 'knowledge-enriched')",
+        description="Context assembly strategy (e.g., 'sliding-window', 'tiered-summary', 'enriched')",
     )
     budget: int = Field(
         ..., ge=1, description="Token budget — snapped to nearest bucket (4K-2M)"

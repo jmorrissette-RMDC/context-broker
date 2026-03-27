@@ -7,7 +7,7 @@ Graphs are compiled lazily on first use and cached thereafter.
 Usage:
     from app.flows.build_type_registry import get_assembly_graph, get_retrieval_graph
 
-    graph = get_assembly_graph("standard-tiered")
+    graph = get_assembly_graph("tiered-summary")
     result = await graph.ainvoke(input_state)
 """
 
@@ -35,7 +35,7 @@ def register_build_type(
     """Register a build type with its assembly and retrieval graph builders.
 
     Args:
-        name: Build type name (e.g., "passthrough", "standard-tiered").
+        name: Build type name (e.g., "sliding-window", "tiered-summary").
         assembly_builder: Callable that returns a compiled StateGraph for assembly.
         retrieval_builder: Callable that returns a compiled StateGraph for retrieval.
     """

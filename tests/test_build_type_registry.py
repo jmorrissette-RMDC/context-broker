@@ -119,15 +119,15 @@ class TestShippedBuildTypes:
     """Verify the three shipped build types are registered at import."""
 
     def test_three_shipped_types_registered(self):
-        """Scanning entry_points registers passthrough, standard-tiered, knowledge-enriched."""
+        """Scanning entry_points registers sliding_window, tiered-summary, enriched."""
         # REQ-001 §10: Build types registered via entry_points, not static imports
         from app.stategraph_registry import scan
 
         scan()
         types = list_build_types()
-        assert "passthrough" in types
-        assert "standard-tiered" in types
-        assert "knowledge-enriched" in types
+        assert "sliding-window" in types
+        assert "tiered-summary" in types
+        assert "enriched" in types
 
     def test_shipped_assembly_graphs_compile(self):
         """Each shipped build type's assembly builder produces a graph without error."""
@@ -137,7 +137,7 @@ class TestShippedBuildTypes:
         saved = dict(_compiled_cache)
         _compiled_cache.clear()
         try:
-            for name in ("passthrough", "standard-tiered", "knowledge-enriched"):
+            for name in ("sliding-window", "tiered-summary", "enriched"):
                 graph = get_assembly_graph(name)
                 assert graph is not None
         finally:
@@ -152,7 +152,7 @@ class TestShippedBuildTypes:
         saved = dict(_compiled_cache)
         _compiled_cache.clear()
         try:
-            for name in ("passthrough", "standard-tiered", "knowledge-enriched"):
+            for name in ("sliding-window", "tiered-summary", "enriched"):
                 graph = get_retrieval_graph(name)
                 assert graph is not None
         finally:

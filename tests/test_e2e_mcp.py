@@ -52,7 +52,7 @@ def _create_conversation(client: httpx.Client, title: str = "mcp-e2e") -> str:
 def _create_context_window(
     client: httpx.Client,
     conversation_id: str,
-    build_type: str = "passthrough",
+    build_type: str = "sliding-window",
 ) -> str:
     """Create a context window and return its ID."""
     resp = mcp_call(
@@ -406,7 +406,7 @@ class TestConvCreateContextWindow:
             {
                 "conversation_id": conv_id,
                 "participant_id": "test-participant",
-                "build_type": "passthrough",
+                "build_type": "sliding-window",
             },
         )
         assert resp.status_code == 200
@@ -423,7 +423,7 @@ class TestConvCreateContextWindow:
             {
                 "conversation_id": conv_id,
                 "participant_id": "test-participant",
-                "build_type": "passthrough",
+                "build_type": "sliding-window",
                 "max_tokens": 4096,
             },
         )
@@ -436,7 +436,7 @@ class TestConvCreateContextWindow:
         resp = mcp_call(
             client,
             "conv_create_context_window",
-            {"participant_id": "test", "build_type": "passthrough"},
+            {"participant_id": "test", "build_type": "sliding-window"},
         )
         assert resp.status_code == 400
 
@@ -446,7 +446,7 @@ class TestConvCreateContextWindow:
         resp = mcp_call(
             client,
             "conv_create_context_window",
-            {"conversation_id": conv_id, "build_type": "passthrough"},
+            {"conversation_id": conv_id, "build_type": "sliding-window"},
         )
         assert resp.status_code == 400
 
@@ -693,7 +693,7 @@ class TestConvSearchContextWindows:
         resp = mcp_call(
             client,
             "conv_search_context_windows",
-            {"build_type": "passthrough", "limit": 3},
+            {"build_type": "sliding-window", "limit": 3},
         )
         assert resp.status_code == 200
 
@@ -846,7 +846,7 @@ class TestGetContext:
         resp = mcp_call(
             client,
             "get_context",
-            {"build_type": "passthrough", "budget": 8000},
+            {"build_type": "sliding-window", "budget": 8000},
         )
         assert resp.status_code == 200
         result = extract_mcp_result(resp)
@@ -861,7 +861,7 @@ class TestGetContext:
         resp1 = mcp_call(
             client,
             "get_context",
-            {"build_type": "passthrough", "budget": 8000},
+            {"build_type": "sliding-window", "budget": 8000},
         )
         result1 = extract_mcp_result(resp1)
         conv_id = result1["conversation_id"]
@@ -870,7 +870,7 @@ class TestGetContext:
         resp2 = mcp_call(
             client,
             "get_context",
-            {"build_type": "passthrough", "budget": 8000, "conversation_id": conv_id},
+            {"build_type": "sliding-window", "budget": 8000, "conversation_id": conv_id},
         )
         assert resp2.status_code == 200
         result2 = extract_mcp_result(resp2)
@@ -881,7 +881,7 @@ class TestGetContext:
         resp = mcp_call(
             client,
             "get_context",
-            {"build_type": "passthrough", "budget": 8000},
+            {"build_type": "sliding-window", "budget": 8000},
         )
         assert resp.status_code == 200
         # The snapping is internal — we can verify by checking
@@ -907,7 +907,7 @@ class TestGetContext:
         resp = mcp_call(client, "get_context", {"budget": 8000})
         assert resp.status_code == 400
 
-        resp = mcp_call(client, "get_context", {"build_type": "passthrough"})
+        resp = mcp_call(client, "get_context", {"build_type": "sliding-window"})
         assert resp.status_code == 400
 
 
@@ -920,7 +920,7 @@ class TestStoreMessageCore:
         resp = mcp_call(
             client,
             "get_context",
-            {"build_type": "passthrough", "budget": 8000},
+            {"build_type": "sliding-window", "budget": 8000},
         )
         conv_id = extract_mcp_result(resp)["conversation_id"]
 
@@ -943,7 +943,7 @@ class TestStoreMessageCore:
         resp = mcp_call(
             client,
             "get_context",
-            {"build_type": "passthrough", "budget": 8000, "conversation_id": conv_id},
+            {"build_type": "sliding-window", "budget": 8000, "conversation_id": conv_id},
         )
         result = extract_mcp_result(resp)
         assert len(result["context"]) > 0

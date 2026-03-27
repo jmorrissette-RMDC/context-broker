@@ -184,9 +184,9 @@ def test_a4():
         resp = client.post(CB_MCP_URL, json=payload, timeout=10)
         body = resp.json()
     tools_text = json.dumps(body)
-    assert "passthrough" in tools_text, "passthrough not in tool list"
-    assert "standard-tiered" in tools_text, "standard-tiered not in tool list"
-    assert "knowledge-enriched" in tools_text, "knowledge-enriched not in tool list"
+    assert "sliding-window" in tools_text, "sliding_window not in tool list"
+    assert "tiered-summary" in tools_text, "tiered-summary not in tool list"
+    assert "enriched" in tools_text, "enriched not in tool list"
 
 
 @test("A5: Imperator available via chat endpoint")
@@ -264,7 +264,7 @@ def test_b5():
     # Read current max_iterations from te.yml, verify it's reflected in behavior
     # We can't easily test model switching without cost, but we CAN verify
     # the config file is being read by checking get_context works with current build_type
-    result = mcp_call("get_context", {"build_type": "passthrough", "budget": 4096})
+    result = mcp_call("get_context", {"build_type": "sliding-window", "budget": 4096})
     assert "conversation_id" in result, f"get_context failed: {result}"
 
 
@@ -319,7 +319,7 @@ def test_c3():
     result = mcp_call(
         "get_context",
         {
-            "build_type": "passthrough",
+            "build_type": "sliding-window",
             "budget": 4096,
             "conversation_id": conv_id,
         },
@@ -407,7 +407,7 @@ def test_e1():
     reset_small()
     conv = mcp_call(
         "conv_create_conversation",
-        {"title": "e1-passthrough", "flow_id": "test", "user_id": "test"},
+        {"title": "e1-sliding_window", "flow_id": "test", "user_id": "test"},
     )
     conv_id = conv["conversation_id"]
     mcp_call(
@@ -415,26 +415,26 @@ def test_e1():
         {
             "conversation_id": conv_id,
             "role": "user",
-            "content": "Unique passthrough test message XYZ123",
+            "content": "Unique sliding_window test message XYZ123",
             "sender": "test",
         },
     )
     time.sleep(2)
     result = mcp_call(
         "get_context",
-        {"build_type": "passthrough", "budget": 4096, "conversation_id": conv_id},
+        {"build_type": "sliding-window", "budget": 4096, "conversation_id": conv_id},
     )
     context = result.get("context", [])
     assert any(
         "XYZ123" in str(m) for m in context
-    ), "Verbatim message not found in passthrough context"
+    ), "Verbatim message not found in sliding_window context"
 
 
 @test("E2: search_messages returns results with embeddings")
 def test_e2():
     test_e2._group = "GroupE"
     time.sleep(5)  # Wait for embedding from E1
-    result = mcp_call("search_messages", {"query": "Unique passthrough test message"})
+    result = mcp_call("search_messages", {"query": "Unique sliding_window test message"})
     assert len(result.get("messages", [])) > 0, "Search returned no results"
 
 
@@ -452,7 +452,7 @@ def test_e3():
         return
     result = mcp_call(
         "get_context",
-        {"build_type": "passthrough", "budget": 4096, "conversation_id": conv_id},
+        {"build_type": "sliding-window", "budget": 4096, "conversation_id": conv_id},
     )
     total = result.get("total_tokens", 0)
     # 85% of 4096 = 3481

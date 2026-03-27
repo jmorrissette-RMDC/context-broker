@@ -124,7 +124,7 @@ tests/claude/
 | B | test_phase_b_core_tools.py | 11 | get_context, store_message, search_messages, search_knowledge |
 | C | test_phase_c_management.py | 23 | All conv_*, mem_*, imperator_chat, logs, install |
 | D | test_phase_d_workers.py | 9 | Pipeline verification: embeddings, extraction, assembly, logs |
-| E | test_phase_e_build_types.py | 10 | passthrough, standard-tiered, knowledge-enriched, utilization |
+| E | test_phase_e_build_types.py | 10 | sliding-window, tiered-summary, enriched, utilization |
 | F | test_phase_f_imperator.py | 15 | Phase 2 multi-turn conversation (10 turns) |
 | G | test_phase_g_imperator_tools.py | 9 | Phase 3 diagnostic, search, admin prompts |
 | H | test_phase_h_resilience.py | 11 | Hot-reload, load, budget snapping, roundtrip, validation |

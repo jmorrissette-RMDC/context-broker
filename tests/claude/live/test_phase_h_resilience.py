@@ -126,13 +126,13 @@ class TestContextBudget:
         """get_context with budget=5000 snaps to nearest bucket and succeeds.
 
         Auto-creates a fresh conversation (no conversation_id) to avoid
-        context window state issues with passthrough on loaded conversations.
+        context window state issues with sliding_window on loaded conversations.
         """
         resp = mcp_call(
             http_client,
             "get_context",
             {
-                "build_type": "passthrough",
+                "build_type": "sliding-window",
                 "budget": 5000,
             },
         )
@@ -146,13 +146,13 @@ class TestContextBudget:
         """get_context with budget=100000 snaps to nearest bucket and succeeds.
 
         Auto-creates a fresh conversation (no conversation_id) to avoid
-        context window state issues with passthrough on loaded conversations.
+        context window state issues with sliding_window on loaded conversations.
         """
         resp = mcp_call(
             http_client,
             "get_context",
             {
-                "build_type": "passthrough",
+                "build_type": "sliding-window",
                 "budget": 100000,
             },
         )
@@ -170,9 +170,9 @@ class TestStoreRetrieve:
     """Test storing and retrieving messages."""
 
     def test_store_retrieve_roundtrip(self, http_client):
-        """Store a message, retrieve via get_context (standard-tiered), verify it appears.
+        """Store a message, retrieve via get_context (tiered-summary), verify it appears.
 
-        Uses standard-tiered instead of passthrough to avoid context window
+        Uses tiered-summary instead of sliding_window to avoid context window
         state issues.  Creates a fresh conversation for isolation.
         """
         unique_marker = f"roundtrip-marker-{uuid.uuid4().hex[:8]}"
@@ -199,13 +199,13 @@ class TestStoreRetrieve:
         )
         assert resp.status_code == 200, f"store_message failed: {resp.text}"
 
-        # Retrieve using standard-tiered
+        # Retrieve using tiered-summary
         resp = mcp_call(
             http_client,
             "get_context",
             {
                 "conversation_id": conv_id,
-                "build_type": "standard-tiered",
+                "build_type": "tiered-summary",
                 "budget": 16000,
             },
         )

@@ -13,7 +13,7 @@ imperator:
   api_key_env: GOOGLE_API_KEY
 
   system_prompt: imperator_identity
-  build_type: standard-tiered
+  build_type: tiered-summary
   max_context_tokens: auto
   participant_id: imperator
   admin_tools: true

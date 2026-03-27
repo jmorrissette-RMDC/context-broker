@@ -27,9 +27,9 @@ CONV_ID = "11111111-1111-1111-1111-111111111111"
 
 @pytest.fixture
 def assembly_config(sample_config):
-    """Config for assembly tests with standard-tiered build type."""
+    """Config for assembly tests with tiered-summary build type."""
     cfg = dict(sample_config)
-    cfg["build_types"]["standard-tiered"] = {
+    cfg["build_types"]["tiered-summary"] = {
         "tier1_pct": 0.08,
         "tier2_pct": 0.20,
         "tier3_pct": 0.72,
@@ -47,7 +47,7 @@ def assembly_config(sample_config):
 @pytest.fixture
 def build_type_config(assembly_config):
     """Standard-tiered build type config."""
-    return assembly_config["build_types"]["standard-tiered"]
+    return assembly_config["build_types"]["tiered-summary"]
 
 
 def _make_message(seq, content="Hello", role="user", sender="alice", token_count=None):
@@ -96,7 +96,7 @@ class TestBudgetGuard:
             "context_window_id": WINDOW_ID,
             "conversation_id": CONV_ID,
             "config": assembly_config,
-            "build_type_config": assembly_config["build_types"]["standard-tiered"],
+            "build_type_config": assembly_config["build_types"]["tiered-summary"],
             "chunks": chunks,
             "all_messages": [_make_message(i) for i in range(200)],
             "max_token_budget": 8192,
@@ -142,7 +142,7 @@ class TestBudgetGuard:
             "context_window_id": WINDOW_ID,
             "conversation_id": CONV_ID,
             "config": assembly_config,
-            "build_type_config": assembly_config["build_types"]["standard-tiered"],
+            "build_type_config": assembly_config["build_types"]["tiered-summary"],
             "chunks": chunks,
             "all_messages": [_make_message(i) for i in range(200)],
             "max_token_budget": 8192,
@@ -240,7 +240,7 @@ class TestInitialLookback:
             "context_window_id": WINDOW_ID,
             "conversation_id": CONV_ID,
             "config": assembly_config,
-            "build_type_config": assembly_config["build_types"]["standard-tiered"],
+            "build_type_config": assembly_config["build_types"]["tiered-summary"],
             "max_token_budget": 8192,
             "window": {"id": WINDOW_ID},
         }
@@ -275,7 +275,7 @@ class TestInitialLookback:
             "context_window_id": WINDOW_ID,
             "conversation_id": CONV_ID,
             "config": assembly_config,
-            "build_type_config": assembly_config["build_types"]["standard-tiered"],
+            "build_type_config": assembly_config["build_types"]["tiered-summary"],
             "max_token_budget": 8192,
             "window": {"id": WINDOW_ID},
         }
@@ -315,7 +315,7 @@ class TestTierBoundaryCalculation:
             "context_window_id": WINDOW_ID,
             "conversation_id": CONV_ID,
             "config": assembly_config,
-            "build_type_config": assembly_config["build_types"]["standard-tiered"],
+            "build_type_config": assembly_config["build_types"]["tiered-summary"],
             "max_token_budget": 8192,
             "all_messages": messages,
         }
@@ -344,7 +344,7 @@ class TestTierBoundaryCalculation:
             "context_window_id": WINDOW_ID,
             "conversation_id": CONV_ID,
             "config": assembly_config,
-            "build_type_config": assembly_config["build_types"]["standard-tiered"],
+            "build_type_config": assembly_config["build_types"]["tiered-summary"],
             "max_token_budget": 8192,
             "all_messages": messages,
         }

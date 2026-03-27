@@ -23,7 +23,7 @@ def base_config():
     return {
         "imperator": {
             "system_prompt": "imperator_identity",
-            "build_type": "standard-tiered",
+            "build_type": "tiered-summary",
             "max_context_tokens": 4096,
         },
         "tuning": {

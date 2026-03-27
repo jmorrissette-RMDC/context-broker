@@ -20,7 +20,7 @@ from context_broker_ae.build_types.tier_scaling import (
 
 
 def _base_config() -> dict:
-    """Return a standard-tiered build type config for testing."""
+    """Return a tiered-summary build type config for testing."""
     return {
         "tier1_pct": 0.08,
         "tier2_pct": 0.20,
@@ -198,7 +198,7 @@ class TestEdgeCases:
         # tier3 stays at 1.0
         assert abs(result["tier3_pct"] - 1.0) < 1e-6
 
-    def test_missing_tier_keys_medium_range_passthrough(self):
+    def test_missing_tier_keys_medium_range_sliding_window(self):
         """In the medium range (no adjustment), missing tier keys are harmless."""
         config = {"tier1_pct": 0, "tier2_pct": 0, "tier3_pct": 0.5}
         result = scale_tier_percentages(config, 100)

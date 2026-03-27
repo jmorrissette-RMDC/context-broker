@@ -50,7 +50,7 @@ class TestLoadConfig:
         config_data = {
             "log_level": "INFO",
             "llm": {"model": "gpt-4o-mini"},
-            "build_types": {"standard-tiered": {"tier3_pct": 0.72}},
+            "build_types": {"tiered-summary": {"tier3_pct": 0.72}},
         }
         config_file = tmp_path / "config.yml"
         config_file.write_text(yaml.dump(config_data))
@@ -146,7 +146,7 @@ class TestGetBuildTypeConfig:
 
     def test_returns_config(self, sample_config):
         """Returns the correct build type configuration dict."""
-        bt = get_build_type_config(sample_config, "standard-tiered")
+        bt = get_build_type_config(sample_config, "tiered-summary")
         assert bt["tier3_pct"] == 0.72
         assert bt["fallback_tokens"] == 8192
 
@@ -157,8 +157,8 @@ class TestGetBuildTypeConfig:
 
     def test_percentages_sum_valid(self, sample_config):
         """Does not raise when tier percentages sum to <= 1.0."""
-        # standard-tiered: 0.08 + 0.20 + 0.72 = 1.0
-        bt = get_build_type_config(sample_config, "standard-tiered")
+        # tiered-summary: 0.08 + 0.20 + 0.72 = 1.0
+        bt = get_build_type_config(sample_config, "tiered-summary")
         assert bt is not None
 
     def test_percentages_sum_exceeds_raises(self):
@@ -192,8 +192,8 @@ class TestGetBuildTypeConfig:
             get_build_type_config(config, "over-budget")
 
     def test_knowledge_enriched_valid(self, sample_config):
-        """knowledge-enriched type with all five pcts summing to 1.0 passes."""
-        bt = get_build_type_config(sample_config, "knowledge-enriched")
+        """enriched type with all five pcts summing to 1.0 passes."""
+        bt = get_build_type_config(sample_config, "enriched")
         assert bt["knowledge_graph_pct"] == 0.15
 
 

@@ -76,7 +76,7 @@ def _create_context_window(client: httpx.Client, conv_id: str) -> str:
         {
             "conversation_id": conv_id,
             "participant_id": f"pipeline-{uuid.uuid4().hex[:6]}",
-            "build_type": "passthrough",
+            "build_type": "sliding-window",
         },
     )
     assert resp.status_code == 200
@@ -181,7 +181,7 @@ class TestPipelineIntermediateOutputs:
             f"SELECT id, build_type FROM context_windows WHERE id = '{cw_id}'"
         )
         assert cw_id in output, f"Context window {cw_id} not found in DB: {output}"
-        assert "passthrough" in output, f"build_type mismatch: {output}"
+        assert "sliding-window" in output, f"build_type mismatch: {output}"
 
 
 # ===================================================================

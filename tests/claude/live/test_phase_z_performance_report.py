@@ -181,7 +181,7 @@ class TestPerformanceReport:
             job_stats[jt] = {**stats, "success": int(success), "errors": int(errors)}
 
         # -- Assembly by Build Type --
-        build_types = ["passthrough", "standard-tiered", "knowledge-enriched"]
+        build_types = ["sliding-window", "tiered-summary", "enriched"]
         assembly_stats = {}
         for bt in build_types:
             stats = _get_histogram_stats(

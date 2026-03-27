@@ -218,12 +218,12 @@ async def test_context_window_header_takes_priority_over_legacy(_mock_app_state)
 
 
 # ---------------------------------------------------------------------------
-# ToolMessage handling (tool_call_id passthrough)
+# ToolMessage handling (tool_call_id sliding_window)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_tool_message_passthrough(_mock_app_state):
+async def test_tool_message_sliding_window(_mock_app_state):
     """Messages with role=tool should be converted to LangChain ToolMessage
     with the correct tool_call_id."""
     captured_state = {}

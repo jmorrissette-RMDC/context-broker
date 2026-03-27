@@ -381,7 +381,7 @@ class TestCreateContextWindowInput:
         model = CreateContextWindowInput(
             conversation_id=uuid.uuid4(),
             participant_id="agent-1",
-            build_type="standard-tiered",
+            build_type="tiered-summary",
         )
         assert model.max_tokens is None
 
@@ -390,7 +390,7 @@ class TestCreateContextWindowInput:
         model = CreateContextWindowInput(
             conversation_id=uuid.uuid4(),
             participant_id="agent-1",
-            build_type="standard-tiered",
+            build_type="tiered-summary",
             max_tokens=4096,
         )
         assert model.max_tokens == 4096

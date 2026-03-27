@@ -43,7 +43,7 @@ imperator:
   system_prompt: imperator_identity
 
   # Build type for the Imperator's own context window
-  build_type: standard-tiered
+  build_type: tiered-summary
   max_context_tokens: auto
   participant_id: imperator
 

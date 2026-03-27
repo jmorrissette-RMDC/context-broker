@@ -76,7 +76,7 @@ async def log_query(
 
 @tool
 async def context_introspection(
-    conversation_id: str, build_type: str = "standard-tiered"
+    conversation_id: str, build_type: str = "tiered-summary"
 ) -> str:
     """Show the assembled context breakdown for a conversation.
 
@@ -85,7 +85,7 @@ async def context_introspection(
 
     Args:
         conversation_id: The conversation to inspect.
-        build_type: The build type to inspect (default: standard-tiered).
+        build_type: The build type to inspect (default: tiered-summary).
     """
     import uuid as _uuid
 

@@ -138,7 +138,7 @@ def create_context_window(http_client):
     def _create(
         conversation_id: str,
         participant_id: str = "e2e-test-participant",
-        build_type: str = "passthrough",
+        build_type: str = "sliding-window",
         max_tokens: int | None = None,
     ) -> str:
         args = {

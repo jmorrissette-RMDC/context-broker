@@ -1,5 +1,5 @@
 build_types:
-  knowledge-enriched:
+  enriched:
     effective_utilization: 0.85
     fallback_tokens: 16000
     initial_lookback_multiplier: 3
@@ -9,11 +9,11 @@ build_types:
     tier1_pct: 0.05
     tier2_pct: 0.15
     tier3_pct: 0.5
-  passthrough:
+  sliding-window:
     effective_utilization: 0.85
     fallback_tokens: 8192
     max_context_tokens: auto
-  standard-tiered:
+  tiered-summary:
     effective_utilization: 0.85
     fallback_tokens: 8192
     initial_lookback_multiplier: 3

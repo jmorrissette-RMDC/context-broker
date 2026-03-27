@@ -6,7 +6,7 @@ imperator:
   purpose: >
     I manage conversations, assemble context windows, extract knowledge
     into a graph, and help users understand and operate the Context Broker.
-  build_type: standard-tiered
+  build_type: tiered-summary
   max_context_tokens: auto
   participant_id: imperator
   admin_tools: false
@@ -36,16 +36,16 @@ reranker:
   top_n: 10
 
 build_types:
-  passthrough:
+  sliding-window:
     max_context_tokens: auto
     fallback_tokens: 8192
-  standard-tiered:
+  tiered-summary:
     tier1_pct: 0.08
     tier2_pct: 0.20
     tier3_pct: 0.72
     max_context_tokens: auto
     fallback_tokens: 8192
-  knowledge-enriched:
+  enriched:
     tier1_pct: 0.05
     tier2_pct: 0.15
     tier3_pct: 0.50

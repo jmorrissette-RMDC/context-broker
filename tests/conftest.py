@@ -49,21 +49,21 @@ def sample_config() -> dict:
             "provider": "none",
         },
         "build_types": {
-            "passthrough": {
+            "sliding-window": {
                 "tier1_pct": 0.0,
                 "tier2_pct": 0.0,
                 "tier3_pct": 1.0,
                 "max_context_tokens": 8192,
                 "fallback_tokens": 4096,
             },
-            "standard-tiered": {
+            "tiered-summary": {
                 "tier1_pct": 0.08,
                 "tier2_pct": 0.20,
                 "tier3_pct": 0.72,
                 "max_context_tokens": "auto",
                 "fallback_tokens": 8192,
             },
-            "knowledge-enriched": {
+            "enriched": {
                 "tier1_pct": 0.05,
                 "tier2_pct": 0.15,
                 "tier3_pct": 0.50,
@@ -74,7 +74,7 @@ def sample_config() -> dict:
             },
         },
         "imperator": {
-            "build_type": "standard-tiered",
+            "build_type": "tiered-summary",
             "max_context_tokens": "auto",
             "admin_tools": False,
         },

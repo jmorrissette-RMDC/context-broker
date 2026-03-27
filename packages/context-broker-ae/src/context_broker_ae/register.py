@@ -16,7 +16,7 @@ def register() -> dict:
     - build_types: dict of (assembly_builder, retrieval_builder) pairs
     - flows: dict of flow_name -> builder callable
     """
-    # Build types
+    # Build types — Python module names use underscores, config names use hyphens
     from context_broker_ae.build_types.passthrough import (
         build_passthrough_assembly,
         build_passthrough_retrieval,
@@ -58,16 +58,17 @@ def register() -> dict:
 
     return {
         "build_types": {
-            "passthrough": (
+            # Config name → (assembly_builder, retrieval_builder)
+            "sliding-window": (
                 build_passthrough_assembly,
                 build_passthrough_retrieval,
             ),
-            "standard-tiered": (
+            "tiered-summary": (
                 build_standard_tiered_assembly,
                 build_standard_tiered_retrieval,
             ),
-            "knowledge-enriched": (
-                # Reuses standard-tiered assembly; only retrieval differs
+            "enriched": (
+                # Reuses tiered-summary assembly; only retrieval differs
                 build_standard_tiered_assembly,
                 build_knowledge_enriched_retrieval,
             ),

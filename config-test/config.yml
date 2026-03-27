@@ -39,12 +39,12 @@ log_embeddings:
   api_key_env: OPENAI_API_KEY
 
 build_types:
-  passthrough:
+  sliding-window:
     max_context_tokens: auto
     fallback_tokens: 8192
     effective_utilization: 0.85
 
-  standard-tiered:
+  tiered-summary:
     tier1_pct: 0.08
     tier2_pct: 0.20
     tier3_pct: 0.72
@@ -53,7 +53,7 @@ build_types:
     effective_utilization: 0.85
     initial_lookback_multiplier: 3
 
-  knowledge-enriched:
+  enriched:
     tier1_pct: 0.05
     tier2_pct: 0.15
     tier3_pct: 0.50

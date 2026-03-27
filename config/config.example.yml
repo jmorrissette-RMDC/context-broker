@@ -117,12 +117,12 @@ reranker:
 
 build_types:
 
-  passthrough:
+  sliding-window:
     max_context_tokens: auto
     fallback_tokens: 8192
     effective_utilization: 0.85     # D-10: models degrade past ~85% fill
 
-  standard-tiered:
+  tiered-summary:
     tier1_pct: 0.08
     tier2_pct: 0.20
     tier3_pct: 0.72
@@ -131,7 +131,7 @@ build_types:
     effective_utilization: 0.85
     initial_lookback_multiplier: 3  # D-09: how far back to look for initial assembly
 
-  knowledge-enriched:
+  enriched:
     tier1_pct: 0.05
     tier2_pct: 0.15
     tier3_pct: 0.50

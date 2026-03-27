@@ -187,7 +187,7 @@ class TestGetContext:
         resp = mcp_call(
             http_client,
             "get_context",
-            {"build_type": "passthrough", "budget": 8000},
+            {"build_type": "sliding-window", "budget": 8000},
         )
         assert resp.status_code == 200
         result = extract_mcp_result(resp)
@@ -202,7 +202,7 @@ class TestGetContext:
         resp = mcp_call(
             http_client,
             "get_context",
-            {"build_type": "passthrough", "budget": 5000},
+            {"build_type": "sliding-window", "budget": 5000},
         )
         assert resp.status_code == 200
         result = extract_mcp_result(resp)
@@ -215,15 +215,15 @@ class TestGetContext:
     ):
         """B-04c: get_context on a loaded conversation returns context messages.
 
-        Uses standard-tiered instead of passthrough because loaded
+        Uses tiered-summary instead of sliding_window because loaded
         conversations (created via store_message) may lack the context
-        window state that passthrough requires.
+        window state that sliding_window requires.
         """
         resp = mcp_call(
             http_client,
             "get_context",
             {
-                "build_type": "standard-tiered",
+                "build_type": "tiered-summary",
                 "budget": 16000,
                 "conversation_id": any_conversation_id,
             },
@@ -247,15 +247,15 @@ class TestGetContextBuildTypes:
 
     @pytest.mark.parametrize(
         "build_type",
-        ["passthrough", "standard-tiered", "knowledge-enriched"],
+        ["sliding-window", "tiered-summary", "enriched"],
     )
     def test_build_type_works(self, http_client, any_conversation_id, build_type):
         """B-05: get_context succeeds for each build type.
 
-        For passthrough and knowledge-enriched, auto-create a fresh
+        For sliding_window and enriched, auto-create a fresh
         conversation (no conversation_id) because loaded conversations
         may lack the context window state that these build types need.
-        standard-tiered works with the pre-loaded conversation.
+        tiered-summary works with the pre-loaded conversation.
         """
         # Auto-create for all build types to avoid retrieval errors
         # on large loaded conversations that may not have completed assembly

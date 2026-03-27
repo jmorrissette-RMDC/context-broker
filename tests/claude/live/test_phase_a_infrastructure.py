@@ -330,7 +330,7 @@ class TestBuildTypesInSchema:
     """A-11: Three build types appear in the get_context tool schema."""
 
     def test_three_build_types_listed(self, http_client):
-        """A-11: get_context inputSchema enum contains passthrough, standard-tiered, knowledge-enriched."""
+        """A-11: get_context inputSchema enum contains sliding_window, tiered-summary, enriched."""
         resp = mcp_call_raw(
             http_client,
             {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
@@ -343,7 +343,7 @@ class TestBuildTypesInSchema:
 
         build_type_prop = get_context_tool["inputSchema"]["properties"]["build_type"]
         enum_values = build_type_prop.get("enum", [])
-        expected = {"passthrough", "standard-tiered", "knowledge-enriched"}
+        expected = {"sliding-window", "tiered-summary", "enriched"}
         assert expected.issubset(set(enum_values)), (
             f"Expected build types {expected} in enum, got {enum_values}"
         )

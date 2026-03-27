@@ -40,7 +40,7 @@ def _create_conversation(client, title="phase-c-test"):
     return extract_mcp_result(resp)["conversation_id"]
 
 
-def _create_context_window(client, conversation_id, build_type="passthrough"):
+def _create_context_window(client, conversation_id, build_type="sliding-window"):
     """Create a context window and return its ID."""
     resp = mcp_call(
         client,
@@ -232,7 +232,7 @@ class TestConvCreateContextWindow:
             {
                 "conversation_id": conv_id,
                 "participant_id": "test-participant-c07",
-                "build_type": "passthrough",
+                "build_type": "sliding-window",
             },
         )
         assert resp.status_code == 200

@@ -140,7 +140,7 @@ class TestStatePersistence:
             {
                 "conversation_id": conv_id,
                 "participant_id": "persist-test",
-                "build_type": "passthrough",
+                "build_type": "sliding-window",
             },
         )
         assert cw_resp.status_code == 200

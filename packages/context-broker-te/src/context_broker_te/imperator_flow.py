@@ -325,7 +325,7 @@ async def agent_node(state: ImperatorState) -> dict:
             try:
                 from app.flows.tool_dispatch import dispatch_tool
 
-                build_type = imperator_cfg.get("build_type", "standard-tiered")
+                build_type = imperator_cfg.get("build_type", "tiered-summary")
                 budget = imperator_cfg.get("max_context_tokens", 8192)
                 if not isinstance(budget, int):
                     budget = 8192

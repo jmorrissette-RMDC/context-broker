@@ -386,9 +386,9 @@ def _get_tool_list() -> list[dict]:
     except (FileNotFoundError, RuntimeError, OSError, ValueError):
         ae_config = {}
     build_type_names = list(ae_config.get("build_types", {}).keys()) or [
-        "passthrough",
-        "standard-tiered",
-        "knowledge-enriched",
+        "sliding-window",
+        "tiered-summary",
+        "enriched",
     ]
 
     from app.budget import BUDGET_BUCKETS

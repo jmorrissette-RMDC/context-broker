@@ -50,13 +50,13 @@ def sample_config():
             "model": "qwen2.5:7b",
         },
         "build_types": {
-            "passthrough": {"tier1_pct": 0, "tier2_pct": 0, "tier3_pct": 1.0},
-            "standard-tiered": {
+            "sliding-window": {"tier1_pct": 0, "tier2_pct": 0, "tier3_pct": 1.0},
+            "tiered-summary": {
                 "tier1_pct": 0.1,
                 "tier2_pct": 0.3,
                 "tier3_pct": 0.6,
             },
-            "knowledge-enriched": {
+            "enriched": {
                 "tier1_pct": 0.05,
                 "tier2_pct": 0.15,
                 "tier3_pct": 0.40,

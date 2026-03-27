@@ -1,6 +1,6 @@
 """Phase E: Context assembly build-type verification.
 
-Tests passthrough, standard-tiered, and knowledge-enriched build types
+Tests sliding_window, tiered-summary, and enriched build types
 against loaded conversation data.
 """
 
@@ -46,17 +46,17 @@ def _get_context(http_client, conversation_id, build_type, budget):
 class TestPassthrough:
     """Passthrough build type returns raw messages without tiering."""
 
-    def test_passthrough_returns_messages(self, http_client):
+    def test_sliding_window_returns_messages(self, http_client):
         """Passthrough get_context should return messages.
 
         Auto-creates a fresh conversation (no conversation_id) because
         loaded conversations may lack the context window state that
-        passthrough needs.
+        sliding_window needs.
         """
         resp = mcp_call(
             http_client,
             "get_context",
-            {"build_type": "passthrough", "budget": 8192},
+            {"build_type": "sliding-window", "budget": 8192},
             timeout=120,
         )
         assert resp.status_code == 200, f"get_context failed: {resp.text}"
@@ -66,17 +66,17 @@ class TestPassthrough:
         )
         messages = result.get("messages", result.get("context", []))
         assert isinstance(messages, list), (
-            f"Expected list for passthrough context, got {type(messages).__name__}: {list(result.keys())}"
+            f"Expected list for sliding_window context, got {type(messages).__name__}: {list(result.keys())}"
         )
         # A fresh auto-created conversation may have 0 messages; that's OK
         # as long as the call succeeded without error.
 
-    def test_passthrough_has_no_summaries(self, http_client):
+    def test_sliding_window_has_no_summaries(self, http_client):
         """Passthrough context should be simple -- no tier structure."""
         resp = mcp_call(
             http_client,
             "get_context",
-            {"build_type": "passthrough", "budget": 8192},
+            {"build_type": "sliding-window", "budget": 8192},
             timeout=120,
         )
         assert resp.status_code == 200, f"get_context failed: {resp.text}"
@@ -90,7 +90,7 @@ class TestPassthrough:
             assert not has_tiered_keys, (
                 f"Passthrough should not have tiered structure, got tiers: {list(tiers.keys())}"
             )
-        # If no tiers key at all, that's correct for passthrough
+        # If no tiers key at all, that's correct for sliding_window
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ class TestStandardTiered:
     ):
         """Standard-tiered get_context should return a tiered structure."""
         result = _get_context(
-            http_client, None, "standard-tiered", 8192
+            http_client, None, "tiered-summary", 8192
         )
         assert result, "Standard-tiered returned empty result"
         # Should have either tiers or messages
@@ -121,7 +121,7 @@ class TestStandardTiered:
     ):
         """Standard-tiered context should include tier1, tier2, tier3."""
         result = _get_context(
-            http_client, None, "standard-tiered", 8192
+            http_client, None, "tiered-summary", 8192
         )
         # Tiers may be nested under "tiers" or at top level
         tiers = result.get("tiers", {})
@@ -187,7 +187,7 @@ class TestKnowledgeEnriched:
         resp = mcp_call(
             http_client,
             "get_context",
-            {"build_type": "knowledge-enriched", "budget": 16000},
+            {"build_type": "enriched", "budget": 16000},
             timeout=120,
         )
         assert resp.status_code == 200, f"get_context failed: {resp.text}"
@@ -215,7 +215,7 @@ class TestKnowledgeEnriched:
         resp = mcp_call(
             http_client,
             "get_context",
-            {"build_type": "knowledge-enriched", "budget": 16000},
+            {"build_type": "enriched", "budget": 16000},
             timeout=120,
         )
         assert resp.status_code == 200, f"get_context failed: {resp.text}"
@@ -255,7 +255,7 @@ class TestBudgetUtilization:
         """total_tokens should not exceed 85% of the requested budget."""
         budget = 8192
         result = _get_context(
-            http_client, None, "standard-tiered", budget
+            http_client, None, "tiered-summary", budget
         )
         total_tokens = result.get("total_tokens", result.get("token_count", 0))
         if total_tokens == 0:
@@ -273,10 +273,10 @@ class TestBudgetUtilization:
         """get_context with a larger budget should return more or equal content."""
         # Auto-create conversations to avoid context window conflicts
         result_small = _get_context(
-            http_client, None, "standard-tiered", 4096
+            http_client, None, "tiered-summary", 4096
         )
         result_large = _get_context(
-            http_client, None, "standard-tiered", 16000
+            http_client, None, "tiered-summary", 16000
         )
 
         def _content_size(r):
@@ -323,7 +323,7 @@ class TestContextWindowRetrieval:
             {
                 "conversation_id": any_conversation_id,
                 "participant_id": f"test-e-retrieve-{_uuid.uuid4().hex[:6]}",
-                "build_type": "standard-tiered",
+                "build_type": "tiered-summary",
             },
             timeout=60,
         )
