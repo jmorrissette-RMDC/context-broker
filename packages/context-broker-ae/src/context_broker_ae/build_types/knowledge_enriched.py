@@ -292,6 +292,9 @@ async def ke_load_recent_messages(state: KnowledgeEnrichedRetrievalState) -> dic
 async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -> dict:
     """Retrieve semantically similar messages via pgvector.
 
+    V2: Uses state["query"] (user's current prompt) when available.
+    Falls back to recent messages for backward compatibility.
+
     G5-22a: Semantic retrieval may surface messages already compressed into
     summaries. This is a known and accepted trade-off.
     """
@@ -306,15 +309,18 @@ async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -
 
     config = state["config"]
 
-    # Build query from recent messages
-    query_trunc = get_tuning(config, "query_truncation_chars", 200)
-    recent_text = " ".join(
-        (m.get("content") or "")[:query_trunc] for m in state["recent_messages"][-3:]
-    )
+    # V2: Use the user's query for semantic search when provided
+    query_text = state.get("query")
+    if not query_text:
+        # Backward compatibility: build query from recent messages
+        query_trunc = get_tuning(config, "query_truncation_chars", 200)
+        query_text = " ".join(
+            (m.get("content") or "")[:query_trunc] for m in state["recent_messages"][-3:]
+        )
 
     try:
         embeddings_model = get_embeddings_model(config)
-        query_embedding = await embeddings_model.aembed_query(recent_text)
+        query_embedding = await embeddings_model.aembed_query(query_text)
     except (openai.APIError, httpx.HTTPError, ValueError) as exc:
         _log.warning("Semantic retrieval: embedding failed: %s", exc)
         return {"semantic_messages": []}
@@ -365,21 +371,28 @@ async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -
 
 
 async def ke_inject_knowledge_graph(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Retrieve knowledge graph facts via Mem0."""
+    """Retrieve knowledge graph facts via Mem0.
+
+    V2: Uses state["query"] (user's current prompt) when available.
+    Falls back to recent messages for backward compatibility.
+    """
     build_type_config = state["build_type_config"]
     kg_pct = build_type_config.get("knowledge_graph_pct", 0)
 
     if not kg_pct or kg_pct <= 0:
         return {"knowledge_graph_facts": []}
 
-    if not state.get("recent_messages"):
+    if not state.get("recent_messages") and not state.get("query"):
         return {"knowledge_graph_facts": []}
 
     config = state["config"]
 
-    recent_text = " ".join(
-        (m.get("content") or "")[:500] for m in state["recent_messages"][-5:]
-    )
+    # V2: Use the user's query when provided
+    search_text = state.get("query")
+    if not search_text:
+        search_text = " ".join(
+            (m.get("content") or "")[:500] for m in state["recent_messages"][-5:]
+        )
 
     try:
         from context_broker_ae.memory.mem0_client import get_mem0_client
@@ -392,7 +405,7 @@ async def ke_inject_knowledge_graph(state: KnowledgeEnrichedRetrievalState) -> d
         results = await loop.run_in_executor(
             None,
             lambda: mem0.search(
-                recent_text,
+                search_text,
                 user_id=state["window"].get("participant_id", "default"),
                 limit=10,
             ),
@@ -493,6 +506,17 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
             cumulative_tokens += _estimate_tokens(content)
             messages.append({"role": "system", "content": content})
 
+    # V2: Domain context from caller (external MAD support)
+    if state.get("domain_context"):
+        remaining = (
+            max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        )
+        domain_text = state["domain_context"][:int(remaining * 4)]  # rough char limit
+        if domain_text:
+            content = "[Domain knowledge]\n" + domain_text
+            cumulative_tokens += _estimate_tokens(content)
+            messages.append({"role": "system", "content": content})
+
     # Tier 3: Recent verbatim messages (M-08: newest first truncation)
     truncated_recent_messages: list[dict] = []
     if state.get("recent_messages"):
@@ -534,6 +558,7 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
             for m in truncated_semantic_messages
         ],
         "knowledge_graph_facts": state.get("knowledge_graph_facts", []),
+        "domain_context": state.get("domain_context", ""),
         "recent_messages": [
             {
                 "id": str(m["id"]),
