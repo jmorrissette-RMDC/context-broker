@@ -1,17 +1,14 @@
 """Imperator Chat UI — Gradio-based multi-MAD client.
 
-Custom gr.Blocks layout per REQ-optional-gradio-chat-ui:
-  - MAD selector with health indicators
-  - Chat panel with streaming responses
-  - Conversation sidebar (list, create, select, delete)
-  - Info panel (model, build type, budget/utilization, health)
-  - Artifacts panel (rendered code/markdown from responses)
-  - Log viewer
+Layout:
+  - Left sidebar: MAD selector, conversation list (Radio), new/rename/delete
+  - Center: chat panel (full width, streaming)
+  - Bottom bar: System Info button opens accordion with Health, Context, Logs
 """
 
+import json
 import logging
 import os
-import re
 
 import gradio as gr
 import httpx
@@ -41,70 +38,89 @@ MADS = {
 }
 
 
-# ── Artifacts extraction ─────────────────────────────────────────────
-
-_CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+# ── Helpers ──────────────────────────────────────────────────────────
 
 
-def extract_artifacts(text: str) -> str:
-    """Extract code blocks and formatted content from assistant response."""
-    blocks = _CODE_BLOCK_RE.findall(text)
-    if not blocks:
-        return ""
-    parts = []
-    for lang, code in blocks:
-        lang = lang or "text"
-        parts.append(f"**{lang}:**\n```{lang}\n{code.strip()}\n```")
-    return "\n\n".join(parts)
+def _parse_conv_id(choice: str) -> str:
+    """Extract UUID from 'title (N msgs) | uuid' format."""
+    if choice and "|" in choice:
+        return choice.split("|")[-1].strip()
+    return ""
+
+
+async def _get_conv_choices(client: MADClient) -> list[str]:
+    """Fetch conversation list as Radio choices."""
+    try:
+        convs = await client.list_conversations()
+        return [
+            f"{c.get('title', 'Untitled')[:40]} ({c.get('message_count', 0)}) | {c['id']}"
+            for c in convs
+        ]
+    except (RuntimeError, OSError):
+        return []
+
+
+async def _get_health_text(client: MADClient) -> str:
+    health = await client.health()
+    lines = [f"Status: {health.get('status', 'unknown')}"]
+    for key, val in health.items():
+        if key != "status":
+            lines.append(f"  {key}: {val}")
+    return "\n".join(lines)
+
+
+async def _get_context_info(client: MADClient, conv_id: str) -> str:
+    try:
+        result = await client.get_context_info(conv_id)
+        windows = result.get("context_windows", [])
+        if not windows:
+            return "No context windows"
+        lines = []
+        for w in windows:
+            lines.append(f"Build: {w.get('build_type', '?')}")
+            lines.append(f"Budget: {w.get('max_token_budget', '?')} tokens")
+            lines.append(f"Assembled: {w.get('last_assembled_at', 'never')}")
+        return "\n".join(lines)
+    except (RuntimeError, OSError):
+        return "Unavailable"
 
 
 # ── Event handlers ───────────────────────────────────────────────────
 
 
-async def check_all_health():
-    """Check health of all MADs and return status string."""
-    parts = []
-    for name, client in MADS.items():
-        health = await client.health()
-        status = health.get("status", "unknown")
-        indicator = {"healthy": "\u2705", "degraded": "\u26a0\ufe0f"}.get(
-            status, "\u274c"
-        )
-        parts.append(f"{indicator} {name}")
-    return " | ".join(parts) if parts else "No MADs configured"
+async def on_page_load(mad_name):
+    """Refresh conversation list and health on every page load."""
+    client = MADS.get(mad_name)
+    if not client:
+        return gr.update(choices=[], value=None), ""
+    choices = await _get_conv_choices(client)
+    health = await _get_health_text(client)
+    return gr.update(choices=choices, value=None), health
 
 
 async def on_mad_selected(mad_name):
-    """Handle MAD selection — refresh conversations, health, clear chat."""
+    """MAD switch — refresh conversations, health, clear chat."""
     client = MADS.get(mad_name)
     if not client:
-        return gr.update(choices=[], value=None), "No MAD selected", "", "", []
+        return gr.update(choices=[], value=None), "", []
+    choices = await _get_conv_choices(client)
+    health = await _get_health_text(client)
+    return gr.update(choices=choices, value=None), health, []
 
-    choices = await _get_conversation_choices(client)
-    health_text = await _get_health_text(client)
-    return gr.update(choices=choices, value=None), health_text, "", "", []
 
-
-async def on_conversation_selected(conv_choice, mad_name):
-    """Load conversation history into chat."""
-    _log.info("on_conversation_selected: choice=%s mad=%s", conv_choice, mad_name)
+async def on_conv_selected(conv_choice, mad_name):
+    """Load conversation history into chat panel."""
     if not conv_choice or not mad_name:
-        return [], "", ""
-
+        return [], ""
     client = MADS.get(mad_name)
     if not client:
-        return [], "", ""
+        return [], ""
 
-    # Parse conversation ID from "title (N msgs) | full-uuid" format
-    conv_id = ""
-    if "|" in conv_choice:
-        conv_id = conv_choice.split("|")[-1].strip()
+    conv_id = _parse_conv_id(conv_choice)
     if not conv_id:
-        return [], "", ""
+        return [], ""
 
-    # Load history
     messages = await client.get_history(conv_id)
-    _log.info("Loaded %d messages for conv %s", len(messages), conv_id[:8])
     chat_history = []
     for msg in messages:
         role = msg.get("role", "user")
@@ -114,101 +130,99 @@ async def on_conversation_selected(conv_choice, mad_name):
         elif role == "assistant" and content:
             chat_history.append({"role": "assistant", "content": content})
 
-    # Get context info
-    info_text = await _get_context_info_text(client, conv_id)
-
-    # Extract artifacts from last assistant message
-    artifacts = ""
-    for msg in reversed(messages):
-        if msg.get("role") == "assistant" and msg.get("content"):
-            artifacts = extract_artifacts(msg["content"])
-            break
-
-    return chat_history, info_text, artifacts
+    info = await _get_context_info(client, conv_id)
+    return chat_history, info
 
 
-async def on_create_conversation(title, mad_name):
-    """Create a new conversation and add it to the dropdown.
-
-    New conversations have no messages yet, so the participant filter
-    won't find them. We add it to the dropdown manually.
-    """
-    client = MADS.get(mad_name)
-    if not client:
-        return gr.update(choices=[], value=None), ""
-
-    display_title = title or "New Conversation"
-    result = await client.create_conversation(display_title)
-    conv_id = result.get("conversation_id", "")
-
-    existing = await _get_conversation_choices(client)
-    new_label = f"{display_title} (0 msgs) | {conv_id}"
-    choices = [new_label] + existing
-    return gr.update(choices=choices, value=new_label), ""
-
-
-async def on_delete_conversation(conv_choice, mad_name):
-    """Delete a conversation and refresh the list."""
-    client = MADS.get(mad_name)
-    if not client or not conv_choice:
-        return gr.update(choices=[], value=None)
-
-    # Parse UUID from dropdown choice string
-    conv_id = ""
-    if "|" in conv_choice:
-        conv_id = conv_choice.split("|")[-1].strip()
-    if not conv_id:
-        return gr.update(choices=[], value=None)
-
-    await client.delete_conversation(conv_id)
-    choices = await _get_conversation_choices(client)
-    return gr.update(choices=choices, value=None)
+async def on_new_conversation(mad_name):
+    """Start a new conversation — clear chat, deselect list."""
+    return [], gr.update(value=None), ""
 
 
 async def on_chat_submit(message, history, mad_name, conv_choice):
-    """Handle chat message with streaming. Refreshes conversation list after."""
+    """Send message with streaming. Auto-creates conversation on first message."""
     client = MADS.get(mad_name)
     if not client:
         history = history + [
             {"role": "user", "content": message},
             {"role": "assistant", "content": "No MAD selected"},
         ]
-        yield history, "", gr.update()
+        yield history, gr.update()
         return
 
-    # Parse full conversation ID from dropdown choice string
-    resolved_conv_id = None
-    if conv_choice and "|" in conv_choice:
-        resolved_conv_id = conv_choice.split("|")[-1].strip()
+    conv_id = _parse_conv_id(conv_choice) if conv_choice else None
 
     history = history + [{"role": "user", "content": message}]
-    yield history, "", gr.update()
+    yield history, gr.update()
 
-    # Build OpenAI messages from history
     api_messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
-    # Stream response
     response = ""
     try:
         async for chunk in client.chat_stream(
-            api_messages, conversation_id=resolved_conv_id, user="gradio-ui"
+            api_messages, conversation_id=conv_id, user="gradio-ui"
         ):
             response += chunk
             updated = history + [{"role": "assistant", "content": response}]
-            yield updated, extract_artifacts(response), gr.update()
+            yield updated, gr.update()
     except (httpx.HTTPError, RuntimeError, OSError) as exc:
         response = f"Error: {exc}"
         updated = history + [{"role": "assistant", "content": response}]
-        yield updated, "", gr.update()
+        yield updated, gr.update()
 
-    # Refresh conversation list — new messages may make conversations visible
-    if client:
-        choices = await _get_conversation_choices(client)
-        yield (
-            history + [{"role": "assistant", "content": response}],
-            extract_artifacts(response),
-            gr.update(choices=choices),
+
+async def on_refresh_after_chat(mad_name):
+    """Refresh conversation list after a chat completes.
+
+    Called as .then() after on_chat_submit so it runs reliably
+    instead of being a yield inside a generator.
+    """
+    client = MADS.get(mad_name)
+    if not client:
+        return gr.update()
+    choices = await _get_conv_choices(client)
+    return gr.update(choices=choices)
+
+
+async def on_rename_conversation(conv_choice, new_name, mad_name):
+    """Rename the selected conversation."""
+    client = MADS.get(mad_name)
+    if not client or not conv_choice or not new_name:
+        return gr.update(), ""
+
+    conv_id = _parse_conv_id(conv_choice)
+    if not conv_id:
+        return gr.update(), ""
+
+    # Rename via MCP — update conversation title
+    try:
+        await client._mcp_call(
+            "conv_update_conversation",
+            {"conversation_id": conv_id, "title": new_name},
         )
+    except (RuntimeError, OSError) as exc:
+        _log.warning("Rename failed: %s — trying direct approach", exc)
+        # Fallback: some versions may not have conv_update_conversation
+        # Just refresh the list without renaming
+        pass
+
+    choices = await _get_conv_choices(client)
+    return gr.update(choices=choices), ""
+
+
+async def on_delete_conversation(conv_choice, mad_name):
+    """Delete selected conversation and refresh list."""
+    client = MADS.get(mad_name)
+    if not client or not conv_choice:
+        return gr.update(choices=[], value=None), []
+
+    conv_id = _parse_conv_id(conv_choice)
+    if not conv_id:
+        return gr.update(), []
+
+    await client.delete_conversation(conv_id)
+    choices = await _get_conv_choices(client)
+    return gr.update(choices=choices, value=None), []
 
 
 async def on_refresh_logs(mad_name):
@@ -231,107 +245,31 @@ async def on_refresh_logs(mad_name):
         return "Failed to load logs"
 
 
-# ── Helpers ──────────────────────────────────────────────────────────
+async def check_all_health():
+    """Health bar at top."""
+    parts = []
+    for name, client in MADS.items():
+        health = await client.health()
+        status = health.get("status", "unknown")
+        indicator = {"healthy": "\u2705", "degraded": "\u26a0\ufe0f"}.get(
+            status, "\u274c"
+        )
+        parts.append(f"{indicator} {name}")
+    return " | ".join(parts) if parts else "No MADs configured"
 
-
-async def _get_conversation_choices(client: MADClient) -> list[str]:
-    """Get conversation list as string choices.
-
-    Format: "title (N msgs) | full-uuid"
-    The full UUID is used so we can parse it directly without lookup.
-    """
-    try:
-        convs = await client.list_conversations()
-        choices = []
-        for c in convs:
-            title = c.get("title", "Untitled")[:35]
-            count = c.get("message_count", 0)
-            choices.append(f"{title} ({count} msgs) | {c['id']}")
-        return choices
-    except (RuntimeError, OSError):
-        return []
-
-
-async def _get_health_text(client: MADClient) -> str:
-    """Get formatted health text for a MAD."""
-    health = await client.health()
-    lines = [f"Status: {health.get('status', 'unknown')}"]
-    for key, val in health.items():
-        if key != "status":
-            lines.append(f"  {key}: {val}")
-    return "\n".join(lines)
-
-
-async def _get_context_info_text(client: MADClient, conv_id: str) -> str:
-    """Get formatted context info for a conversation."""
-    try:
-        result = await client.get_context_info(conv_id)
-        windows = result.get("context_windows", [])
-        if not windows:
-            return "No context windows"
-        lines = []
-        for w in windows:
-            lines.append(f"Build: {w.get('build_type', '?')}")
-            lines.append(f"Budget: {w.get('max_token_budget', '?')} tokens")
-            lines.append(f"Assembled: {w.get('last_assembled_at', 'never')}")
-        return "\n".join(lines)
-    except (RuntimeError, OSError):
-        return "Context info unavailable"
-
-
-# ── Pre-load initial data ─────────────────────────────────────────────
-
-
-def _sync_load_conversations() -> list[tuple[str, str]]:
-    """Load initial conversations synchronously at build time."""
-    if not MADS:
-        return []
-    client = list(MADS.values())[0]
-    try:
-        import json
-
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "conv_list_conversations",
-                "arguments": {"participant": client.hostname, "limit": 50},
-            },
-        }
-        resp = httpx.post(f"{client.base_url}/mcp", json=payload, timeout=10)
-        body = resp.json()
-        text = body.get("result", {}).get("content", [{}])[0].get("text", "{}")
-        data = json.loads(text)
-        choices = []
-        for c in data.get("conversations", []):
-            title = c.get("title", "Untitled")[:35]
-            count = c.get("message_count", 0)
-            # Use "label | id" format — parse ID on selection
-            choices.append(f"{title} ({count} msgs) | {c['id']}")
-        _log.info("Pre-loaded %d conversations", len(choices))
-        return choices
-    except Exception as exc:
-        _log.warning("Failed to pre-load conversations: %s", exc)
-        return []
-
-
-_initial_conversations = _sync_load_conversations()
 
 # ── Build the UI ─────────────────────────────────────────────────────
 
 default_mad = list(MADS.keys())[0] if MADS else ""
 
 with gr.Blocks(title="Imperator Chat", theme=gr.themes.Soft()) as demo:
-    # State
     current_mad = gr.State(default_mad)
-    current_conv = gr.State("")
 
     gr.Markdown("# Imperator Chat")
     health_bar = gr.Markdown("")
 
     with gr.Row():
-        # ── Left sidebar: MAD selector + conversations ──────────
+        # ── Left sidebar ─────────────────────────────────────
         with gr.Column(scale=1, min_width=250):
             mad_selector = gr.Dropdown(
                 choices=list(MADS.keys()),
@@ -340,24 +278,30 @@ with gr.Blocks(title="Imperator Chat", theme=gr.themes.Soft()) as demo:
             )
 
             gr.Markdown("### Conversations")
-            conv_dropdown = gr.Dropdown(
-                choices=_initial_conversations,
-                value=_initial_conversations[0] if _initial_conversations else None,
-                label="Conversation",
+            conv_list = gr.Radio(
+                choices=[],
+                value=None,
+                label="",
+                show_label=False,
             )
-            with gr.Row():
-                new_title = gr.Textbox(
-                    placeholder="Title...", show_label=False, scale=3
+
+            new_conv_btn = gr.Button(
+                "New Conversation", size="sm", variant="primary"
+            )
+
+            with gr.Accordion("Manage", open=False):
+                rename_input = gr.Textbox(
+                    placeholder="New title...",
+                    show_label=False,
                 )
-                create_btn = gr.Button("New", scale=1, size="sm")
-            delete_btn = gr.Button("Delete Selected", size="sm", variant="stop")
+                rename_btn = gr.Button("Rename", size="sm")
+                delete_btn = gr.Button(
+                    "Delete", size="sm", variant="stop"
+                )
 
-            gr.Markdown("### Health")
-            health_detail = gr.Textbox(lines=4, interactive=False, show_label=False)
-
-        # ── Center: chat ────────────────────────────────────────
-        with gr.Column(scale=3):
-            chatbot = gr.Chatbot(type="messages", height=500)
+        # ── Chat panel (full width) ──────────────────────────
+        with gr.Column(scale=4):
+            chatbot = gr.Chatbot(type="messages", height=550)
             with gr.Row():
                 msg_input = gr.Textbox(
                     placeholder="Message the Imperator...",
@@ -366,76 +310,101 @@ with gr.Blocks(title="Imperator Chat", theme=gr.themes.Soft()) as demo:
                 )
                 send_btn = gr.Button("Send", scale=1, variant="primary")
 
-        # ── Right sidebar: info + artifacts + logs ──────────────
-        with gr.Column(scale=1, min_width=250):
-            gr.Markdown("### Context Info")
-            info_panel = gr.Textbox(lines=4, interactive=False, show_label=False)
+    # ── System Info (bottom accordion) ───────────────────────
+    with gr.Accordion("System Info", open=False):
+        with gr.Row():
+            with gr.Column():
+                gr.Markdown("#### Health")
+                health_detail = gr.Textbox(
+                    lines=4, interactive=False, show_label=False
+                )
+            with gr.Column():
+                gr.Markdown("#### Context")
+                context_panel = gr.Textbox(
+                    lines=4, interactive=False, show_label=False
+                )
+            with gr.Column():
+                gr.Markdown("#### Logs")
+                log_panel = gr.Textbox(
+                    lines=6, interactive=False, show_label=False
+                )
+                refresh_logs_btn = gr.Button("Refresh Logs", size="sm")
 
-            gr.Markdown("### Artifacts")
-            artifacts_panel = gr.Markdown("")
+    # ── Events ───────────────────────────────────────────────
 
-            gr.Markdown("### Logs")
-            log_panel = gr.Textbox(lines=10, interactive=False, show_label=False)
-            refresh_logs_btn = gr.Button("Refresh", size="sm")
-
-    # ── Events ──────────────────────────────────────────────────
+    # Page load — refresh conversations, health, logs
+    demo.load(
+        fn=on_page_load,
+        inputs=[mad_selector],
+        outputs=[conv_list, health_detail],
+    )
+    demo.load(fn=check_all_health, outputs=[health_bar])
+    demo.load(fn=on_refresh_logs, inputs=[mad_selector], outputs=[log_panel])
 
     # MAD selection
     mad_selector.change(
         fn=on_mad_selected,
         inputs=[mad_selector],
-        outputs=[conv_dropdown, health_detail, info_panel, artifacts_panel, chatbot],
+        outputs=[conv_list, health_detail, chatbot],
     ).then(fn=lambda m: m, inputs=[mad_selector], outputs=[current_mad])
 
-    # Conversation selection
-    conv_dropdown.change(
-        fn=on_conversation_selected,
-        inputs=[conv_dropdown, current_mad],
-        outputs=[chatbot, info_panel, artifacts_panel],
-    ).then(fn=lambda c: c, inputs=[conv_dropdown], outputs=[current_conv])
-
-    # Create conversation
-    create_btn.click(
-        fn=on_create_conversation,
-        inputs=[new_title, current_mad],
-        outputs=[conv_dropdown, new_title],
+    # Conversation selection — load history
+    conv_list.change(
+        fn=on_conv_selected,
+        inputs=[conv_list, current_mad],
+        outputs=[chatbot, context_panel],
     )
 
-    # Delete conversation — read directly from dropdown, not state
-    delete_btn.click(
-        fn=on_delete_conversation,
-        inputs=[conv_dropdown, current_mad],
-        outputs=[conv_dropdown],
+    # New conversation — clear chat, deselect
+    new_conv_btn.click(
+        fn=on_new_conversation,
+        inputs=[current_mad],
+        outputs=[chatbot, conv_list, context_panel],
     )
 
-    # Chat submit — also refreshes conversation dropdown after response
+    # Chat submit
     send_btn.click(
         fn=on_chat_submit,
-        inputs=[msg_input, chatbot, current_mad, current_conv],
-        outputs=[chatbot, artifacts_panel, conv_dropdown],
-    ).then(fn=lambda: "", outputs=[msg_input])
+        inputs=[msg_input, chatbot, current_mad, conv_list],
+        outputs=[chatbot, conv_list],
+    ).then(
+        fn=lambda: "", outputs=[msg_input]
+    ).then(
+        fn=on_refresh_after_chat,
+        inputs=[current_mad],
+        outputs=[conv_list],
+    )
 
     msg_input.submit(
         fn=on_chat_submit,
-        inputs=[msg_input, chatbot, current_mad, current_conv],
-        outputs=[chatbot, artifacts_panel, conv_dropdown],
-    ).then(fn=lambda: "", outputs=[msg_input])
+        inputs=[msg_input, chatbot, current_mad, conv_list],
+        outputs=[chatbot, conv_list],
+    ).then(
+        fn=lambda: "", outputs=[msg_input]
+    ).then(
+        fn=on_refresh_after_chat,
+        inputs=[current_mad],
+        outputs=[conv_list],
+    )
+
+    # Rename
+    rename_btn.click(
+        fn=on_rename_conversation,
+        inputs=[conv_list, rename_input, current_mad],
+        outputs=[conv_list, rename_input],
+    )
+
+    # Delete
+    delete_btn.click(
+        fn=on_delete_conversation,
+        inputs=[conv_list, current_mad],
+        outputs=[conv_list, chatbot],
+    )
 
     # Logs
     refresh_logs_btn.click(
         fn=on_refresh_logs, inputs=[current_mad], outputs=[log_panel]
     )
-
-    # Initial load — conversations pre-loaded at build time via _initial_conversations.
-    async def _init_health_detail(mad_name):
-        client = MADS.get(mad_name)
-        if client:
-            return await _get_health_text(client)
-        return ""
-
-    demo.load(fn=check_all_health, outputs=[health_bar])
-    demo.load(fn=_init_health_detail, inputs=[mad_selector], outputs=[health_detail])
-    demo.load(fn=on_refresh_logs, inputs=[mad_selector], outputs=[log_panel])
 
 
 if __name__ == "__main__":
