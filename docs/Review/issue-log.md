@@ -532,7 +532,7 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 
 ## Summary
 
-Updated 2026-03-27. 475 tests (315 mock + 160 live). Live: 157 passed, 5 skipped (TA-02). Mock: 315 passed.
+Updated 2026-03-27. 477 tests (315 mock + 162 live). Live: 157 passed, 5 skipped (TA-02). Mock: 315 passed.
 
 | Status | Count |
 |--------|-------|
