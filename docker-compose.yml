@@ -82,7 +82,7 @@ services:
       retries: 3
 
   context-broker-neo4j:
-    image: neo4j:5.15.0
+    image: neo4j:5.26.0
     container_name: context-broker-neo4j
     hostname: context-broker-neo4j
     restart: unless-stopped
