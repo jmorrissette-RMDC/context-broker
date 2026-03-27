@@ -130,6 +130,13 @@ services:
       - claude-test-net
     volumes:
       - ./data-test/infinity:/app/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:7997/health || exit 1"]
       interval: 15s
