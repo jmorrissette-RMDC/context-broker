@@ -216,6 +216,8 @@ async def test_domain_knowledge_seed_import_error_is_non_fatal():
         def fake_import(name, *args, **kwargs):
             if name == "context_broker_te.seed_knowledge":
                 raise ImportError("No module named 'context_broker_te'")
+            if name == "context_broker_ae.memory.mem0_client":
+                raise ImportError("Mocked out for test")
             return real_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=fake_import):
@@ -263,6 +265,8 @@ async def test_shutdown_cancels_tasks_and_closes_connections():
         def fake_import(name, *args, **kwargs):
             if name == "context_broker_te.seed_knowledge":
                 raise ImportError("nope")
+            if name == "context_broker_ae.memory.mem0_client":
+                raise ImportError("Mocked out for test")
             return real_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=fake_import):

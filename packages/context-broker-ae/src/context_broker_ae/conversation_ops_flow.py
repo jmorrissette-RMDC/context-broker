@@ -423,6 +423,11 @@ class GetContextState(TypedDict):
     conversation_id: Optional[str]  # None = create new
     config: dict
 
+    # V2: query-driven retrieval parameters (optional, backward compatible)
+    query: Optional[str]  # user's prompt — drives semantic/KG search
+    model: Optional[dict]  # caller's LLM config for distillation cache
+    domain_context: Optional[str]  # caller's domain RAG results
+
     # Resolved by flow
     context_window_id: Optional[str]
     context_messages: Optional[list]
@@ -560,6 +565,10 @@ async def retrieve_context_node(state: GetContextState) -> dict:
             "total_tokens_used": 0,
             "warnings": [],
             "error": None,
+            # V2: pass through query-driven retrieval parameters
+            "query": state.get("query"),
+            "model": state.get("model"),
+            "domain_context": state.get("domain_context"),
         }
     )
 

@@ -117,10 +117,11 @@ class TestMigration009:
 
         await mig_mod._migration_009(mock_conn)
 
-        mock_conn.execute.assert_awaited_once()
-        sql = mock_conn.execute.call_args[0][0]
-        assert "CREATE INDEX IF NOT EXISTS idx_messages_embedding" in sql
-        assert "vector(768)" in sql
+        # Migration does ALTER TABLE (type column) + CREATE INDEX = 2 calls
+        assert mock_conn.execute.await_count == 2
+        calls = [c[0][0] for c in mock_conn.execute.call_args_list]
+        assert any("ALTER TABLE" in sql and "vector(768)" in sql for sql in calls)
+        assert any("CREATE INDEX IF NOT EXISTS idx_messages_embedding" in sql for sql in calls)
 
     @pytest.mark.asyncio
     async def test_skips_index_when_no_embeddings(self, mock_conn):

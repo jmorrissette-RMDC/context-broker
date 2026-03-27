@@ -49,11 +49,16 @@ _log = logging.getLogger("context_broker.flows.build_types.knowledge_enriched")
 
 
 class KnowledgeEnrichedRetrievalState(TypedDict):
-    """State for the knowledge-enriched retrieval flow."""
+    """State for the enriched retrieval flow."""
 
     # Inputs
     context_window_id: str
     config: dict
+
+    # V2: query-driven retrieval parameters (optional, backward compatible)
+    query: Optional[str]  # user's prompt — drives semantic/KG search
+    model: Optional[dict]  # caller's LLM config for distillation cache
+    domain_context: Optional[str]  # caller's domain RAG results
 
     # Intermediate
     window: Optional[dict]

@@ -134,6 +134,10 @@ async def _dispatch_tool_inner(
                 "assembly_status": "pending",
                 "warnings": [],
                 "error": None,
+                # V2: query-driven retrieval parameters
+                "query": validated.query,
+                "model": validated.model,
+                "domain_context": validated.domain_context,
             }
         )
         if result.get("error"):

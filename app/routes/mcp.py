@@ -421,6 +421,23 @@ def _get_tool_list() -> list[dict]:
                         "format": "uuid",
                         "description": "Existing conversation ID. Omit to create a new conversation.",
                     },
+                    "query": {
+                        "type": "string",
+                        "description": "User's current prompt — drives semantic search, KG retrieval, and domain knowledge lookup for enriched build type.",
+                    },
+                    "model": {
+                        "type": "object",
+                        "description": "Caller's LLM config {base_url, model, api_key_env} for distillation cache sharing.",
+                        "properties": {
+                            "base_url": {"type": "string"},
+                            "model": {"type": "string"},
+                            "api_key_env": {"type": "string"},
+                        },
+                    },
+                    "domain_context": {
+                        "type": "string",
+                        "description": "Caller's domain-specific knowledge to fold into context distillation.",
+                    },
                 },
             },
         },

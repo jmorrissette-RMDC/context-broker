@@ -170,6 +170,20 @@ class GetContextInput(BaseModel):
     conversation_id: Optional[UUID] = Field(
         None, description="Existing conversation ID. Omit to create a new conversation."
     )
+    query: Optional[str] = Field(
+        None,
+        max_length=10000,
+        description="User's current prompt — drives semantic search, KG retrieval, and domain knowledge lookup for enriched build type.",
+    )
+    model: Optional[dict] = Field(
+        None,
+        description="Caller's LLM config {base_url, model, api_key_env} for distillation. Uses the caller's model so prompt cache is shared.",
+    )
+    domain_context: Optional[str] = Field(
+        None,
+        max_length=50000,
+        description="Caller's domain-specific knowledge to fold into context distillation. External MADs pass their own domain RAG results here.",
+    )
 
 
 class StoreMessageCoreInput(BaseModel):
