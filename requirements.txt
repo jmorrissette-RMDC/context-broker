@@ -18,6 +18,7 @@ psycopg2-binary==2.9.10
 # Memory / Knowledge graph
 mem0ai==1.0.8
 neo4j==5.27.0
+langchain-neo4j==0.3.0
 
 # Observability
 prometheus-client==0.21.1
