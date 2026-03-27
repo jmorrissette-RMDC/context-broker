@@ -3,6 +3,14 @@ Prometheus metrics registry for the Context Broker.
 
 All metrics are defined here and imported by flows and routes.
 Metrics are incremented inside StateGraph nodes, not in route handlers.
+
+Memory note (TA-01): These metrics accumulate in process memory for the
+lifetime of the container. The prometheus_client library pre-allocates
+fixed-size bucket arrays per label combination, not per observation.
+Current cardinality: ~25 tools × 2 statuses + ~5 job types × 2 statuses
++ ~3 build types ≈ 65 time series. Memory footprint is bounded at <1MB
+even after millions of requests. No eviction is needed at current scale.
+If high-cardinality labels are added in the future, revisit this.
 """
 
 from prometheus_client import Counter, Histogram, Gauge

@@ -17,6 +17,8 @@ import logging
 import time
 import uuid
 
+import asyncpg
+
 from app.config import async_load_config, get_tuning
 from app.database import get_pg_pool
 from app.utils import stable_lock_id
@@ -168,6 +170,32 @@ async def _embedding_worker(config: dict) -> None:
                 len(rows)
             )
             consecutive_failures = 0
+
+            # TA-03: Create HNSW index after first successful embedding batch.
+            # Migration 009 skips index creation on fresh deploys (no embeddings
+            # yet). We check once after the first batch and create if missing.
+            if vectors:
+                try:
+                    idx_exists = await pool.fetchval("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM pg_indexes
+                            WHERE tablename = 'conversation_messages'
+                            AND indexname = 'idx_messages_embedding'
+                        )
+                    """)
+                    if not idx_exists:
+                        dim = len(vectors[0])
+                        await pool.execute(f"""
+                            CREATE INDEX IF NOT EXISTS idx_messages_embedding
+                            ON conversation_messages
+                            USING hnsw ((embedding::vector({dim})) vector_cosine_ops)
+                        """)
+                        _log.info(
+                            "HNSW index created after first embedding batch (dim=%d)",
+                            dim,
+                        )
+                except (asyncpg.PostgresError, OSError) as exc:
+                    _log.warning("HNSW index creation deferred: %s", exc)
 
             # Assembly is handled by the separate assembly worker loop
 

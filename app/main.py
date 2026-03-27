@@ -177,6 +177,25 @@ async def lifespan(application: FastAPI):
         except (ImportError, OSError, RuntimeError) as exc:
             _log.warning("Domain knowledge seeding skipped: %s", exc)
 
+    # TA-02: Initialize Mem0 client at startup to trigger table creation.
+    # Mem0 creates its pgvector tables lazily on first use. Without this,
+    # a fresh deployment has no mem0_memories table and all extraction
+    # silently fails. A throwaway search triggers table initialization.
+    if application.state.postgres_available:
+        try:
+            from context_broker_ae.memory.mem0_client import get_mem0_client
+
+            mem0 = await get_mem0_client(config)
+            if mem0 is not None:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: mem0.search("startup_init", user_id="system", limit=1),
+                )
+                _log.info("Mem0 client initialized at startup — tables ready")
+        except (ImportError, OSError, RuntimeError) as exc:
+            _log.warning("Mem0 startup initialization skipped: %s", exc)
+
     _log.info("Context Broker startup complete")
 
     yield

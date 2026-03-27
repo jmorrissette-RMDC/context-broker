@@ -301,7 +301,7 @@ async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
             return {"error": "Mem0 client not available"}
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
+        result = await loop.run_in_executor(
             None,
             lambda: mem0.add(
                 state["extraction_text"],
@@ -310,10 +310,34 @@ async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
             ),
         )
 
+        # TA-04: Validate that mem0.add() actually persisted data.
+        # Mem0 can return without error but store nothing (e.g., tables
+        # not initialized, connection silently dropped). If the result
+        # is empty, treat it as an error so messages are NOT marked as
+        # extracted — they will be retried on the next cycle.
+        if result is None:
+            _log.warning(
+                "Memory extraction: mem0.add() returned None for conv=%s — "
+                "treating as error to prevent silent data loss",
+                state["conversation_id"],
+            )
+            return {"error": "Mem0 returned None — data may not have been persisted"}
+
+        # Check for empty results dict (Mem0 returns {"results": [...], "relations": [...]})
+        results_list = result.get("results", []) if isinstance(result, dict) else result
+        if isinstance(results_list, list) and len(results_list) == 0:
+            _log.warning(
+                "Memory extraction: mem0.add() returned empty results for conv=%s — "
+                "treating as error to prevent silent data loss",
+                state["conversation_id"],
+            )
+            return {"error": "Mem0 returned empty results — no knowledge extracted"}
+
         _log.info(
-            "Memory extraction: extracted from %d messages for conv=%s",
+            "Memory extraction: extracted from %d messages for conv=%s (result_count=%s)",
             len(state["selected_message_ids"]),
             state["conversation_id"],
+            len(results_list) if isinstance(results_list, list) else "unknown",
         )
         return {"error": None}
 
