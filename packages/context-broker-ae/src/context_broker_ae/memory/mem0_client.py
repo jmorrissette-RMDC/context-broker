@@ -99,54 +99,10 @@ async def get_mem0_client(config: dict) -> Optional[object]:
             return None
 
 
-_patches_applied = False
-_patches_lock = __import__("threading").Lock()
-
-
-def _apply_mem0_patches():
-    """Apply monkey-patches to Mem0 internals (once, thread-safe).
-
-    From Rogers Fix 2: PGVector.insert gets ON CONFLICT DO NOTHING to
-    prevent duplicate memories from aborting the Postgres transaction.
-    Without this, the first duplicate insert poisons the connection and
-    every subsequent operation fails.
-
-    Requires the unique index on mem0_memories ((payload->>'hash'), (payload->>'user_id'))
-    created by migration 016.
-    """
-    global _patches_applied
-    if _patches_applied:
-        return
-
-    with _patches_lock:
-        if _patches_applied:
-            return
-
-        try:
-            from mem0.vector_stores.pgvector import PGVector
-            from psycopg2.extras import execute_values, Json
-
-            def _dedup_insert(self, vectors, payloads=None, ids=None):
-                data = [
-                    (id_, vector, Json(payload))
-                    for id_, vector, payload in zip(ids, vectors, payloads)
-                ]
-                execute_values(
-                    self.cur,
-                    f"INSERT INTO {self.collection_name} (id, vector, payload) "
-                    f"VALUES %s "
-                    f"ON CONFLICT ((payload->>'hash'), (payload->>'user_id')) "
-                    f"DO NOTHING",
-                    data,
-                )
-                self.conn.commit()
-
-            PGVector.insert = _dedup_insert
-            _log.info("Monkey-patch applied: PGVector.insert (ON CONFLICT DO NOTHING)")
-        except (ImportError, AttributeError) as exc:
-            _log.error("Failed to patch PGVector.insert: %s", exc)
-
-        _patches_applied = True
+# Rogers Fix 2 monkey-patch removed — Mem0 1.0 handles dedup at the
+# application level via LLM-based comparison (DELETE/NOOP operations).
+# The old PGVector.insert monkey-patch was needed for 0.1.x but breaks
+# on 1.0 where the PGVector class API changed.
 
 
 def _build_mem0_instance(config: dict) -> object:
@@ -155,9 +111,6 @@ def _build_mem0_instance(config: dict) -> object:
     Uses pgvector for vector storage and Neo4j for knowledge graph.
     LLM and embeddings are configured from config.yml.
     """
-    # Apply monkey-patches before constructing any Memory instance
-    _apply_mem0_patches()
-
     from mem0 import Memory
     from mem0.configs.base import (
         EmbedderConfig,
@@ -181,7 +134,7 @@ def _build_mem0_instance(config: dict) -> object:
     neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
 
     mem_config = MemoryConfig(
-        version="v1.1",
+        # v1.0: version parameter removed (was "v1.1" in 0.1.x)
         llm=LlmConfig(
             provider="openai",
             config={
