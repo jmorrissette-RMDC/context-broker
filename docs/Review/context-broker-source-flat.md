@@ -1,24 +1,71 @@
-# Context Broker — Flattened Source Code (R7)
+# Context Broker — Complete Source Code
 
----
+## app/__init__.py
 
-`app/config.py`
+```python
+
+```
+
+## app/budget.py
+
+```python
+"""
+Token budget bucket management.
+
+Snaps requested budgets to standard buckets for efficient window sharing.
+Multiple agents with similar budgets share pre-built summaries instead of
+each triggering separate assembly work.
+"""
+
+# Standard buckets — doubling progression with 200K for common model sizes
+BUDGET_BUCKETS = [
+    4096,  # 4K
+    8192,  # 8K
+    16384,  # 16K
+    32768,  # 32K
+    65536,  # 64K
+    131072,  # 128K
+    204800,  # 200K (Anthropic Sonnet/Opus pre-1M)
+    262144,  # 256K
+    524288,  # 512K
+    1048576,  # 1M
+    2097152,  # 2M
+]
+
+# Default effective utilization — models degrade past ~85% context fill.
+# Build types apply this to calculate tier allocations.
+EFFECTIVE_UTILIZATION_DEFAULT = 0.85
+
+
+def snap_budget(requested: int) -> int:
+    """Snap a requested token budget to the nearest bucket (always up).
+
+    Returns the smallest bucket that is >= the requested value.
+    If the requested value exceeds all buckets, returns the largest bucket.
+    """
+    for bucket in BUDGET_BUCKETS:
+        if bucket >= requested:
+            return bucket
+    return BUDGET_BUCKETS[-1]
+
+```
+
+## app/config.py
 
 ```python
 """
 Configuration management for the Context Broker.
 
-Reads /config/config.yml on each call to load_config() so that
-hot-reloadable settings (inference providers, build types) take
-effect immediately without restart.
+Two config files per REQ-002 §7 (TE Configuration Separation):
+- AE config (/config/config.yml): infrastructure settings (database, workers, locks)
+- TE config (/config/te.yml): cognitive settings (inference, build types, tuning)
 
-Infrastructure settings (database connections) are read once at
-startup and cached.
+AE config is read once at startup (cached, restart required for changes).
+TE config is read on each operation (hot-reloadable, no restart needed).
 """
 
 import asyncio
 import hashlib
-import json
 import logging
 import os
 import threading
@@ -30,6 +77,7 @@ import yaml
 _log = logging.getLogger("context_broker.config")
 
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/config/config.yml")
+TE_CONFIG_PATH = os.environ.get("TE_CONFIG_PATH", "/config/te.yml")
 
 # Cached config with mtime check to avoid repeated file reads (M-11).
 # os.stat() is near-instant and avoids synchronous file I/O on every call.
@@ -67,7 +115,9 @@ def _read_and_parse_config() -> tuple[dict[str, Any], str]:
     return config, raw
 
 
-def _apply_config(config: dict[str, Any], raw: str, current_mtime: float) -> dict[str, Any]:
+def _apply_config(
+    config: dict[str, Any], raw: str, current_mtime: float
+) -> dict[str, Any]:
     """Update global cache state after a successful config read.
 
     Shared by both load_config() and async_load_config().
@@ -79,7 +129,9 @@ def _apply_config(config: dict[str, Any], raw: str, current_mtime: float) -> dic
     new_hash = hashlib.sha256(raw.encode()).hexdigest()
     with _cache_lock:
         if new_hash != _config_content_hash and _config_content_hash != "":
-            _log.info("Config file content changed — clearing LLM and embeddings caches")
+            _log.info(
+                "Config file content changed — clearing LLM and embeddings caches"
+            )
             _llm_cache.clear()
             _embeddings_cache.clear()
 
@@ -90,18 +142,11 @@ def _apply_config(config: dict[str, Any], raw: str, current_mtime: float) -> dic
 
 
 def load_config() -> dict[str, Any]:
-    """Load and return the full configuration from /config/config.yml.
+    """Load and return the AE configuration from /config/config.yml.
 
-    Uses mtime-based caching: only re-reads the file when it changes.
-    On config change, clears the LLM and embeddings caches (M-03)
-    so hot-reloaded provider settings take effect immediately.
-
-    G5-06: This function performs blocking file I/O (os.stat + open/read).
-    The mtime cache means the file is only re-read when it actually changes
-    on disk, which is rare in production. The os.stat() fast-path check is
-    near-instant for local files. Async callers (route handlers, flow nodes)
-    should use async_load_config() instead, which offloads the file read to
-    run_in_executor when a re-read is triggered.
+    Uses mtime-based caching with content hash invalidation.
+    Infrastructure settings only — for cognitive/TE settings use
+    load_te_config() or load_merged_config().
 
     Raises RuntimeError if the file cannot be read or parsed.
     """
@@ -115,10 +160,6 @@ def load_config() -> dict[str, Any]:
             "Mount /config/config.yml into the container."
         ) from exc
 
-    # CB-R3-09: Float equality on mtime is a fast-path optimisation only.
-    # If mtime changes we fall through and re-read, but actual cache
-    # invalidation is gated on the SHA-256 content hash below, so
-    # platform-level mtime precision differences are harmless.
     if _config_cache is not None and current_mtime == _config_mtime:
         return _config_cache
 
@@ -126,62 +167,232 @@ def load_config() -> dict[str, Any]:
     return _apply_config(config, raw, current_mtime)
 
 
-async def async_load_config() -> dict[str, Any]:
-    """Async wrapper for load_config().
+def load_merged_config() -> dict[str, Any]:
+    """Load and return merged AE + TE configuration.
 
-    Uses the same mtime-based cache as load_config(). The os.stat()
-    fast-path check is synchronous (near-instant for local files).
-    Only when a re-read is actually needed does it offload the file
-    read + YAML parse to run_in_executor to avoid blocking the event loop.
+    Reads both config.yml (AE) and imperator.yml (TE), merging into a
+    single dict. TE keys take precedence. This provides backward
+    compatibility — callers get a single config dict containing both
+    infrastructure and cognitive settings.
 
-    Route handlers and flow nodes should prefer this over load_config().
+    If imperator.yml does not exist, returns AE config only (graceful
+    fallback for legacy single-file deployments).
     """
-    global _config_cache, _config_mtime, _config_content_hash
-
+    ae_config = load_config()
     try:
-        current_mtime = os.stat(CONFIG_PATH).st_mtime
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            f"Configuration file not found at {CONFIG_PATH}. "
-            "Mount /config/config.yml into the container."
-        ) from exc
+        te_config = load_te_config()
+    except RuntimeError:
+        # TE config not found — legacy deployment with single config.yml
+        _log.info("No TE config found at %s — using AE config only", TE_CONFIG_PATH)
+        return ae_config
+    # Merge: AE is base, TE overlays
+    merged = {**ae_config, **te_config}
+    return merged
 
-    if _config_cache is not None and current_mtime == _config_mtime:
-        return _config_cache
+
+async def async_load_config() -> dict[str, Any]:
+    """Async wrapper that returns merged AE + TE configuration.
+
+    This is the primary config function for route handlers and flow nodes.
+    Returns the merged config so callers get both infrastructure and
+    cognitive settings in one dict.
+    """
+    ae_config = load_config()
+
+    # Fast-path: check TE config mtime without async overhead
+    try:
+        te_mtime = os.stat(TE_CONFIG_PATH).st_mtime
+    except FileNotFoundError:
+        return ae_config
+
+    if _te_config_cache is not None and te_mtime == _te_config_mtime:
+        return {**ae_config, **_te_config_cache}
 
     loop = asyncio.get_running_loop()
-    config, raw = await loop.run_in_executor(None, _read_and_parse_config)
-    return _apply_config(config, raw, current_mtime)
+    te_config, raw = await loop.run_in_executor(None, _read_and_parse_te_config)
+    te = _apply_te_config(te_config, raw, te_mtime)
+    return {**ae_config, **te}
 
 
 @lru_cache(maxsize=1)
 def load_startup_config() -> dict[str, Any]:
-    """Load configuration once at startup for infrastructure settings.
+    """Load AE configuration once at startup for infrastructure settings.
 
     Cached — changes require container restart.
     """
     return load_config()
 
 
-def get_api_key(provider_config: dict[str, Any]) -> str:
-    """Resolve an API key from the environment variable named in api_key_env.
+# ============================================================
+# TE Configuration (imperator.yml) — hot-reloadable
+# ============================================================
 
-    Returns empty string if api_key_env is not set (e.g., local Ollama).
+_te_config_cache: dict[str, Any] | None = None
+_te_config_mtime: float = 0.0
+_te_config_content_hash: str = ""
+
+
+def _read_and_parse_te_config() -> tuple[dict[str, Any], str]:
+    """Read imperator.yml from disk and return (parsed_dict, raw_text)."""
+    try:
+        with open(TE_CONFIG_PATH, encoding="utf-8") as f:
+            raw = f.read()
+        config = yaml.safe_load(raw)
+        if not isinstance(config, dict):
+            raise ValueError("te.yml must be a YAML mapping at the top level")
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"TE configuration file not found at {TE_CONFIG_PATH}. "
+            "Mount /config/te.yml into the container."
+        ) from exc
+    except yaml.YAMLError as exc:
+        raise RuntimeError(f"Failed to parse {TE_CONFIG_PATH}: {exc}") from exc
+    return config, raw
+
+
+def _apply_te_config(
+    config: dict[str, Any], raw: str, current_mtime: float
+) -> dict[str, Any]:
+    """Update TE config cache after a successful read."""
+    global _te_config_cache, _te_config_mtime, _te_config_content_hash
+
+    new_hash = hashlib.sha256(raw.encode()).hexdigest()
+    with _cache_lock:
+        if new_hash != _te_config_content_hash and _te_config_content_hash != "":
+            _log.info(
+                "TE config file content changed — clearing LLM and embeddings caches"
+            )
+            _llm_cache.clear()
+            _embeddings_cache.clear()
+
+        _te_config_cache = config
+        _te_config_mtime = current_mtime
+        _te_config_content_hash = new_hash
+    return config
+
+
+def load_te_config() -> dict[str, Any]:
+    """Load and return the TE configuration from /config/te.yml.
+
+    Uses mtime-based caching with content hash invalidation.
+    Hot-reloadable — changes take effect without restart.
+    """
+    global _te_config_cache, _te_config_mtime
+
+    try:
+        current_mtime = os.stat(TE_CONFIG_PATH).st_mtime
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"TE configuration file not found at {TE_CONFIG_PATH}. "
+            "Mount /config/te.yml into the container."
+        ) from exc
+
+    if _te_config_cache is not None and current_mtime == _te_config_mtime:
+        return _te_config_cache
+
+    config, raw = _read_and_parse_te_config()
+    return _apply_te_config(config, raw, current_mtime)
+
+
+async def async_load_te_config() -> dict[str, Any]:
+    """Async wrapper for load_te_config().
+
+    Route handlers and flow nodes should prefer this over load_te_config().
+    """
+    global _te_config_cache, _te_config_mtime
+
+    try:
+        current_mtime = os.stat(TE_CONFIG_PATH).st_mtime
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"TE configuration file not found at {TE_CONFIG_PATH}. "
+            "Mount /config/te.yml into the container."
+        ) from exc
+
+    if _te_config_cache is not None and current_mtime == _te_config_mtime:
+        return _te_config_cache
+
+    loop = asyncio.get_running_loop()
+    config, raw = await loop.run_in_executor(None, _read_and_parse_te_config)
+    return _apply_te_config(config, raw, current_mtime)
+
+
+CREDENTIALS_PATH = os.environ.get("CREDENTIALS_PATH", "/config/credentials/.env")
+
+# Cached credentials with mtime check (same pattern as config cache).
+_credentials_cache: dict[str, str] = {}
+_credentials_mtime: float = 0.0
+
+
+def _load_credentials() -> dict[str, str]:
+    """Read the credentials .env file and return a dict of key=value pairs.
+
+    Re-reads from disk when the file's mtime changes, enabling hot-reload
+    of API keys without container restart (PG-39, REQ-001 §8.3).
+    Falls back to os.environ for keys not found in the file.
+    """
+    global _credentials_cache, _credentials_mtime
+
+    try:
+        current_mtime = os.stat(CREDENTIALS_PATH).st_mtime
+    except (OSError, FileNotFoundError):
+        # No credentials file — fall back to environment only
+        return {}
+
+    if current_mtime == _credentials_mtime and _credentials_cache:
+        return _credentials_cache
+
+    creds: dict[str, str] = {}
+    try:
+        with open(CREDENTIALS_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    creds[key.strip()] = value.strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        _log.warning("Failed to read credentials file %s: %s", CREDENTIALS_PATH, exc)
+        return _credentials_cache  # Return stale cache rather than nothing
+
+    _credentials_cache = creds
+    _credentials_mtime = current_mtime
+    return creds
+
+
+def get_api_key(provider_config: dict[str, Any]) -> str:
+    """Resolve an API key for a provider.
+
+    Every inference slot should specify api_key_env naming the environment
+    variable that holds its API key. No defaults, no magic — explicit is
+    better than implicit.
+
+    Reads from the mounted credentials file first (hot-reloadable),
+    then falls back to environment variables. This allows API keys to
+    be changed without container restart (PG-39, REQ-001 §8.3).
+
+    If api_key_env is absent or empty, returns empty string (keyless
+    providers like Ollama).
     """
     env_var_name = provider_config.get("api_key_env", "")
     if not env_var_name:
         return ""
-    api_key = os.environ.get(env_var_name, "")
-    if not api_key:
-        _log.warning(
-            "API key environment variable '%s' is not set or empty", env_var_name
-        )
-    return api_key
+    # Try credentials file first (hot-reloadable)
+    creds = _load_credentials()
+    if env_var_name in creds:
+        return creds[env_var_name]
+    # Fall back to environment variable
+    return os.environ.get(env_var_name, "")
 
 
-def get_build_type_config(config: dict[str, Any], build_type_name: str) -> dict[str, Any]:
+def get_build_type_config(
+    config: dict[str, Any], build_type_name: str
+) -> dict[str, Any]:
     """Return the configuration for a named build type.
 
+    Reads from TE config (imperator.yml). The config parameter may be
+    either the full TE config or a legacy combined config — checks both.
     Raises ValueError if the build type is not defined.
     """
     build_types = config.get("build_types", {})
@@ -193,7 +404,13 @@ def get_build_type_config(config: dict[str, Any], build_type_name: str) -> dict[
     bt_config = build_types[build_type_name]
 
     # Validate that ALL tier percentages sum to <= 1.0
-    pct_keys = ["tier1_pct", "tier2_pct", "tier3_pct", "semantic_retrieval_pct", "knowledge_graph_pct"]
+    pct_keys = [
+        "tier1_pct",
+        "tier2_pct",
+        "tier3_pct",
+        "semantic_retrieval_pct",
+        "knowledge_graph_pct",
+    ]
     total_pct = sum(bt_config.get(k, 0) or 0 for k in pct_keys)
     if total_pct > 1.0:
         raise ValueError(
@@ -205,8 +422,23 @@ def get_build_type_config(config: dict[str, Any], build_type_name: str) -> dict[
 
 
 def get_tuning(config: dict, key: str, default: Any) -> Any:
-    """Return a tuning parameter from config, with fallback to default."""
-    return config.get("tuning", {}).get(key, default)
+    """Return a tuning parameter from config, with fallback to default.
+
+    Checks TE config tuning first, then AE config (for worker/lock settings
+    that moved to AE). Accepts either the TE config or a legacy combined config.
+    """
+    # Check tuning section in the provided config
+    val = config.get("tuning", {}).get(key, None)
+    if val is not None:
+        return val
+    # Check workers and locks sections (AE config keys)
+    val = config.get("workers", {}).get(key, None)
+    if val is not None:
+        return val
+    val = config.get("locks", {}).get(key, None)
+    if val is not None:
+        return val
+    return default
 
 
 def get_log_level(config: dict[str, Any]) -> str:
@@ -234,10 +466,13 @@ def verbose_log_auto(logger: Any, message: str, *args: Any) -> None:
         cfg = load_config()
         if get_tuning(cfg, "verbose_logging", False):
             logger.info(message, *args)
-    except (RuntimeError, OSError, ValueError, TypeError):
+    except (RuntimeError, OSError, ValueError, TypeError) as exc:
         # R6-m6: Broadened to catch bad YAML structure (ValueError/TypeError)
-        # in addition to file-level errors. Verbose logging must never crash.
-        pass
+        # in addition to file-level errors. Verbose logging must never crash
+        # the operation, but log the failure at DEBUG for diagnosability.
+        logging.getLogger("context_broker.config").debug(
+            "verbose_log_auto: config load failed: %s", exc
+        )
 
 
 # ============================================================
@@ -255,81 +490,92 @@ _embeddings_cache: dict[str, Any] = {}
 _MAX_CACHE_ENTRIES = 10
 
 
-def get_chat_model(config: dict) -> Any:
-    """Return a cached ChatOpenAI instance keyed by (base_url, model).
+def get_chat_model(config: dict, role: str = "imperator") -> Any:
+    """Return a cached ChatOpenAI instance for the given role.
 
-    Avoids re-creating the client on every request.
-    R5-M12: Uses _cache_lock around the full check-and-set to prevent
-    two concurrent calls from both missing the cache and creating
-    duplicate clients.
+    Role determines where to look for the LLM config in the merged config:
+    - "imperator": from TE config (config["imperator"])
+    - "summarization": from AE config (config["summarization"])
+    - "extraction": from AE config (config["extraction"])
+    - Fallback: config["llm"] for legacy single-config deployments
+
+    All providers use ChatOpenAI — the OpenAI-compatible wire protocol is
+    universal (OpenAI, Anthropic, Google, xAI, Together, Ollama all support it).
+
+    R5-M12: Uses _cache_lock around the full check-and-set.
     """
     from langchain_openai import ChatOpenAI
 
-    llm_config = config.get("llm", {})
+    # Resolve config for this role
+    llm_config = config.get(role, {})
+    if not llm_config:
+        llm_config = config.get("llm", {})
+
     api_key = get_api_key(llm_config)
-    # G5-05: Include api_key hash so credential rotation doesn't reuse a stale client.
-    # m3: Use stable SHA-256 hash instead of Python's hash() which is
-    # randomized per process (PYTHONHASHSEED).
-    cache_key = (
-        f"{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
-    )
+    cache_key = f"{role}:{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256((api_key or 'none').encode()).hexdigest()[:16]}"
+
     with _cache_lock:
         if cache_key not in _llm_cache:
-            # R5-m9: Evict oldest entry instead of clearing entire cache.
             if len(_llm_cache) >= _MAX_CACHE_ENTRIES:
                 oldest_key = next(iter(_llm_cache))
                 del _llm_cache[oldest_key]
-            _llm_cache[cache_key] = ChatOpenAI(
-                base_url=llm_config.get("base_url", "https://api.openai.com/v1"),
-                model=llm_config.get("model", "gpt-4o-mini"),
-                api_key=api_key or "not-needed",
-                timeout=1800,
-            )
+
+            kwargs = {
+                "base_url": llm_config.get("base_url"),
+                "model": llm_config.get("model", "gpt-4o-mini"),
+                "api_key": api_key or "not-needed",
+                "timeout": get_tuning(config, "llm_timeout_seconds", 1800),
+            }
+            _llm_cache[cache_key] = ChatOpenAI(**kwargs)
         return _llm_cache[cache_key]
 
 
-def get_embeddings_model(config: dict) -> Any:
+def get_embeddings_model(config: dict, config_key: str = "embeddings") -> Any:
     """Return a cached OpenAIEmbeddings instance keyed by (base_url, model).
 
     Avoids re-creating the client on every request.
     R5-M12: Uses _cache_lock around the full check-and-set to prevent
     two concurrent calls from both missing the cache and creating
     duplicate clients.
+
+    Args:
+        config: Full configuration dict.
+        config_key: Config section to read embedding settings from.
+                    Default "embeddings". Use "log_embeddings" for log vectorization.
     """
     from langchain_openai import OpenAIEmbeddings
 
-    embeddings_config = config.get("embeddings", {})
+    embeddings_config = config.get(config_key, {})
     api_key = get_api_key(embeddings_config)
-    # G5-05: Include api_key hash so credential rotation doesn't reuse a stale client.
-    # m3: Use stable SHA-256 hash instead of Python's hash() which is
-    # randomized per process (PYTHONHASHSEED).
-    cache_key = (
-        f"{embeddings_config.get('base_url')}:{embeddings_config.get('model')}:{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
-    )
+    cache_key = f"{embeddings_config.get('base_url')}:{embeddings_config.get('model')}:{hashlib.sha256((api_key or 'default').encode()).hexdigest()[:16]}"
     with _cache_lock:
         if cache_key not in _embeddings_cache:
-            # R5-m9: Evict oldest entry instead of clearing entire cache.
             if len(_embeddings_cache) >= _MAX_CACHE_ENTRIES:
                 oldest_key = next(iter(_embeddings_cache))
                 del _embeddings_cache[oldest_key]
-            _embeddings_cache[cache_key] = OpenAIEmbeddings(
-                model=embeddings_config.get("model", "text-embedding-3-small"),
-                openai_api_base=embeddings_config.get("base_url", "https://api.openai.com/v1"),
-                openai_api_key=api_key or "not-needed",
-            )
+            kwargs = {
+                "model": embeddings_config.get("model", "text-embedding-3-small"),
+                "base_url": embeddings_config.get("base_url"),
+                "api_key": api_key or "not-needed",
+                "tiktoken_enabled": embeddings_config.get("tiktoken_enabled", False),
+                "check_embedding_ctx_length": embeddings_config.get(
+                    "check_embedding_ctx_length", False
+                ),
+            }
+            _embeddings_cache[cache_key] = OpenAIEmbeddings(**kwargs)
         return _embeddings_cache[cache_key]
+
 ```
 
----
-
-`app/database.py`
+## app/database.py
 
 ```python
 """
 Database connection management for the Context Broker.
 
-Manages asyncpg (PostgreSQL) and redis.asyncio (Redis) connection pools.
-Connections are initialized at startup and closed at shutdown.
+Manages asyncpg (PostgreSQL) connection pool. PostgreSQL is the only
+external database — it handles data storage, vector search (pgvector),
+job state (DB-driven workers), and advisory locks.
 """
 
 import base64
@@ -339,21 +585,14 @@ from typing import Optional
 
 import asyncpg
 import httpx
-import redis.asyncio as aioredis
-import redis.exceptions
 
 _log = logging.getLogger("context_broker.database")
 
 _pg_pool: Optional[asyncpg.Pool] = None
-_redis_client: Optional[aioredis.Redis] = None
 
 
 async def init_postgres(config: dict) -> asyncpg.Pool:
-    """Create the asyncpg connection pool using config and environment variables.
-
-    Database credentials come from environment (loaded via env_file in compose).
-    Connection parameters come from environment variables set in compose.
-    """
+    """Create the asyncpg connection pool using config and environment variables."""
     global _pg_pool
 
     db_config = config.get("database", {})
@@ -373,27 +612,6 @@ async def init_postgres(config: dict) -> asyncpg.Pool:
     return _pg_pool
 
 
-async def init_redis(config: dict) -> aioredis.Redis:
-    """Create the async Redis client and verify connectivity."""
-    global _redis_client
-
-    _redis_client = aioredis.Redis(
-        host=os.environ.get("REDIS_HOST", "context-broker-redis"),
-        port=int(os.environ.get("REDIS_PORT", "6379")),
-        decode_responses=True,
-    )
-
-    try:
-        await _redis_client.ping()
-        _log.info("Redis client initialized (ping OK)")
-    except (redis.exceptions.RedisError, ConnectionError, OSError) as exc:
-        _log.warning(
-            "Redis client created but ping failed — starting in degraded mode: %s", exc
-        )
-
-    return _redis_client
-
-
 def get_pg_pool() -> asyncpg.Pool:
     """Return the initialized asyncpg pool. Raises if not initialized."""
     if _pg_pool is None:
@@ -403,28 +621,14 @@ def get_pg_pool() -> asyncpg.Pool:
     return _pg_pool
 
 
-def get_redis() -> aioredis.Redis:
-    """Return the initialized Redis client. Raises if not initialized."""
-    if _redis_client is None:
-        raise RuntimeError(
-            "Redis client not initialized — call init_redis() first"
-        )
-    return _redis_client
-
-
 async def close_all_connections() -> None:
     """Gracefully close all database connections."""
-    global _pg_pool, _redis_client
+    global _pg_pool
 
     if _pg_pool is not None:
         await _pg_pool.close()
         _pg_pool = None
         _log.info("PostgreSQL pool closed")
-
-    if _redis_client is not None:
-        await _redis_client.aclose()
-        _redis_client = None
-        _log.info("Redis client closed")
 
 
 async def check_postgres_health() -> bool:
@@ -439,28 +643,10 @@ async def check_postgres_health() -> bool:
         return False
 
 
-async def check_redis_health() -> bool:
-    """Check Redis connectivity for health endpoint."""
-    try:
-        client = get_redis()
-        await client.ping()
-        return True
-    except (redis.exceptions.RedisError, ConnectionError, OSError, RuntimeError) as exc:
-        _log.warning("Redis health check failed: %s", exc)
-        return False
-
-
 async def check_neo4j_health(config: dict | None = None) -> bool:
     """Check Neo4j connectivity for health endpoint.
 
-    G5-13: This intentionally probes the HTTP endpoint (port 7474) rather than
-    Bolt (port 7687). The HTTP endpoint is Neo4j's built-in health/discovery
-    endpoint, suitable for container health checks. Bolt is used for data
-    operations by the Mem0 client and Neo4j driver, not for health probes.
-
-    R5-m4: The ``config`` parameter is accepted for interface consistency with
-    callers (health_flow.py) but connection details are read from environment
-    variables, matching the pattern used by init_postgres/init_redis.
+    Probes the HTTP endpoint (port 7474) — Neo4j's built-in health endpoint.
     """
     neo4j_host = os.environ.get("NEO4J_HOST", "context-broker-neo4j")
     neo4j_http_port = os.environ.get("NEO4J_HTTP_PORT", "7474")
@@ -479,11 +665,1840 @@ async def check_neo4j_health(config: dict | None = None) -> bool:
     except (httpx.HTTPError, OSError) as exc:
         _log.warning("Neo4j health check failed: %s", exc)
         return False
+
 ```
 
----
+## app/logging_setup.py
 
-`app/flows/build_type_registry.py`
+```python
+"""
+Structured JSON logging for the Context Broker.
+
+All logs go to stdout in JSON format (one object per line).
+Log level is configurable via config.yml.
+"""
+
+import json
+import logging
+import sys
+from datetime import datetime, timezone
+
+
+class JsonFormatter(logging.Formatter):
+    """Format log records as single-line JSON objects."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry: dict = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "logger": record.name,
+        }
+
+        # Include context fields if present
+        for field in ("request_id", "tool_name", "conversation_id", "window_id"):
+            value = getattr(record, field, None)
+            if value is not None:
+                entry[field] = value
+
+        if record.exc_info and record.exc_info[0] is not None:
+            entry["exception"] = self.formatException(record.exc_info)
+
+        return json.dumps(entry)
+
+
+class HealthCheckFilter(logging.Filter):
+    """Suppress noisy health check request logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return "/health" not in message and "GET /health" not in message
+
+
+def setup_logging() -> None:
+    """Configure application logging with JSON formatter.
+
+    Sets up the root logger and suppresses noisy third-party loggers.
+    """
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(HealthCheckFilter())
+
+    # Configure root logger (R5-m3: guard against duplicate handlers on reload)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    if not root_logger.handlers:
+        root_logger.addHandler(handler)
+
+    # Suppress noisy third-party loggers
+    for noisy_logger in ("uvicorn.access", "httpx", "httpcore"):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
+    logging.getLogger("context_broker").setLevel(logging.INFO)
+
+
+def update_log_level(level: str) -> None:
+    """Update the log level after config is loaded.
+
+    Called from the application lifespan after config.yml is read.
+    Accepts standard level names: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+    """
+    numeric_level = getattr(logging, level.upper(), None)
+    if not isinstance(numeric_level, int):
+        logging.getLogger("context_broker").warning(
+            "Invalid log level '%s' in config — keeping INFO", level
+        )
+        return
+
+    logging.getLogger().setLevel(numeric_level)
+    logging.getLogger("context_broker").setLevel(numeric_level)
+
+```
+
+## app/main.py
+
+```python
+"""
+Context Broker — ASGI application entry point.
+
+FastAPI application that wires together all routes, middleware,
+and lifecycle events. This file is transport only — all logic
+lives in StateGraph flows.
+"""
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
+import asyncpg
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.config import load_config, get_build_type_config, get_tuning
+from app.database import init_postgres, close_all_connections
+from app.logging_setup import setup_logging, update_log_level
+from app.migrations import run_migrations
+from app.routes import chat, health, mcp, metrics
+from app.workers.db_worker import start_background_worker
+from app.imperator.state_manager import ImperatorStateManager
+
+setup_logging()
+_log = logging.getLogger("context_broker.main")
+
+
+async def _postgres_retry_loop(application: FastAPI, config: dict) -> None:
+    """Background task that retries PostgreSQL connection if it failed at startup."""
+    while True:
+        # R6-M15: Reload config each iteration so hot-reloaded corrections take effect
+        config = load_config()
+        retry_interval = get_tuning(config, "postgres_retry_interval_seconds", 10)
+        await asyncio.sleep(retry_interval)
+        if getattr(application.state, "postgres_available", False):
+            # Postgres came back — also retry Imperator init if it was skipped
+            if not getattr(application.state, "imperator_initialized", False):
+                try:
+                    imperator_manager = getattr(
+                        application.state, "imperator_manager", None
+                    )
+                    if imperator_manager is not None:
+                        await imperator_manager.initialize()
+                        application.state.imperator_initialized = True
+                        _log.info(
+                            "Imperator initialization succeeded on Postgres retry"
+                        )
+                except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
+                    _log.warning("Imperator initialization retry failed: %s", exc)
+            return
+        try:
+            _log.info("Retrying PostgreSQL connection...")
+            await init_postgres(config)
+            await run_migrations()
+            application.state.postgres_available = True
+            _log.info("PostgreSQL connection established on retry")
+
+            # Retry Imperator init now that Postgres is available
+            if not getattr(application.state, "imperator_initialized", False):
+                try:
+                    imperator_manager = getattr(
+                        application.state, "imperator_manager", None
+                    )
+                    if imperator_manager is not None:
+                        await imperator_manager.initialize()
+                        application.state.imperator_initialized = True
+                        _log.info(
+                            "Imperator initialization succeeded on Postgres retry"
+                        )
+                except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
+                    _log.warning(
+                        "Imperator initialization retry failed (will retry next loop): %s",
+                        exc,
+                    )
+                    # Don't return — keep retrying Imperator on next loop iteration
+                    continue
+
+            return
+        except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
+            _log.warning("PostgreSQL retry failed: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Manage application lifecycle: startup and shutdown."""
+    _log.info("Context Broker starting up")
+
+    config = load_config()
+
+    # Apply configured log level now that config is available
+    configured_level = config.get("log_level", "INFO")
+    update_log_level(configured_level)
+
+    # REQ-001 §10.2: Scan for StateGraph packages via entry_points
+    from app.stategraph_registry import scan as scan_stategraph_packages
+
+    discovered = scan_stategraph_packages()
+    _log.info("StateGraph packages discovered: %s", discovered)
+    if not discovered.get("ae"):
+        _log.warning(
+            "No AE packages found. Infrastructure flows will not be available "
+            "until an AE package is installed via install_stategraph."
+        )
+    if not discovered.get("te"):
+        _log.warning(
+            "No TE packages found. The Imperator will not be available "
+            "until a TE package is installed via install_stategraph."
+        )
+
+    # REQ-001 §7.4 Fail Fast: Validate build type configs at startup
+    for bt_name in config.get("build_types", {}):
+        try:
+            get_build_type_config(config, bt_name)
+        except (ValueError, KeyError) as exc:
+            _log.error("Invalid build type config '%s': %s", bt_name, exc)
+            raise RuntimeError(f"Invalid build type config '{bt_name}': {exc}") from exc
+
+    # REQ-001 §7.4 Fail Fast: Validate embedding_dims is set
+    embeddings_config = config.get("embeddings", {})
+    if not embeddings_config.get("embedding_dims"):
+        raise RuntimeError(
+            "embeddings.embedding_dims is required in config.yml. "
+            "Set it to match your embedding model's output dimensions "
+            "(e.g., 768 for nomic-embed-text, 3072 for gemini-embedding-001)."
+        )
+
+    # Initialize database connections — Postgres failure is non-fatal
+    pg_retry_task = None
+    try:
+        await init_postgres(config)
+        await run_migrations()
+        application.state.postgres_available = True
+    except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
+        _log.warning(
+            "PostgreSQL unavailable at startup — starting in degraded mode: %s", exc
+        )
+        application.state.postgres_available = False
+        pg_retry_task = asyncio.create_task(_postgres_retry_loop(application, config))
+
+    # Start DB-driven background worker (no Redis needed)
+    worker_task = None
+    if application.state.postgres_available:
+        worker_task = asyncio.create_task(start_background_worker(config))
+    else:
+        _log.warning("Background worker deferred — Postgres not available yet")
+
+    # Initialize Imperator persistent state
+    imperator_manager = ImperatorStateManager(config)
+    application.state.imperator_manager = imperator_manager
+    application.state.startup_config = config
+
+    try:
+        await imperator_manager.initialize()
+        application.state.imperator_initialized = True
+    except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
+        _log.warning(
+            "Imperator initialization failed (Postgres may be unavailable) — "
+            "will retry when Postgres connects: %s",
+            exc,
+        )
+        application.state.imperator_initialized = False
+        # Ensure retry loop is running if not already started
+        if pg_retry_task is None:
+            pg_retry_task = asyncio.create_task(
+                _postgres_retry_loop(application, config)
+            )
+
+    _log.info("Context Broker startup complete")
+
+    yield
+
+    # Shutdown
+    _log.info("Context Broker shutting down")
+
+    tasks_to_cancel = [t for t in [worker_task, pg_retry_task] if t is not None]
+    for t in tasks_to_cancel:
+        t.cancel()
+    for t in tasks_to_cancel:
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+    await close_all_connections()
+    _log.info("Context Broker shutdown complete")
+
+
+app = FastAPI(
+    title="Context Broker",
+    description="Context engineering and conversational memory service",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# Register routers
+app.include_router(health.router)
+app.include_router(metrics.router)
+app.include_router(mcp.router)
+app.include_router(chat.router)
+
+
+@app.middleware("http")
+async def check_postgres_middleware(request: Request, call_next):
+    """Return 503 for routes that need Postgres when it is unavailable.
+
+    Health and metrics endpoints are exempt so monitoring stays functional.
+    """
+    exempt_paths = {"/health", "/metrics"}
+    if request.url.path not in exempt_paths:
+        if not getattr(request.app.state, "postgres_available", False):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "service_unavailable",
+                    "message": "PostgreSQL is not available. The service is starting in degraded mode.",
+                },
+            )
+    return await call_next(request)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Return structured JSON for HTTP exceptions instead of Starlette's default."""
+    _log.warning(
+        "HTTP exception: %s %s — %s (status %d)",
+        request.method,
+        request.url.path,
+        exc.detail,
+        exc.status_code,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": "http_error",
+            "message": exc.detail if isinstance(exc.detail, str) else str(exc.detail),
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Return structured JSON for request validation failures."""
+    _log.warning(
+        "Validation error: %s %s — %s",
+        request.method,
+        request.url.path,
+        exc.errors(),
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "validation_error",
+            "message": "Request validation failed.",
+            "details": exc.errors(),
+        },
+    )
+
+
+# Last-resort handler for known exception families that could bubble out of
+# our application code. Covers runtime failures, OS/network errors, DB errors,
+# and stdlib value errors. This is NOT a blanket Exception catch — each type
+# is explicitly listed. (CB-R3-01 / G5-22)
+# R7-M7: Added asyncpg.PostgresError to catch unhandled DB errors
+@app.exception_handler(RuntimeError)
+@app.exception_handler(ValueError)
+@app.exception_handler(OSError)
+@app.exception_handler(ConnectionError)
+@app.exception_handler(asyncpg.PostgresError)
+async def known_exception_handler(request: Request, exc):
+    """Return structured error for known unhandled exception families."""
+    _log.error(
+        "Unhandled %s: %s %s — %s",
+        type(exc).__name__,
+        request.method,
+        request.url.path,
+        exc,
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_server_error",
+            "message": "An unexpected error occurred. Check server logs for details.",
+        },
+    )
+
+```
+
+## app/metrics_registry.py
+
+```python
+"""
+Prometheus metrics registry for the Context Broker.
+
+All metrics are defined here and imported by flows and routes.
+Metrics are incremented inside StateGraph nodes, not in route handlers.
+"""
+
+from prometheus_client import Counter, Histogram, Gauge
+
+# MCP tool request metrics
+MCP_REQUESTS = Counter(
+    "context_broker_mcp_requests_total",
+    "Total MCP tool requests",
+    ["tool", "status"],
+)
+
+MCP_REQUEST_DURATION = Histogram(
+    "context_broker_mcp_request_duration_seconds",
+    "Duration of MCP tool requests",
+    ["tool"],
+    buckets=[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0],
+)
+
+# Chat endpoint metrics
+CHAT_REQUESTS = Counter(
+    "context_broker_chat_requests_total",
+    "Total chat completion requests",
+    ["status"],
+)
+
+CHAT_REQUEST_DURATION = Histogram(
+    "context_broker_chat_request_duration_seconds",
+    "Duration of chat completion requests",
+    buckets=[0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 120.0],
+)
+
+# Background job metrics
+JOBS_ENQUEUED = Counter(
+    "context_broker_jobs_enqueued_total",
+    "Total background jobs enqueued",
+    ["job_type"],
+)
+
+JOBS_COMPLETED = Counter(
+    "context_broker_jobs_completed_total",
+    "Total background jobs completed",
+    ["job_type", "status"],
+)
+
+JOB_DURATION = Histogram(
+    "context_broker_job_duration_seconds",
+    "Duration of background jobs",
+    ["job_type"],
+    buckets=[0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
+)
+
+# Queue depth gauges
+EMBEDDING_QUEUE_DEPTH = Gauge(
+    "context_broker_embedding_queue_depth",
+    "Number of pending embedding jobs",
+)
+
+ASSEMBLY_QUEUE_DEPTH = Gauge(
+    "context_broker_assembly_queue_depth",
+    "Number of pending context assembly jobs",
+)
+
+EXTRACTION_QUEUE_DEPTH = Gauge(
+    "context_broker_extraction_queue_depth",
+    "Number of pending memory extraction jobs",
+)
+
+# Context assembly metrics
+CONTEXT_ASSEMBLY_DURATION = Histogram(
+    "context_broker_context_assembly_duration_seconds",
+    "Duration of context assembly operations",
+    ["build_type"],
+    buckets=[0.5, 1.0, 5.0, 10.0, 30.0, 60.0],
+)
+
+```
+
+## app/migrations.py
+
+```python
+"""
+Database schema migration management.
+
+Applies pending migrations on startup. Migrations are forward-only
+and non-destructive. The application refuses to start if a migration
+cannot be safely applied.
+"""
+
+import logging
+from typing import Callable
+
+import asyncpg
+
+from app.database import get_pg_pool
+
+_log = logging.getLogger("context_broker.migrations")
+
+
+async def _migration_001(conn) -> None:
+    """Migration 1: Initial schema.
+
+    The initial schema is applied by postgres/init.sql via the Docker
+    entrypoint. This migration just records that it was applied.
+    """
+    pass
+
+
+async def _migration_002(conn) -> None:
+    """Migration 2: Ensure participant_id index exists on context_windows.
+
+    Safe to run multiple times (CREATE INDEX IF NOT EXISTS).
+    """
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_windows_participant_conversation
+        ON context_windows(participant_id, conversation_id)
+        """)
+
+
+async def _migration_003(conn) -> None:
+    """Migration 3: Add unique constraint on (conversation_id, sequence_number).
+
+    Prevents duplicate sequence numbers under concurrent inserts.
+    Safe to run multiple times (CREATE UNIQUE INDEX IF NOT EXISTS).
+    """
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_conversation_seq_unique
+        ON conversation_messages(conversation_id, sequence_number)
+        """)
+
+
+async def _migration_004(conn) -> None:
+    """Migration 4: Add recipient_id column to conversation_messages.
+
+    Captures who the message was addressed to alongside the existing sender_id.
+    Safe to run multiple times (ADD COLUMN IF NOT EXISTS).
+    """
+    await conn.execute("""
+        ALTER TABLE conversation_messages
+        ADD COLUMN IF NOT EXISTS recipient_id VARCHAR(255)
+        """)
+
+
+async def _migration_005(conn) -> None:
+    """Migration 5: Add flow_id, user_id to conversations (F-05)."""
+    await conn.execute(
+        "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS flow_id VARCHAR(255)"
+    )
+    await conn.execute(
+        "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS user_id VARCHAR(255)"
+    )
+
+
+async def _migration_006(conn) -> None:
+    """Migration 6: Add content_type, priority, repeat_count to conversation_messages (F-04, F-06)."""
+    await conn.execute(
+        "ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS content_type VARCHAR(50) DEFAULT 'text'"
+    )
+    await conn.execute(
+        "ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 0"
+    )
+    await conn.execute(
+        "ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS repeat_count INTEGER DEFAULT 1"
+    )
+
+
+async def _migration_007(conn) -> None:
+    """Migration 7: Prevent duplicate summary rows under concurrent assembly (M-08).
+
+    Adds a unique index on (context_window_id, tier, summarizes_from_seq, summarizes_to_seq)
+    to prevent duplicate summary rows when multiple workers race to summarize the same range.
+    """
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_window_tier_seq
+        ON conversation_summaries(context_window_id, tier, summarizes_from_seq, summarizes_to_seq)
+        """)
+
+
+async def _migration_008(conn) -> None:
+    """Migration 8: Attempt to create Mem0 dedup index (F-19).
+
+    Mem0 creates its own tables on first use. This migration attempts
+    to add a dedup index on mem0_memories. If the table doesn't exist yet,
+    this is a no-op (the index will be created on next startup after
+    Mem0 has initialized).
+    """
+    # Use a savepoint so UndefinedTableError doesn't abort the outer transaction
+    try:
+        async with conn.transaction():
+            await conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_mem0_memories_dedup
+                ON mem0_memories(memory, user_id)
+                """)
+        _log.info("Mem0 dedup index created or already exists")
+    except asyncpg.UndefinedTableError:
+        _log.info("Mem0 table not yet created — dedup index deferred to next startup")
+
+
+async def _migration_009(conn) -> None:
+    """Migration 9: Create HNSW vector index if embeddings exist (G5-41).
+
+    Deferred from init.sql because pgvector HNSW requires knowing the
+    vector dimension. We detect the dimension from existing data.
+    """
+    dim = await conn.fetchval(
+        "SELECT vector_dims(embedding) FROM conversation_messages WHERE embedding IS NOT NULL LIMIT 1"
+    )
+    if dim is not None:
+        await conn.execute(f"""
+            CREATE INDEX IF NOT EXISTS idx_messages_embedding
+            ON conversation_messages USING hnsw ((embedding::vector({dim})) vector_cosine_ops)
+            """)
+        _log.info("HNSW index created for %d-dimensional embeddings", dim)
+    else:
+        _log.info("No embeddings yet — HNSW index deferred to next startup")
+
+
+async def _migration_010(conn) -> None:
+    """Migration 10: Unique constraint on context_windows for idempotent creation (G5-08).
+
+    Prevents duplicate context windows for the same (conversation, participant, build_type).
+    Safe to run multiple times (CREATE UNIQUE INDEX IF NOT EXISTS).
+    """
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_windows_conv_participant_build
+        ON context_windows(conversation_id, participant_id, build_type)
+        """)
+
+
+async def _migration_011(conn) -> None:
+    """Migration 11: Add last_accessed_at to context_windows.
+
+    Tracks when a context window was last retrieved, enabling dormant
+    window detection and deferred assembly.
+    """
+    await conn.execute(
+        "ALTER TABLE context_windows ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMP WITH TIME ZONE"
+    )
+
+
+async def _migration_012(conn) -> None:
+    """Migration 12: Schema alignment for ARCH-01, ARCH-08, ARCH-09, ARCH-12, ARCH-13.
+
+    Comprehensive column renames, additions, drops, and constraint changes
+    on conversation_messages to align with the v4 schema design.
+
+    All statements use IF EXISTS / IF NOT EXISTS guards so the migration
+    is safe to run against databases in any intermediate state.
+    """
+
+    # ── ARCH-13: Rename sender_id → sender ──────────────────────────
+    has_sender_id = await conn.fetchval("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'conversation_messages' AND column_name = 'sender_id'
+        )
+        """)
+    has_sender = await conn.fetchval("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'conversation_messages' AND column_name = 'sender'
+        )
+        """)
+    if has_sender_id and has_sender:
+        # Fresh DB: init.sql created 'sender', old migration added 'sender_id' — drop the old one
+        await conn.execute("ALTER TABLE conversation_messages DROP COLUMN sender_id")
+        _log.info("Dropped duplicate sender_id (sender already exists from init.sql)")
+    elif has_sender_id:
+        await conn.execute(
+            "ALTER TABLE conversation_messages RENAME COLUMN sender_id TO sender"
+        )
+        _log.info("Renamed sender_id → sender")
+
+    # ── ARCH-13: Rename recipient_id → recipient ────────────────────
+    has_recipient_id = await conn.fetchval("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'conversation_messages' AND column_name = 'recipient_id'
+        )
+        """)
+    has_recipient = await conn.fetchval("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'conversation_messages' AND column_name = 'recipient'
+        )
+        """)
+    if has_recipient_id and has_recipient:
+        # Fresh DB: init.sql created 'recipient', migration 4 added 'recipient_id' — drop the old one
+        await conn.execute("ALTER TABLE conversation_messages DROP COLUMN recipient_id")
+        _log.info(
+            "Dropped duplicate recipient_id (recipient already exists from init.sql)"
+        )
+    elif has_recipient_id:
+        await conn.execute(
+            "ALTER TABLE conversation_messages RENAME COLUMN recipient_id TO recipient"
+        )
+        _log.info("Renamed recipient_id → recipient")
+
+    # ── ARCH-12: NOT NULL on recipient (backfill first) ─────────────
+    await conn.execute(
+        "UPDATE conversation_messages SET recipient = 'unknown' WHERE recipient IS NULL"
+    )
+    # Check if the column already has a NOT NULL constraint
+    is_nullable = await conn.fetchval("""
+        SELECT is_nullable FROM information_schema.columns
+        WHERE table_name = 'conversation_messages' AND column_name = 'recipient'
+        """)
+    if is_nullable == "YES":
+        await conn.execute(
+            "ALTER TABLE conversation_messages ALTER COLUMN recipient SET DEFAULT 'unknown'"
+        )
+        await conn.execute(
+            "ALTER TABLE conversation_messages ALTER COLUMN recipient SET NOT NULL"
+        )
+        _log.info("Set NOT NULL constraint on recipient with default 'unknown'")
+
+    # ── ARCH-01: Add tool_calls (JSONB) ─────────────────────────────
+    await conn.execute(
+        "ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS tool_calls JSONB"
+    )
+
+    # ── ARCH-01: Add tool_call_id ───────────────────────────────────
+    await conn.execute(
+        "ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS tool_call_id VARCHAR(255)"
+    )
+
+    # ── ARCH-08: Drop content_type column ───────────────────────────
+    await conn.execute(
+        "ALTER TABLE conversation_messages DROP COLUMN IF EXISTS content_type"
+    )
+
+    # ── ARCH-09: Drop idempotency unique index ──────────────────────
+    await conn.execute("DROP INDEX IF EXISTS idx_messages_idempotency")
+
+    # ── ARCH-09: Drop idempotency_key column ────────────────────────
+    await conn.execute(
+        "ALTER TABLE conversation_messages DROP COLUMN IF EXISTS idempotency_key"
+    )
+
+    # ── ARCH-01: Make content nullable ──────────────────────────────
+    # (tool-call messages may have no text content)
+    await conn.execute(
+        "ALTER TABLE conversation_messages ALTER COLUMN content DROP NOT NULL"
+    )
+
+    # ── ARCH-13: Rename sender index to match new column name ───────
+    # PostgreSQL doesn't have ALTER INDEX IF EXISTS … RENAME, so check first.
+    idx_exists = await conn.fetchval("""
+        SELECT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE indexname = 'idx_messages_conversation_sender'
+        )
+        """)
+    if idx_exists:
+        await conn.execute(
+            "ALTER INDEX idx_messages_conversation_sender RENAME TO idx_messages_conversation_sender_new"
+        )
+        _log.info("Renamed sender index → idx_messages_conversation_sender_new")
+
+    # ── Safety net: Ensure last_accessed_at exists on context_windows
+    # (in case migration 011 was skipped or partially applied) ───────
+    await conn.execute(
+        "ALTER TABLE context_windows ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMP WITH TIME ZONE"
+    )
+
+    _log.info("Migration 012 complete — schema aligned with v4 design")
+
+
+async def _migration_013(conn) -> None:
+    """Migration 13: Update context_windows unique constraint (D-03).
+
+    Window identity changes from (conversation_id, participant_id, build_type)
+    to (conversation_id, build_type, max_token_budget). participant_id is no
+    longer part of window identity — windows are shared by conversation +
+    build strategy + budget bucket.
+    """
+    # Drop old unique constraint (may be named differently depending on how it was created)
+    await conn.execute("""
+        DO $$
+        BEGIN
+            -- Drop the unique index created by migration 010
+            DROP INDEX IF EXISTS idx_context_windows_unique;
+            -- Also try the constraint form in case it was created as a constraint
+            ALTER TABLE context_windows
+                DROP CONSTRAINT IF EXISTS idx_context_windows_unique;
+        EXCEPTION WHEN undefined_object THEN
+            NULL;
+        END $$
+    """)
+
+    # Create new unique constraint on (conversation_id, build_type, max_token_budget)
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_context_windows_identity
+        ON context_windows (conversation_id, build_type, max_token_budget)
+    """)
+
+    _log.info(
+        "Migration 013 complete — context_windows unique constraint updated for D-03"
+    )
+
+
+async def _migration_014(conn) -> None:
+    """Migration 14: Add system_logs table for log shipper.
+
+    Enables the Imperator to query logs from all MAD containers via SQL.
+    The log shipper uses the Docker API to discover containers on
+    context-broker-net and writes their logs with resolved names.
+    """
+    await conn.execute("DROP TABLE IF EXISTS system_logs")
+    await conn.execute("""
+        CREATE TABLE system_logs (
+            container_name  VARCHAR(255) NOT NULL,
+            log_timestamp   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            message         TEXT,
+            data            JSONB
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_system_logs_container_time
+        ON system_logs (container_name, log_timestamp DESC)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_system_logs_time
+        ON system_logs (log_timestamp DESC)
+    """)
+    _log.info("Migration 014 complete — system_logs table for Fluent Bit")
+
+
+async def _migration_015(conn) -> None:
+    """Migration 15: Add stategraph_packages table for dynamic loading (REQ-001 §10).
+
+    Tracks which StateGraph packages are installed and their versions.
+    Used by install_stategraph() to record installations.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS stategraph_packages (
+            package_name  VARCHAR(255) PRIMARY KEY,
+            version       VARCHAR(100) NOT NULL,
+            installed_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            entry_point_group VARCHAR(100),
+            metadata      JSONB
+        )
+    """)
+    _log.info("Migration 015 complete — stategraph_packages table")
+
+
+async def _migration_016(conn) -> None:
+    """Migration 16: Add unique index for Mem0 memory deduplication.
+
+    Prevents duplicate memories with the same hash+user_id. Works with
+    the PGVector.insert monkey-patch (ON CONFLICT DO NOTHING) to prevent
+    transaction aborts from duplicate inserts. From Rogers (Fix 2).
+    """
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mem0_hash_user
+        ON mem0_memories ((payload->>'hash'), (payload->>'user_id'))
+    """)
+    _log.info("Migration 016 complete — mem0_memories dedup index")
+
+
+async def _migration_017(conn) -> None:
+    """Migration 17: Add embedding column to system_logs for log vectorization.
+
+    Enables semantic search over logs. The column is nullable — logs without
+    embeddings are not yet vectorized. A background worker polls for NULL
+    embeddings and fills them in batches.
+    """
+    has_col = await conn.fetchval("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'system_logs' AND column_name = 'embedding'
+        )
+    """)
+    if not has_col:
+        await conn.execute("ALTER TABLE system_logs ADD COLUMN embedding vector")
+    _log.info("Migration 017 complete — system_logs embedding column")
+
+
+async def _migration_018(conn) -> None:
+    """Migration 18: Add domain_information table for Imperator domain knowledge.
+
+    TE-owned: the Imperator stores learned facts about its operational domain.
+    Searched semantically via pgvector cosine similarity.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS domain_information (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            content         TEXT NOT NULL,
+            embedding       vector,
+            source          VARCHAR(255),
+            created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )
+    """)
+    _log.info("Migration 018 complete — domain_information table")
+
+
+async def _migration_019(conn) -> None:
+    """Migration 19: Add schedules and schedule_history tables.
+
+    Built-in scheduler — fires StateGraphs on cron/interval schedules.
+    The Imperator can create/manage schedules at runtime via tools.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS schedules (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name            VARCHAR(255) NOT NULL,
+            schedule_type   VARCHAR(20) NOT NULL CHECK (schedule_type IN ('cron', 'interval')),
+            schedule_expr   VARCHAR(255) NOT NULL,
+            message         TEXT NOT NULL,
+            target          VARCHAR(255) NOT NULL DEFAULT 'imperator',
+            enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS schedule_history (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            schedule_id     UUID NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+            started_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            completed_at    TIMESTAMP WITH TIME ZONE,
+            status          VARCHAR(20) NOT NULL DEFAULT 'running',
+            summary         TEXT,
+            error           TEXT
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_schedule_history_schedule_id
+        ON schedule_history (schedule_id, started_at DESC)
+    """)
+    _log.info("Migration 019 complete — schedules and schedule_history tables")
+
+
+# Migration registry: version -> (description, migration_function)
+# Add new migrations here. Never modify existing entries.
+# IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
+MIGRATIONS: list[tuple[int, str, Callable]] = [
+    (1, "Initial schema — created by postgres/init.sql", _migration_001),
+    (2, "Add participant_id index on context_windows", _migration_002),
+    (3, "Add unique constraint on (conversation_id, sequence_number)", _migration_003),
+    (4, "Add recipient_id column to conversation_messages", _migration_004),
+    (5, "Add flow_id, user_id to conversations", _migration_005),
+    (
+        6,
+        "Add content_type, priority, repeat_count to conversation_messages",
+        _migration_006,
+    ),
+    (7, "Unique index on summaries to prevent duplicate rows (M-08)", _migration_007),
+    (8, "Mem0 dedup index on mem0_memories (F-19)", _migration_008),
+    (9, "Deferred HNSW vector index (G5-41)", _migration_009),
+    (
+        10,
+        "Unique constraint on context_windows (conversation_id, participant_id, build_type) (G5-08)",
+        _migration_010,
+    ),
+    (11, "Add last_accessed_at to context_windows", _migration_011),
+    (
+        12,
+        "Schema alignment: renames, tool_calls, drops, constraints (ARCH-01/08/09/12/13)",
+        _migration_012,
+    ),
+    (
+        13,
+        "Update context_windows unique constraint: (conversation_id, build_type, max_token_budget) (D-03)",
+        _migration_013,
+    ),
+    (
+        14,
+        "Add system_logs table for Fluent Bit log collection",
+        _migration_014,
+    ),
+    (
+        15,
+        "Add stategraph_packages table for dynamic loading (REQ-001 §10)",
+        _migration_015,
+    ),
+    (
+        16,
+        "Add mem0_memories dedup index (hash+user_id) — from Rogers Fix 2",
+        _migration_016,
+    ),
+    (
+        17,
+        "Add embedding column to system_logs for log vectorization",
+        _migration_017,
+    ),
+    (
+        18,
+        "Add domain_information table for Imperator domain knowledge",
+        _migration_018,
+    ),
+    (
+        19,
+        "Add schedules and schedule_history tables for built-in scheduler",
+        _migration_019,
+    ),
+]
+
+
+async def get_current_schema_version(conn) -> int:
+    """Return the highest applied migration version, or 0 if none."""
+    try:
+        version = await conn.fetchval(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+        )
+        return version or 0
+    except asyncpg.UndefinedTableError:
+        # schema_migrations table doesn't exist yet — fresh database
+        return 0
+
+
+async def run_migrations() -> None:
+    """Apply all pending migrations in order.
+
+    R5-m12: Uses a PostgreSQL advisory lock to serialize migrations when
+    multiple workers start simultaneously. Advisory lock ID 1 is reserved
+    for schema migrations.
+
+    Raises RuntimeError if any migration fails, preventing startup
+    with an incompatible schema.
+    """
+    pool = get_pg_pool()
+
+    async with pool.acquire() as conn:
+        # R5-m12: Acquire advisory lock to prevent concurrent migration runs
+        await conn.execute("SELECT pg_advisory_lock(1)")
+        try:
+            current_version = await get_current_schema_version(conn)
+            _log.info("Current schema version: %d", current_version)
+
+            pending = [
+                (version, description, fn)
+                for version, description, fn in MIGRATIONS
+                if version > current_version
+            ]
+
+            if not pending:
+                _log.info("Schema is up to date (version %d)", current_version)
+                return
+
+            for version, description, migration_fn in pending:
+                _log.info("Applying migration %d: %s", version, description)
+                try:
+                    async with conn.transaction():
+                        await migration_fn(conn)
+                        await conn.execute(
+                            """
+                            INSERT INTO schema_migrations (version, description)
+                            VALUES ($1, $2)
+                            ON CONFLICT (version) DO NOTHING
+                            """,
+                            version,
+                            description,
+                        )
+                    _log.info("Migration %d applied successfully", version)
+                except (asyncpg.PostgresError, OSError) as exc:
+                    raise RuntimeError(
+                        f"Migration {version} ('{description}') failed: {exc}. "
+                        "Cannot start with incompatible schema."
+                    ) from exc
+
+            _log.info(
+                "Schema migrations complete. Now at version %d",
+                pending[-1][0],
+            )
+        finally:
+            await conn.execute("SELECT pg_advisory_unlock(1)")
+
+```
+
+## app/models.py
+
+```python
+"""
+Pydantic models for request/response validation.
+
+All external inputs are validated through these models before
+reaching StateGraph flows.
+"""
+
+from typing import Any, Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field, model_validator
+
+# ============================================================
+# MCP Tool Input Models
+# ============================================================
+
+
+class CreateConversationInput(BaseModel):
+    """Input for conv_create_conversation."""
+
+    conversation_id: Optional[UUID] = Field(
+        None, description="Caller-supplied ID for idempotent creation"
+    )
+    title: Optional[str] = Field(None, max_length=500)
+    flow_id: Optional[str] = Field(None, max_length=255)
+    user_id: Optional[str] = Field(None, max_length=255)
+
+
+class StoreMessageInput(BaseModel):
+    """Input for conv_store_message."""
+
+    context_window_id: Optional[UUID] = None
+    conversation_id: Optional[UUID] = None
+    role: str = Field(..., pattern="^(user|assistant|system|tool)$")
+
+    @model_validator(mode="after")
+    def _require_at_least_one_id(self) -> "StoreMessageInput":
+        if self.context_window_id is None and self.conversation_id is None:
+            raise ValueError(
+                "At least one of context_window_id or conversation_id must be provided"
+            )
+        return self
+
+    sender: str = Field(..., min_length=1, max_length=255)
+    recipient: Optional[str] = Field(None, max_length=255)
+    content: Optional[str] = Field(None)
+    priority: Optional[int] = Field(0, ge=0, le=10)
+    model_name: Optional[str] = Field(None, max_length=255)
+    tool_calls: Optional[list[dict]] = None
+    tool_call_id: Optional[str] = Field(None, max_length=255)
+
+
+class CreateContextWindowInput(BaseModel):
+    """Input for conv_create_context_window."""
+
+    conversation_id: UUID
+    participant_id: str = Field(..., min_length=1, max_length=255)
+    build_type: str = Field(..., min_length=1, max_length=100)
+    max_tokens: Optional[int] = Field(None, ge=1)
+
+
+class RetrieveContextInput(BaseModel):
+    """Input for conv_retrieve_context."""
+
+    context_window_id: UUID
+
+
+class DeleteConversationInput(BaseModel):
+    """Input for conv_delete_conversation."""
+
+    conversation_id: UUID
+
+
+class ListConversationsInput(BaseModel):
+    """Input for conv_list_conversations."""
+
+    participant: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Filter by participant — returns conversations where this value "
+        "appears as sender or recipient on any message.",
+    )
+    limit: int = Field(50, ge=1, le=500)
+    offset: int = Field(0, ge=0)
+
+
+class SearchConversationsInput(BaseModel):
+    """Input for conv_search."""
+
+    query: Optional[str] = Field(None, max_length=2000)
+    limit: int = Field(10, ge=1, le=100)
+    offset: int = Field(0, ge=0)
+    date_from: Optional[str] = Field(None, description="ISO-8601 date lower bound")
+    date_to: Optional[str] = Field(None, description="ISO-8601 date upper bound")
+    flow_id: Optional[str] = Field(None, max_length=255)
+    user_id: Optional[str] = Field(None, max_length=255)
+    sender: Optional[str] = Field(None, max_length=255)
+
+
+class SearchMessagesInput(BaseModel):
+    """Input for conv_search_messages."""
+
+    query: str = Field(..., min_length=1, max_length=2000)
+    conversation_id: Optional[UUID] = None
+    limit: int = Field(10, ge=1, le=100)
+    sender: Optional[str] = Field(None, max_length=255)
+    role: Optional[str] = Field(None, pattern="^(user|assistant|system|tool)$")
+    date_from: Optional[str] = Field(None, description="ISO-8601 date lower bound")
+    date_to: Optional[str] = Field(None, description="ISO-8601 date upper bound")
+
+
+class GetHistoryInput(BaseModel):
+    """Input for conv_get_history."""
+
+    conversation_id: UUID
+    limit: Optional[int] = Field(None, ge=1, le=10000)
+
+
+class SearchContextWindowsInput(BaseModel):
+    """Input for conv_search_context_windows."""
+
+    context_window_id: Optional[UUID] = None
+    conversation_id: Optional[UUID] = None
+    participant_id: Optional[str] = Field(None, max_length=255)
+    build_type: Optional[str] = Field(None, max_length=100)
+    limit: int = Field(10, ge=1, le=100)
+
+
+class MemSearchInput(BaseModel):
+    """Input for mem_search (management tool)."""
+
+    query: str = Field(..., min_length=1, max_length=2000)
+    user_id: str = Field(..., min_length=1, max_length=255)
+    limit: int = Field(10, ge=1, le=100)
+
+
+class MemGetContextInput(BaseModel):
+    """Input for mem_get_context (management tool — superseded by search_knowledge)."""
+
+    query: str = Field(..., min_length=1, max_length=2000)
+    user_id: str = Field(..., min_length=1, max_length=255)
+    limit: int = Field(5, ge=1, le=50)
+
+
+# ============================================================
+# Core Tool Input Models (D-02)
+# ============================================================
+
+
+class GetContextInput(BaseModel):
+    """Input for get_context — retrieve assembled context, auto-creating
+    conversation and window as needed."""
+
+    build_type: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Context assembly strategy (e.g., 'passthrough', 'standard-tiered', 'knowledge-enriched')",
+    )
+    budget: int = Field(
+        ..., ge=1, description="Token budget — snapped to nearest bucket (4K-2M)"
+    )
+    conversation_id: Optional[UUID] = Field(
+        None, description="Existing conversation ID. Omit to create a new conversation."
+    )
+
+
+class StoreMessageCoreInput(BaseModel):
+    """Input for store_message — store a message in a conversation."""
+
+    conversation_id: UUID = Field(..., description="Conversation to store message in")
+    role: str = Field(..., pattern="^(user|assistant|system|tool)$")
+    content: Optional[str] = Field(None)
+    sender: str = Field(..., min_length=1, max_length=255)
+    recipient: Optional[str] = Field(None, max_length=255)
+    model_name: Optional[str] = Field(None, max_length=255)
+    tool_calls: Optional[list[dict]] = None
+    tool_call_id: Optional[str] = Field(None, max_length=255)
+
+
+class SearchKnowledgeInput(BaseModel):
+    """Input for search_knowledge — search extracted facts and relationships."""
+
+    query: str = Field(..., min_length=1, max_length=2000)
+    user_id: str = Field(..., min_length=1, max_length=255)
+    limit: int = Field(10, ge=1, le=100)
+
+
+class MemAddInput(BaseModel):
+    """Input for mem_add — directly add a memory to Mem0."""
+
+    content: str = Field(..., min_length=1, max_length=10000)
+    user_id: str = Field(..., min_length=1, max_length=255)
+
+
+class MemListInput(BaseModel):
+    """Input for mem_list — list all memories for a user."""
+
+    user_id: str = Field(..., min_length=1, max_length=255)
+    limit: int = Field(50, ge=1, le=500)
+
+
+class MemDeleteInput(BaseModel):
+    """Input for mem_delete — delete a specific memory by ID."""
+
+    memory_id: str = Field(..., min_length=1, max_length=255)
+
+
+class QueryLogsInput(BaseModel):
+    """Input for query_logs — SQL-based log filtering."""
+
+    container_name: Optional[str] = Field(None, max_length=255)
+    level: Optional[str] = Field(None, pattern="^(DEBUG|INFO|WARN|WARNING|ERROR)$")
+    since: Optional[str] = Field(None, description="ISO-8601 timestamp lower bound")
+    until: Optional[str] = Field(None, description="ISO-8601 timestamp upper bound")
+    keyword: Optional[str] = Field(None, max_length=500)
+    limit: int = Field(50, ge=1, le=500)
+
+
+class SearchLogsInput(BaseModel):
+    """Input for search_logs — semantic search over vectorized logs."""
+
+    query: str = Field(..., min_length=1, max_length=2000)
+    container_name: Optional[str] = Field(None, max_length=255)
+    level: Optional[str] = Field(None, pattern="^(DEBUG|INFO|WARN|WARNING|ERROR)$")
+    since: Optional[str] = Field(None, description="ISO-8601 timestamp lower bound")
+    limit: int = Field(20, ge=1, le=100)
+
+
+class ImperatorChatInput(BaseModel):
+    """Input for imperator_chat."""
+
+    message: str = Field(..., min_length=1, max_length=32000)
+    context_window_id: Optional[UUID] = None
+
+
+class MetricsGetInput(BaseModel):
+    """Input for metrics_get (no required fields)."""
+
+    pass
+
+
+# ============================================================
+# OpenAI-compatible chat models
+# ============================================================
+
+
+class ChatMessage(BaseModel):
+    """A single message in an OpenAI-compatible chat request."""
+
+    role: str = Field(..., pattern="^(system|user|assistant|tool)$")
+    content: Optional[str] = None
+    tool_calls: Optional[list[dict]] = None
+    tool_call_id: Optional[str] = None
+
+
+class ChatCompletionRequest(BaseModel):
+    """OpenAI-compatible /v1/chat/completions request body."""
+
+    model: str = Field(default="context-broker")
+    messages: list[ChatMessage] = Field(..., min_length=1)
+    stream: bool = False
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
+    max_tokens: Optional[int] = Field(None, ge=1)
+    user: Optional[str] = Field(None, max_length=255)
+
+
+# ============================================================
+# MCP Protocol Models
+# ============================================================
+
+
+class MCPToolCall(BaseModel):
+    """MCP JSON-RPC tools/call request."""
+
+    jsonrpc: str = Field(default="2.0")
+    id: Optional[Any] = None
+    method: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class MCPToolResult(BaseModel):
+    """MCP JSON-RPC tools/call response."""
+
+    jsonrpc: str = "2.0"
+    id: Optional[Any] = None
+    result: Optional[dict[str, Any]] = None
+    error: Optional[dict[str, Any]] = None
+
+```
+
+## app/prompt_loader.py
+
+```python
+"""
+Prompt template loader.
+
+Loads externalized prompt templates from /config/prompts/.
+Templates are cached with mtime check — only re-read when the file changes (M-11).
+"""
+
+import asyncio
+import logging
+import os
+from pathlib import Path
+
+_log = logging.getLogger("context_broker.prompt_loader")
+
+PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR", "/config/prompts"))
+
+# Cache: name -> (mtime, content)
+_prompt_cache: dict[str, tuple[float, str]] = {}
+
+
+def _read_prompt_file(path: Path) -> str:
+    """Read and strip a prompt template file from disk.
+
+    Separated from load_prompt() so that async_load_prompt() can
+    offload only this blocking portion to run_in_executor.
+    """
+    return path.read_text(encoding="utf-8").strip()
+
+
+def load_prompt(name: str) -> str:
+    """Load a prompt template by name (without extension).
+
+    Reads from /config/prompts/{name}.md. Caches the result and only
+    re-reads the file when its mtime changes. os.stat() is near-instant
+    so this avoids repeated synchronous file I/O in async paths (M-11).
+
+    G5-06: This function performs blocking file I/O (os.stat + read_text).
+    The mtime cache means the file is only re-read when it actually changes
+    on disk, which is rare in production. The os.stat() fast-path check is
+    near-instant for local files. Async callers (route handlers, flow nodes)
+    should use async_load_prompt() instead, which offloads the file read to
+    run_in_executor when a re-read is triggered.
+
+    Raises RuntimeError if the template file cannot be found.
+    """
+    path = PROMPTS_DIR / f"{name}.md"
+    try:
+        current_mtime = os.stat(path).st_mtime
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"Prompt template not found: {path}. "
+            "Ensure prompt files are mounted at /config/prompts/."
+        ) from exc
+
+    cached = _prompt_cache.get(name)
+    if cached is not None and cached[0] == current_mtime:
+        return cached[1]
+
+    content = _read_prompt_file(path)
+    _prompt_cache[name] = (current_mtime, content)
+    return content
+
+
+async def async_load_prompt(name: str) -> str:
+    """Async wrapper for load_prompt().
+
+    Uses the same mtime-based cache as load_prompt(). The os.stat()
+    fast-path check is synchronous (near-instant for local files).
+    Only when a re-read is actually needed does it offload the file
+    read to run_in_executor to avoid blocking the event loop.
+
+    Route handlers and flow nodes should prefer this over load_prompt().
+    """
+    path = PROMPTS_DIR / f"{name}.md"
+    try:
+        current_mtime = os.stat(path).st_mtime
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"Prompt template not found: {path}. "
+            "Ensure prompt files are mounted at /config/prompts/."
+        ) from exc
+
+    cached = _prompt_cache.get(name)
+    if cached is not None and cached[0] == current_mtime:
+        return cached[1]
+
+    loop = asyncio.get_running_loop()
+    content = await loop.run_in_executor(None, _read_prompt_file, path)
+    _prompt_cache[name] = (current_mtime, content)
+    return content
+
+```
+
+## app/stategraph_registry.py
+
+```python
+"""
+StateGraph package registry — bootstrap kernel component.
+
+Discovers AE and TE packages via Python entry_points (REQ-001 §10.2).
+Follows the Kaiser pattern: importlib.metadata for discovery,
+sys.modules eviction for hot-reload without container restart.
+
+Entry point groups:
+  - context_broker.ae: AE packages (infrastructure StateGraphs)
+  - context_broker.te: TE packages (cognitive StateGraphs — Imperator)
+"""
+
+import importlib
+import importlib.metadata
+import logging
+import sys
+import threading
+from typing import Callable
+
+_log = logging.getLogger("context_broker.stategraph_registry")
+_lock = threading.Lock()
+
+# Registry state
+_te_packages: dict[str, dict] = {}
+_ae_packages: dict[str, dict] = {}
+_imperator_builder: Callable | None = None
+_flow_builders: dict[str, Callable] = {}  # flow_name -> builder callable
+_package_metadata: dict[str, dict] = {}
+
+
+def scan() -> dict[str, list[str]]:
+    """Scan entry_points for AE and TE packages.
+
+    Evicts old modules from sys.modules before re-scanning (Kaiser pattern)
+    to support hot-reload without container restart.
+
+    Returns dict with 'ae' and 'te' lists of discovered package names.
+    """
+    global _imperator_builder
+
+    # Step 1: Evict previously-loaded package modules
+    with _lock:
+        for pkg_name in list(_te_packages.keys()) + list(_ae_packages.keys()):
+            _evict_package_modules(pkg_name)
+        _te_packages.clear()
+        _ae_packages.clear()
+        _flow_builders.clear()
+        _package_metadata.clear()
+        _imperator_builder = None
+
+    importlib.invalidate_caches()
+
+    discovered: dict[str, list[str]] = {"ae": [], "te": []}
+
+    # Step 2: Discover AE packages
+    for ep in importlib.metadata.entry_points(group="context_broker.ae"):
+        try:
+            register_fn = ep.load()
+            registration = register_fn()
+            with _lock:
+                _ae_packages[ep.name] = registration
+
+                # Register build types
+                if "build_types" in registration:
+                    from app.flows.build_type_registry import register_build_type
+
+                    for bt_name, (asm_builder, ret_builder) in registration[
+                        "build_types"
+                    ].items():
+                        register_build_type(bt_name, asm_builder, ret_builder)
+
+                # Register flow builders
+                if "flows" in registration:
+                    _flow_builders.update(registration["flows"])
+
+                _package_metadata[ep.name] = {
+                    "version": _get_package_version(ep.name),
+                    "type": "ae",
+                }
+
+            discovered["ae"].append(ep.name)
+            _log.info("Registered AE package: %s", ep.name)
+        except (ImportError, AttributeError, TypeError, ValueError) as exc:
+            _log.error("Failed to load AE entry point '%s': %s", ep.name, exc)
+
+    # Step 3: Discover TE packages
+    for ep in importlib.metadata.entry_points(group="context_broker.te"):
+        try:
+            register_fn = ep.load()
+            registration = register_fn()
+            with _lock:
+                _te_packages[ep.name] = registration
+
+                if "imperator_builder" in registration:
+                    _imperator_builder = registration["imperator_builder"]
+
+                _package_metadata[ep.name] = {
+                    "version": _get_package_version(ep.name),
+                    "type": "te",
+                    "identity": registration.get("identity", ""),
+                    "purpose": registration.get("purpose", ""),
+                    "tools_required": registration.get("tools_required", []),
+                }
+
+            discovered["te"].append(ep.name)
+            _log.info("Registered TE package: %s", ep.name)
+        except (ImportError, AttributeError, TypeError, ValueError) as exc:
+            _log.error("Failed to load TE entry point '%s': %s", ep.name, exc)
+
+    return discovered
+
+
+def get_imperator_builder() -> Callable | None:
+    """Return the registered Imperator flow builder, or None."""
+    return _imperator_builder
+
+
+def get_flow_builder(name: str) -> Callable | None:
+    """Return a registered AE flow builder by name, or None."""
+    return _flow_builders.get(name)
+
+
+def get_package_metadata() -> dict[str, dict]:
+    """Return metadata for all registered packages."""
+    with _lock:
+        return dict(_package_metadata)
+
+
+def is_loaded() -> bool:
+    """Return True if at least one package has been loaded."""
+    with _lock:
+        return bool(_te_packages) or bool(_ae_packages)
+
+
+def _evict_package_modules(package_name: str) -> None:
+    """Remove a package's modules from sys.modules to allow reimport.
+
+    Converts package name (hyphens) to module prefix (underscores)
+    for sys.modules lookup.
+    """
+    module_prefix = package_name.replace("-", "_")
+    to_remove = [
+        key
+        for key in sys.modules
+        if key == module_prefix or key.startswith(module_prefix + ".")
+    ]
+    for key in to_remove:
+        del sys.modules[key]
+    if to_remove:
+        _log.info("Evicted %d modules for package '%s'", len(to_remove), package_name)
+
+
+def _get_package_version(package_name: str) -> str:
+    """Get the installed version of a package."""
+    try:
+        return importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+```
+
+## app/token_budget.py
+
+```python
+"""
+Token budget resolution for context windows.
+
+Resolves the max_context_tokens setting for a build type:
+- "auto": query the configured LLM provider's model list endpoint
+- explicit integer: use that value directly
+- caller override: takes precedence over build type default
+
+Token budget is resolved once at window creation and stored.
+"""
+
+import logging
+from typing import Optional
+
+import httpx
+
+from app.config import get_api_key
+
+_log = logging.getLogger("context_broker.token_budget")
+
+
+async def resolve_token_budget(
+    config: dict,
+    build_type_config: dict,
+    caller_override: Optional[int] = None,
+) -> int:
+    """Resolve the token budget for a context window.
+
+    Priority order:
+    1. caller_override (explicit max_tokens from the caller)
+    2. build_type_config["max_context_tokens"] if it's an integer
+    3. Auto-query the LLM provider if max_context_tokens == "auto"
+    4. fallback_tokens from build_type_config
+
+    Args:
+        config: Full application config (for LLM provider settings).
+        build_type_config: The build type configuration dict.
+        caller_override: Optional explicit token budget from the caller.
+
+    Returns:
+        Resolved token budget as an integer.
+    """
+    if caller_override is not None and caller_override > 0:
+        _log.info("Token budget: using caller override %d", caller_override)
+        return caller_override
+
+    max_context_tokens = build_type_config.get("max_context_tokens", "auto")
+    fallback_tokens = build_type_config.get("fallback_tokens", 8192)
+
+    if isinstance(max_context_tokens, int) and max_context_tokens > 0:
+        _log.info(
+            "Token budget: using explicit build type value %d", max_context_tokens
+        )
+        return max_context_tokens
+
+    if max_context_tokens == "auto":
+        resolved = await _query_provider_context_length(config, fallback_tokens)
+        _log.info("Token budget: auto-resolved to %d", resolved)
+        return resolved
+
+    _log.warning(
+        "Token budget: unrecognized max_context_tokens value '%s', using fallback %d",
+        max_context_tokens,
+        fallback_tokens,
+    )
+    return fallback_tokens
+
+
+async def _query_provider_context_length(config: dict, fallback: int) -> int:
+    """Query the LLM provider's model list endpoint for context length.
+
+    Returns fallback if the provider doesn't report context length or
+    if the request fails.
+    """
+    llm_config = config.get("llm", {})
+    base_url = llm_config.get("base_url", "")
+    model = llm_config.get("model", "")
+    api_key = get_api_key(llm_config)
+
+    if not base_url or not model:
+        _log.warning(
+            "Token budget auto-resolution: LLM provider not configured, using fallback %d",
+            fallback,
+        )
+        return fallback
+
+    try:
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        models_url = base_url.rstrip("/") + "/models"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(models_url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+
+        models = data.get("data") or []
+        for model_info in models:
+            if model_info.get("id") == model:
+                context_length = model_info.get("context_length")
+                if isinstance(context_length, int) and context_length > 0:
+                    return context_length
+
+        _log.info(
+            "Token budget: model '%s' not found in provider model list, using fallback %d",
+            model,
+            fallback,
+        )
+        return fallback
+
+    except httpx.HTTPError as exc:
+        _log.warning(
+            "Token budget: failed to query provider model list: %s, using fallback %d",
+            exc,
+            fallback,
+        )
+        return fallback
+    except (ValueError, KeyError, OSError) as exc:
+        _log.warning(
+            "Token budget: unexpected error querying provider: %s, using fallback %d",
+            exc,
+            fallback,
+        )
+        return fallback
+
+```
+
+## app/flows/__init__.py
+
+```python
+
+```
+
+## app/flows/base_contract.py
+
+```python
+"""
+AE/TE Base Contract (REQ-001 §13).
+
+Defines the standard interface between any AE and any TE,
+enabling TE portability. TE packages depend on these types
+but not on any specific AE implementation.
+
+See also contracts.py for build type graph contracts (ARCH-18).
+"""
+
+from typing import Annotated, Callable, Optional
+
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
+from typing_extensions import TypedDict
+
+# ── What the AE passes to the TE on invocation (§13.2) ─────────────
+
+
+class TEInputState(TypedDict, total=False):
+    """Standard input state for TE invocation.
+
+    AE provides: messages (conversation history), context identifiers,
+    and the merged config dict.
+    """
+
+    messages: Annotated[list[AnyMessage], add_messages]
+    context_window_id: Optional[str]
+    conversation_id: Optional[str]
+    config: dict
+
+
+# ── What the TE returns to the AE (§13.3) ──────────────────────────
+
+
+class TEOutputState(TypedDict, total=False):
+    """Standard output state from TE invocation.
+
+    TE provides: final response text, messages to persist,
+    and optional error.
+    """
+
+    response_text: Optional[str]
+    messages: list[AnyMessage]
+    error: Optional[str]
+
+
+# ── What a TE package's register() function returns ─────────────────
+
+
+class TERegistration(TypedDict, total=False):
+    """Registration dict returned by a TE package's entry point.
+
+    The kernel's stategraph_registry.scan() processes this to
+    register the Imperator builder and any tools the TE requires.
+    """
+
+    identity: str  # What the Imperator is
+    purpose: str  # What the Imperator is for
+    imperator_builder: Callable  # () -> compiled StateGraph
+    tools_required: list[str]  # Tool names the TE needs from AE
+
+
+# ── What an AE package's register() function returns ────────────────
+
+
+class AERegistration(TypedDict, total=False):
+    """Registration dict returned by an AE package's entry point.
+
+    The kernel's stategraph_registry.scan() processes this to
+    register build types and flow builders in the appropriate registries.
+    """
+
+    build_types: dict[str, tuple[Callable, Callable]]  # name -> (assembly, retrieval)
+    flows: dict[str, Callable]  # name -> builder callable
+
+```
+
+## app/flows/build_type_registry.py
 
 ```python
 """
@@ -583,2161 +2598,22 @@ def get_retrieval_graph(name: str) -> Any:
 def list_build_types() -> list[str]:
     """Return a list of all registered build type names."""
     return list(_registry.keys())
+
+
+def clear_compiled_cache() -> None:
+    """Clear compiled graph caches only (not the registry).
+
+    Called after install_stategraph() to ensure next invocation
+    recompiles graphs from updated packages. The registry itself
+    is repopulated by stategraph_registry.scan().
+    """
+    with _lock:
+        _compiled_cache.clear()
+    _log.info("Compiled graph caches cleared")
+
 ```
 
----
-
-`app/flows/build_types/__init__.py`
-
-```python
-"""
-Build types package (ARCH-18).
-
-Importing this package triggers registration of all build types
-in the build_type_registry. Each build type module calls
-register_build_type() at import time.
-"""
-
-# R6-m3: Import all build types to trigger registration side effects.
-# This is the intended pattern: each module calls register_build_type()
-# at module scope, registering its (assembly_builder, retrieval_builder)
-# pair in the global registry. The arq_worker imports this package once
-# at startup to ensure all build types are available.
-import app.flows.build_types.passthrough  # noqa: F401
-import app.flows.build_types.standard_tiered  # noqa: F401
-import app.flows.build_types.knowledge_enriched  # noqa: F401
-```
-
----
-
-`app/flows/build_types/knowledge_enriched.py`
-
-```python
-"""
-Knowledge-enriched build type (ARCH-18).
-
-Extends standard-tiered with semantic retrieval and knowledge graph nodes.
-Full retrieval pipeline: episodic tiers + semantic vector search + KG traversal.
-
-Assembly is identical to standard-tiered (reuses the same graph builder).
-Retrieval adds inject_semantic_retrieval and inject_knowledge_graph nodes.
-
-F-06: Reads its own LLM config from config["build_types"]["knowledge-enriched"]["llm"],
-falling back to the global config["llm"] if not set.
-"""
-
-import asyncio
-import logging
-import operator
-import time
-import uuid
-from typing import Annotated, Optional
-
-import asyncpg
-import httpx
-import openai
-from langgraph.graph import END, StateGraph
-from typing_extensions import TypedDict
-
-from app.config import get_build_type_config, get_embeddings_model, get_tuning, verbose_log
-from app.flows.memory_scoring import filter_and_rank_memories
-from app.database import get_pg_pool, get_redis
-from app.flows.build_type_registry import register_build_type
-from app.flows.build_types.standard_tiered import (
-    build_standard_tiered_assembly,
-    _estimate_tokens,
-    _resolve_llm_config,
-)
-from app.flows.build_types.tier_scaling import scale_tier_percentages
-
-_log = logging.getLogger("context_broker.flows.build_types.knowledge_enriched")
-
-
-# ============================================================
-# Retrieval (extends standard-tiered with semantic + KG)
-# ============================================================
-
-
-class KnowledgeEnrichedRetrievalState(TypedDict):
-    """State for the knowledge-enriched retrieval flow."""
-
-    # Inputs
-    context_window_id: str
-    config: dict
-
-    # Intermediate
-    window: Optional[dict]
-    build_type_config: Optional[dict]
-    conversation_id: Optional[str]
-    max_token_budget: int
-    tier1_summary: Optional[str]
-    tier2_summaries: list[str]
-    recent_messages: list[dict]
-    semantic_messages: list[dict]
-    knowledge_graph_facts: list[str]
-    assembly_status: str
-
-    # Output
-    context_messages: Optional[list[dict]]
-    context_tiers: Optional[dict]
-    total_tokens_used: int
-    warnings: Annotated[list[str], operator.add]  # R5-m5: accumulate, don't overwrite
-    error: Optional[str]
-
-
-async def ke_load_window(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Load the context window and its build type configuration."""
-    # R5-M11: Validate UUID at retrieval entry point to fail gracefully
-    try:
-        uuid.UUID(state["context_window_id"])
-    except (ValueError, AttributeError):
-        _log.error(
-            "Invalid UUID in retrieval input: context_window_id=%s",
-            state.get("context_window_id"),
-        )
-        return {"error": "Invalid UUID in retrieval input", "assembly_status": "error"}
-
-    verbose_log(state["config"], _log, "knowledge_enriched.retrieval.load_window ENTER window=%s", state["context_window_id"])
-    pool = get_pg_pool()
-
-    window = await pool.fetchrow(
-        "SELECT * FROM context_windows WHERE id = $1",
-        uuid.UUID(state["context_window_id"]),
-    )
-    if window is None:
-        return {
-            "error": f"Context window {state['context_window_id']} not found",
-            "assembly_status": "error",
-        }
-
-    # Update last_accessed_at on every retrieval
-    await pool.execute(
-        "UPDATE context_windows SET last_accessed_at = NOW() WHERE id = $1",
-        uuid.UUID(state["context_window_id"]),
-    )
-
-    window_dict = dict(window)
-
-    try:
-        build_type_config = get_build_type_config(state["config"], window_dict["build_type"])
-    except ValueError as exc:
-        return {"error": str(exc), "assembly_status": "error"}
-
-    return {
-        "window": window_dict,
-        "build_type_config": build_type_config,
-        "conversation_id": str(window_dict["conversation_id"]),
-        "max_token_budget": window_dict["max_token_budget"],
-    }
-
-
-async def ke_wait_for_assembly(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Block if context assembly is in progress, with timeout.
-
-    R6-M9: If Redis is unavailable, proceed without waiting rather than crashing.
-    """
-    try:
-        redis = get_redis()
-    except RuntimeError:
-        _log.warning("Retrieval: Redis not available, proceeding without assembly wait")
-        return {"assembly_status": "ready"}
-
-    lock_key = f"assembly_in_progress:{state['context_window_id']}"
-
-    timeout = get_tuning(state["config"], "assembly_wait_timeout_seconds", 50)
-    poll_interval = get_tuning(state["config"], "assembly_poll_interval_seconds", 2)
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            in_progress = await redis.exists(lock_key)
-        except (ConnectionError, OSError, RuntimeError) as exc:
-            _log.warning(
-                "Retrieval: Redis error during assembly wait, proceeding: %s", exc
-            )
-            return {"assembly_status": "ready"}
-        if not in_progress:
-            return {"assembly_status": "ready"}
-
-        elapsed = timeout - (deadline - time.monotonic())
-        _log.info(
-            "Retrieval: waiting for assembly on window=%s (%.0fs/%ds)",
-            state["context_window_id"],
-            elapsed,
-            timeout,
-        )
-        await asyncio.sleep(poll_interval)
-
-    _log.warning(
-        "Retrieval: assembly timeout for window=%s after %ds",
-        state["context_window_id"],
-        timeout,
-    )
-    return {
-        "assembly_status": "timeout",
-        "warnings": [
-            "Context assembly was still in progress at retrieval time; "
-            "context may be stale."
-        ],
-    }
-
-
-async def ke_load_summaries(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Load active tier 1 and tier 2 summaries."""
-    pool = get_pg_pool()
-
-    summaries = await pool.fetch(
-        """
-        SELECT tier, summary_text, summarizes_from_seq
-        FROM conversation_summaries
-        WHERE context_window_id = $1
-          AND is_active = TRUE
-        ORDER BY tier ASC, summarizes_from_seq ASC
-        """,
-        uuid.UUID(state["context_window_id"]),
-    )
-
-    tier1 = None
-    tier2_list = []
-    for s in summaries:
-        if s["tier"] == 1:
-            tier1 = s["summary_text"]
-        elif s["tier"] == 2:
-            tier2_list.append(s["summary_text"])
-
-    return {"tier1_summary": tier1, "tier2_summaries": tier2_list}
-
-
-async def ke_load_recent_messages(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Load tier 3 recent verbatim messages within the remaining token budget.
-
-    F-05: Applies dynamic tier scaling based on conversation length.
-    """
-    pool = get_pg_pool()
-    build_type_config = state["build_type_config"]
-    max_budget = state["max_token_budget"]
-
-    # Count total messages for F-05 tier scaling
-    total_msg_count = await pool.fetchval(
-        "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = $1",
-        uuid.UUID(state["conversation_id"]),
-    )
-    scaled_config = scale_tier_percentages(build_type_config, total_msg_count or 0)
-
-    tier3_pct = scaled_config.get("tier3_pct", 0.50)
-    tier3_budget = int(max_budget * tier3_pct)
-
-    # Calculate tokens already used by summaries
-    summary_tokens = 0
-    if state.get("tier1_summary"):
-        summary_tokens += len(state["tier1_summary"]) // 4
-    for s in state.get("tier2_summaries", []):
-        summary_tokens += len(s) // 4
-
-    remaining_budget = max(0, min(tier3_budget, max_budget - summary_tokens))
-
-    # M-06: Avoid loading messages already covered by summaries
-    highest_summarized_seq = await pool.fetchval(
-        """
-        SELECT COALESCE(MAX(summarizes_to_seq), 0)
-        FROM conversation_summaries
-        WHERE context_window_id = $1
-          AND tier = 2
-          AND is_active = TRUE
-        """,
-        uuid.UUID(state["context_window_id"]),
-    )
-
-    max_messages = get_tuning(state["config"], "max_messages_to_load", 1000)
-
-    all_messages = await pool.fetch(
-        """
-        SELECT id, role, sender, content, sequence_number, token_count,
-               tool_calls, tool_call_id, created_at
-        FROM conversation_messages
-        WHERE conversation_id = $1
-          AND sequence_number > $2
-        ORDER BY sequence_number DESC
-        LIMIT $3
-        """,
-        uuid.UUID(state["conversation_id"]),
-        highest_summarized_seq,
-        max_messages,
-    )
-
-    recent = []
-    tokens_used = 0
-
-    for msg in all_messages:
-        msg_tokens = msg["token_count"] or max(1, len(msg.get("content") or "") // 4)
-        if tokens_used + msg_tokens <= remaining_budget:
-            recent.insert(0, dict(msg))
-            tokens_used += msg_tokens
-        else:
-            break
-
-    return {
-        "recent_messages": recent,
-        "total_tokens_used": summary_tokens + tokens_used,
-    }
-
-
-async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Retrieve semantically similar messages via pgvector.
-
-    G5-22a: Semantic retrieval may surface messages already compressed into
-    summaries. This is a known and accepted trade-off.
-    """
-    build_type_config = state["build_type_config"]
-    semantic_pct = build_type_config.get("semantic_retrieval_pct", 0)
-
-    if not semantic_pct or semantic_pct <= 0:
-        return {"semantic_messages": []}
-
-    if not state.get("recent_messages"):
-        return {"semantic_messages": []}
-
-    config = state["config"]
-
-    # Build query from recent messages
-    query_trunc = get_tuning(config, "query_truncation_chars", 200)
-    recent_text = " ".join((m.get("content") or "")[:query_trunc] for m in state["recent_messages"][-3:])
-
-    try:
-        embeddings_model = get_embeddings_model(config)
-        query_embedding = await embeddings_model.aembed_query(recent_text)
-    except (openai.APIError, httpx.HTTPError, ValueError) as exc:
-        _log.warning("Semantic retrieval: embedding failed: %s", exc)
-        return {"semantic_messages": []}
-
-    tier3_min_seq = (
-        state["recent_messages"][0]["sequence_number"]
-        if state["recent_messages"]
-        else None
-    )
-
-    if tier3_min_seq is None:
-        return {"semantic_messages": []}
-
-    semantic_budget = int(state["max_token_budget"] * semantic_pct)
-    tokens_per_msg = max(1, get_tuning(config, "tokens_per_message_estimate", 150))
-    semantic_limit = max(5, semantic_budget // tokens_per_msg)
-
-    pool = get_pg_pool()
-    vec_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
-
-    try:
-        rows = await pool.fetch(
-            """
-            SELECT id, role, sender, content, sequence_number, token_count,
-                   tool_calls, tool_call_id
-            FROM conversation_messages
-            WHERE conversation_id = $1
-              AND sequence_number < $2
-              AND embedding IS NOT NULL
-            ORDER BY embedding <=> $3::vector
-            LIMIT $4
-            """,
-            uuid.UUID(state["conversation_id"]),
-            tier3_min_seq,
-            vec_str,
-            semantic_limit,
-        )
-        semantic_messages = [dict(r) for r in rows]
-        _log.info(
-            "Semantic retrieval: found %d relevant messages for window=%s",
-            len(semantic_messages),
-            state["context_window_id"],
-        )
-        return {"semantic_messages": semantic_messages}
-    except (asyncpg.PostgresError, OSError) as exc:
-        _log.warning("Semantic retrieval query failed: %s", exc)
-        return {"semantic_messages": []}
-
-
-async def ke_inject_knowledge_graph(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Retrieve knowledge graph facts via Mem0."""
-    build_type_config = state["build_type_config"]
-    kg_pct = build_type_config.get("knowledge_graph_pct", 0)
-
-    if not kg_pct or kg_pct <= 0:
-        return {"knowledge_graph_facts": []}
-
-    if not state.get("recent_messages"):
-        return {"knowledge_graph_facts": []}
-
-    config = state["config"]
-
-    recent_text = " ".join((m.get("content") or "")[:500] for m in state["recent_messages"][-5:])
-
-    try:
-        from app.memory.mem0_client import get_mem0_client
-
-        mem0 = await get_mem0_client(config)
-        if mem0 is None:
-            return {"knowledge_graph_facts": []}
-
-        loop = asyncio.get_running_loop()
-        results = await loop.run_in_executor(
-            None,
-            lambda: mem0.search(
-                recent_text,
-                user_id=state["window"].get("participant_id", "default"),
-                limit=10,
-            ),
-        )
-
-        facts = []
-        if isinstance(results, dict):
-            memories = results.get("results", [])
-        else:
-            memories = results or []
-
-        # M-22: Apply half-life decay scoring and filter stale memories
-        memories = filter_and_rank_memories(memories, config)
-
-        for mem in memories:
-            fact_text = mem.get("memory") or mem.get("content") or str(mem)
-            if fact_text:
-                facts.append(fact_text)
-
-        _log.info(
-            "Knowledge graph: retrieved %d facts for window=%s",
-            len(facts),
-            state["context_window_id"],
-        )
-        return {"knowledge_graph_facts": facts}
-
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:  # EX-CB-001: broad catch for Mem0
-        _log.warning(
-            "Knowledge graph retrieval failed (degraded mode): %s", exc
-        )
-        return {"knowledge_graph_facts": []}
-
-
-async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Assemble the final context messages array from all tiers including semantic + KG.
-
-    ARCH-03: Produces a structured messages array matching the OpenAI format.
-    """
-    max_budget = state.get("max_token_budget", 0)
-    cumulative_tokens = 0
-    messages: list[dict] = []
-
-    # Tier 1: Archival summary
-    if state.get("tier1_summary"):
-        content = f"[Archival context]\n{state['tier1_summary']}"
-        cumulative_tokens += _estimate_tokens(content)
-        messages.append({"role": "system", "content": content})
-
-    # Tier 2: Chunk summaries
-    if state.get("tier2_summaries"):
-        content = "[Recent summaries]\n" + "\n\n".join(state["tier2_summaries"])
-        cumulative_tokens += _estimate_tokens(content)
-        messages.append({"role": "system", "content": content})
-
-    # Semantic retrieval — budget-aware (M-07)
-    if state.get("semantic_messages"):
-        remaining = max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
-        semantic_lines = []
-        semantic_tokens = 0
-        for m in state["semantic_messages"]:
-            line = f"[{m['role']}] {m['sender']}: {m.get('content') or ''}"
-            line_tokens = _estimate_tokens(line)
-            if semantic_tokens + line_tokens > remaining:
-                break
-            semantic_lines.append(line)
-            semantic_tokens += line_tokens
-        if semantic_lines:
-            content = "[Semantically relevant context]\n" + "\n".join(semantic_lines)
-            cumulative_tokens += _estimate_tokens(content)
-            messages.append({"role": "system", "content": content})
-
-    # Knowledge graph facts — budget-aware (M-07)
-    if state.get("knowledge_graph_facts"):
-        remaining = max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
-        fact_lines = []
-        fact_tokens = 0
-        for f in state["knowledge_graph_facts"]:
-            line = f"- {f}"
-            line_tokens = _estimate_tokens(line)
-            if fact_tokens + line_tokens > remaining:
-                break
-            fact_lines.append(line)
-            fact_tokens += line_tokens
-        if fact_lines:
-            content = "[Knowledge graph]\n" + "\n".join(fact_lines)
-            cumulative_tokens += _estimate_tokens(content)
-            messages.append({"role": "system", "content": content})
-
-    # Tier 3: Recent verbatim messages (M-08: newest first truncation)
-    truncated_recent_messages: list[dict] = []
-    if state.get("recent_messages"):
-        remaining = max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
-        msg_tokens = 0
-        for m in reversed(state["recent_messages"]):
-            msg_content = m.get("content", "")
-            msg_token_count = _estimate_tokens(msg_content)
-            if msg_tokens + msg_token_count > remaining:
-                break
-            truncated_recent_messages.insert(0, m)
-            msg_tokens += msg_token_count
-        for m in truncated_recent_messages:
-            msg = {"role": m["role"], "content": m["content"]}
-            if m.get("tool_calls"):
-                msg["tool_calls"] = m["tool_calls"]
-            if m.get("tool_call_id"):
-                msg["tool_call_id"] = m["tool_call_id"]
-            if m.get("sender"):
-                msg["name"] = m["sender"]
-            messages.append(msg)
-            cumulative_tokens += _estimate_tokens(m.get("content", ""))
-
-    # M-15: Build context_tiers from truncated lists
-    context_tiers = {
-        "archival_summary": state.get("tier1_summary"),
-        "chunk_summaries": state.get("tier2_summaries", []),
-        "semantic_messages": [
-            {
-                "id": str(m["id"]),
-                "role": m["role"],
-                "sender": m["sender"],
-                "content": m["content"],
-                "sequence_number": m["sequence_number"],
-            }
-            for m in state.get("semantic_messages", [])
-        ],
-        "knowledge_graph_facts": state.get("knowledge_graph_facts", []),
-        "recent_messages": [
-            {
-                "id": str(m["id"]),
-                "role": m["role"],
-                "sender": m["sender"],
-                "content": m["content"],
-                "sequence_number": m["sequence_number"],
-            }
-            for m in truncated_recent_messages
-        ],
-    }
-
-    return {
-        "context_messages": messages,
-        "context_tiers": context_tiers,
-    }
-
-
-def ke_route_after_load_window(state: KnowledgeEnrichedRetrievalState) -> str:
-    if state.get("error"):
-        return END
-    return "ke_wait_for_assembly"
-
-
-def ke_route_after_wait(state: KnowledgeEnrichedRetrievalState) -> str:
-    return "ke_load_summaries"
-
-
-def ke_route_after_load_messages(state: KnowledgeEnrichedRetrievalState) -> str:
-    """Route: check if build type needs semantic/KG retrieval."""
-    build_type_config = state.get("build_type_config", {})
-    needs_semantic = build_type_config.get("semantic_retrieval_pct", 0) > 0
-    needs_kg = build_type_config.get("knowledge_graph_pct", 0) > 0
-
-    if needs_semantic:
-        return "ke_inject_semantic_retrieval"
-    if needs_kg:
-        return "ke_inject_knowledge_graph"
-    return "ke_assemble_context"
-
-
-def ke_route_after_semantic(state: KnowledgeEnrichedRetrievalState) -> str:
-    build_type_config = state.get("build_type_config", {})
-    needs_kg = build_type_config.get("knowledge_graph_pct", 0) > 0
-    if needs_kg:
-        return "ke_inject_knowledge_graph"
-    return "ke_assemble_context"
-
-
-def build_knowledge_enriched_retrieval():
-    """Build and compile the knowledge-enriched retrieval StateGraph."""
-    workflow = StateGraph(KnowledgeEnrichedRetrievalState)
-
-    workflow.add_node("ke_load_window", ke_load_window)
-    workflow.add_node("ke_wait_for_assembly", ke_wait_for_assembly)
-    workflow.add_node("ke_load_summaries", ke_load_summaries)
-    workflow.add_node("ke_load_recent_messages", ke_load_recent_messages)
-    workflow.add_node("ke_inject_semantic_retrieval", ke_inject_semantic_retrieval)
-    workflow.add_node("ke_inject_knowledge_graph", ke_inject_knowledge_graph)
-    workflow.add_node("ke_assemble_context", ke_assemble_context)
-
-    workflow.set_entry_point("ke_load_window")
-
-    workflow.add_conditional_edges(
-        "ke_load_window",
-        ke_route_after_load_window,
-        {"ke_wait_for_assembly": "ke_wait_for_assembly", END: END},
-    )
-    workflow.add_conditional_edges(
-        "ke_wait_for_assembly",
-        ke_route_after_wait,
-        {"ke_load_summaries": "ke_load_summaries"},
-    )
-    workflow.add_edge("ke_load_summaries", "ke_load_recent_messages")
-
-    workflow.add_conditional_edges(
-        "ke_load_recent_messages",
-        ke_route_after_load_messages,
-        {
-            "ke_inject_semantic_retrieval": "ke_inject_semantic_retrieval",
-            "ke_inject_knowledge_graph": "ke_inject_knowledge_graph",
-            "ke_assemble_context": "ke_assemble_context",
-        },
-    )
-
-    workflow.add_conditional_edges(
-        "ke_inject_semantic_retrieval",
-        ke_route_after_semantic,
-        {
-            "ke_inject_knowledge_graph": "ke_inject_knowledge_graph",
-            "ke_assemble_context": "ke_assemble_context",
-        },
-    )
-
-    workflow.add_edge("ke_inject_knowledge_graph", "ke_assemble_context")
-    workflow.add_edge("ke_assemble_context", END)
-
-    return workflow.compile()
-
-
-# ============================================================
-# Assembly — reuse standard-tiered (same logic, just build type label differs)
-# ============================================================
-
-# The assembly process is identical for knowledge-enriched: chunk summarization
-# and archival consolidation work the same way. The difference is only in retrieval
-# (additional semantic + KG nodes). We reuse the standard-tiered assembly builder.
-# The build_type label in the assembly state is set by the caller (arq_worker),
-# so metrics are correctly attributed.
-
-register_build_type(
-    "knowledge-enriched",
-    build_standard_tiered_assembly,
-    build_knowledge_enriched_retrieval,
-)
-```
-
----
-
-`app/flows/build_types/passthrough.py`
-
-```python
-"""
-Passthrough build type (ARCH-18).
-
-Minimal build type that demonstrates the contract:
-- Assembly: no-op, just updates last_assembled_at.
-- Retrieval: loads recent messages as-is and returns them.
-
-No LLM calls, no summarization, no tier logic.
-"""
-
-import logging
-import operator
-import time
-import uuid
-from typing import Annotated, Optional
-
-from langgraph.graph import END, StateGraph
-from typing_extensions import TypedDict
-
-from app.config import get_build_type_config, get_tuning, verbose_log
-from app.database import get_pg_pool, get_redis
-from app.flows.build_type_registry import register_build_type
-from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
-
-_log = logging.getLogger("context_broker.flows.build_types.passthrough")
-
-
-# ============================================================
-# Assembly
-# ============================================================
-
-
-class PassthroughAssemblyState(TypedDict):
-    """State for passthrough assembly — minimal."""
-
-    context_window_id: str
-    conversation_id: str
-    config: dict
-
-    # Lock management
-    lock_key: str
-    lock_token: Optional[str]
-    lock_acquired: bool
-    assembly_start_time: Optional[float]
-
-    # Output
-    error: Optional[str]
-
-
-async def pt_acquire_lock(state: PassthroughAssemblyState) -> dict:
-    """Acquire Redis assembly lock."""
-    # R5-M11: Validate UUID at assembly entry point to fail gracefully
-    try:
-        uuid.UUID(state["context_window_id"])
-        uuid.UUID(state["conversation_id"])
-    except (ValueError, AttributeError):
-        _log.error(
-            "Invalid UUID in assembly input: context_window_id=%s, conversation_id=%s",
-            state.get("context_window_id"),
-            state.get("conversation_id"),
-        )
-        return {"error": "Invalid UUID in assembly input", "lock_acquired": False}
-
-    verbose_log(state["config"], _log, "passthrough.acquire_lock ENTER window=%s", state["context_window_id"])
-    lock_key = f"assembly_in_progress:{state['context_window_id']}"
-    lock_token = str(uuid.uuid4())
-    redis = get_redis()
-
-    acquired = await redis.set(
-        lock_key, lock_token,
-        ex=get_tuning(state["config"], "assembly_lock_ttl_seconds", 300),
-        nx=True,
-    )
-    if not acquired:
-        _log.info("Passthrough assembly: lock not acquired for window=%s — skipping", state["context_window_id"])
-        return {"lock_key": lock_key, "lock_token": None, "lock_acquired": False}
-
-    return {"lock_key": lock_key, "lock_token": lock_token, "lock_acquired": True, "assembly_start_time": time.monotonic()}
-
-
-async def pt_finalize(state: PassthroughAssemblyState) -> dict:
-    """No-op assembly: just update last_assembled_at.
-
-    R6-M13: Wrapped in try/except so errors route to pt_release_lock
-    instead of raising and leaking the lock.
-    """
-    try:
-        pool = get_pg_pool()
-        await pool.execute(
-            "UPDATE context_windows SET last_assembled_at = NOW() WHERE id = $1",
-            uuid.UUID(state["context_window_id"]),
-        )
-
-        start_time = state.get("assembly_start_time")
-        if start_time is not None:
-            duration = time.monotonic() - start_time
-            CONTEXT_ASSEMBLY_DURATION.labels(build_type="passthrough").observe(duration)
-
-        _log.info("Passthrough assembly complete for window=%s", state["context_window_id"])
-        return {}
-    except (RuntimeError, OSError, Exception) as exc:
-        _log.error("Passthrough finalize failed for window=%s: %s", state["context_window_id"], exc)
-        return {"error": f"Passthrough finalize failed: {exc}"}
-
-
-async def pt_release_lock(state: PassthroughAssemblyState) -> dict:
-    """Release Redis assembly lock."""
-    lock_key = state.get("lock_key", "")
-    lock_token = state.get("lock_token")
-    if lock_key and state.get("lock_acquired") and lock_token:
-        redis = get_redis()
-        lua_script = """
-        if redis.call("GET", KEYS[1]) == ARGV[1] then
-            return redis.call("DEL", KEYS[1])
-        else
-            return 0
-        end
-        """
-        await redis.eval(lua_script, 1, lock_key, lock_token)
-    return {}
-
-
-def pt_route_after_lock(state: PassthroughAssemblyState) -> str:
-    if not state.get("lock_acquired"):
-        return END
-    return "pt_finalize"
-
-
-def pt_route_after_finalize(state: PassthroughAssemblyState) -> str:
-    """R6-M13: Route to lock release regardless of error state."""
-    return "pt_release_lock"
-
-
-def build_passthrough_assembly():
-    """Build and compile the passthrough assembly StateGraph."""
-    workflow = StateGraph(PassthroughAssemblyState)
-
-    workflow.add_node("pt_acquire_lock", pt_acquire_lock)
-    workflow.add_node("pt_finalize", pt_finalize)
-    workflow.add_node("pt_release_lock", pt_release_lock)
-
-    workflow.set_entry_point("pt_acquire_lock")
-    workflow.add_conditional_edges(
-        "pt_acquire_lock",
-        pt_route_after_lock,
-        {"pt_finalize": "pt_finalize", END: END},
-    )
-    # R6-M13: Use conditional edge from pt_finalize so that errors
-    # route to pt_release_lock instead of leaking the lock.
-    workflow.add_conditional_edges(
-        "pt_finalize",
-        pt_route_after_finalize,
-        {"pt_release_lock": "pt_release_lock"},
-    )
-    workflow.add_edge("pt_release_lock", END)
-
-    return workflow.compile()
-
-
-# ============================================================
-# Retrieval
-# ============================================================
-
-
-class PassthroughRetrievalState(TypedDict):
-    """State for passthrough retrieval."""
-
-    context_window_id: str
-    config: dict
-
-    # Intermediate
-    window: Optional[dict]
-    conversation_id: Optional[str]
-    max_token_budget: int
-
-    # Output
-    context_messages: Optional[list[dict]]
-    context_tiers: Optional[dict]
-    total_tokens_used: int
-    warnings: Annotated[list[str], operator.add]  # R5-m5: accumulate, don't overwrite
-    error: Optional[str]
-
-
-async def pt_load_window(state: PassthroughRetrievalState) -> dict:
-    """Load the context window."""
-    # R5-M11: Validate UUID at retrieval entry point to fail gracefully
-    try:
-        uuid.UUID(state["context_window_id"])
-    except (ValueError, AttributeError):
-        _log.error(
-            "Invalid UUID in retrieval input: context_window_id=%s",
-            state.get("context_window_id"),
-        )
-        return {"error": "Invalid UUID in retrieval input"}
-
-    verbose_log(state["config"], _log, "passthrough.retrieval.load_window ENTER window=%s", state["context_window_id"])
-    pool = get_pg_pool()
-
-    window = await pool.fetchrow(
-        "SELECT * FROM context_windows WHERE id = $1",
-        uuid.UUID(state["context_window_id"]),
-    )
-    if window is None:
-        return {"error": f"Context window {state['context_window_id']} not found"}
-
-    window_dict = dict(window)
-    return {
-        "window": window_dict,
-        "conversation_id": str(window_dict["conversation_id"]),
-        "max_token_budget": window_dict["max_token_budget"],
-    }
-
-
-async def pt_load_recent(state: PassthroughRetrievalState) -> dict:
-    """Load recent messages as-is, up to the token budget."""
-    pool = get_pg_pool()
-    max_budget = state["max_token_budget"]
-    max_messages = get_tuning(state["config"], "max_messages_to_load", 1000)
-
-    rows = await pool.fetch(
-        """
-        SELECT id, role, sender, content, sequence_number, token_count,
-               tool_calls, tool_call_id, created_at
-        FROM conversation_messages
-        WHERE conversation_id = $1
-        ORDER BY sequence_number DESC
-        LIMIT $2
-        """,
-        uuid.UUID(state["conversation_id"]),
-        max_messages,
-    )
-
-    messages = []
-    tokens_used = 0
-    for row in rows:
-        msg = dict(row)
-        msg_tokens = msg.get("token_count") or max(1, len(msg.get("content", "") or "") // 4)
-        if tokens_used + msg_tokens > max_budget:
-            break
-        messages.insert(0, msg)
-        tokens_used += msg_tokens
-
-    # Build output messages array
-    context_messages = []
-    recent_for_tiers = []
-    for m in messages:
-        out = {"role": m["role"], "content": m.get("content", "")}
-        if m.get("tool_calls"):
-            out["tool_calls"] = m["tool_calls"]
-        if m.get("tool_call_id"):
-            out["tool_call_id"] = m["tool_call_id"]
-        if m.get("sender"):
-            out["name"] = m["sender"]
-        context_messages.append(out)
-        recent_for_tiers.append({
-            "id": str(m["id"]),
-            "role": m["role"],
-            "sender": m.get("sender", ""),
-            "content": m.get("content", ""),
-            "sequence_number": m["sequence_number"],
-        })
-
-    context_tiers = {
-        "archival_summary": None,
-        "chunk_summaries": [],
-        "semantic_messages": [],
-        "knowledge_graph_facts": [],
-        "recent_messages": recent_for_tiers,
-    }
-
-    return {
-        "context_messages": context_messages,
-        "context_tiers": context_tiers,
-        "total_tokens_used": tokens_used,
-    }
-
-
-def pt_ret_route_after_load(state: PassthroughRetrievalState) -> str:
-    if state.get("error"):
-        return END
-    return "pt_load_recent"
-
-
-def build_passthrough_retrieval():
-    """Build and compile the passthrough retrieval StateGraph."""
-    workflow = StateGraph(PassthroughRetrievalState)
-
-    workflow.add_node("pt_load_window", pt_load_window)
-    workflow.add_node("pt_load_recent", pt_load_recent)
-
-    workflow.set_entry_point("pt_load_window")
-    workflow.add_conditional_edges(
-        "pt_load_window",
-        pt_ret_route_after_load,
-        {"pt_load_recent": "pt_load_recent", END: END},
-    )
-    workflow.add_edge("pt_load_recent", END)
-
-    return workflow.compile()
-
-
-# ============================================================
-# Registration
-# ============================================================
-
-register_build_type("passthrough", build_passthrough_assembly, build_passthrough_retrieval)
-```
-
----
-
-`app/flows/build_types/standard_tiered.py`
-
-```python
-"""
-Standard-tiered build type (ARCH-18).
-
-Three-tier progressive compression context assembly:
-  Tier 1: Archival summary (oldest, most compressed)
-  Tier 2: Chunk summaries (middle layer)
-  Tier 3: Recent verbatim messages (newest, full fidelity)
-
-Moved from the monolithic context_assembly.py and retrieval_flow.py.
-All original logic, error handling, and lock management preserved.
-
-F-06: Reads its own LLM config from config["build_types"]["standard-tiered"]["llm"],
-falling back to the global config["llm"] if not set.
-"""
-
-import asyncio
-import logging
-import operator
-import time
-import uuid
-from typing import Annotated, Optional
-
-import asyncpg
-import httpx
-import openai
-from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.graph import END, StateGraph
-from typing_extensions import TypedDict
-
-from app.config import get_build_type_config, get_chat_model, get_tuning, verbose_log
-from app.database import get_pg_pool, get_redis
-from app.flows.build_type_registry import register_build_type
-from app.flows.build_types.tier_scaling import scale_tier_percentages
-from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
-from app.prompt_loader import async_load_prompt
-
-_log = logging.getLogger("context_broker.flows.build_types.standard_tiered")
-
-
-def _resolve_llm_config(config: dict, build_type_config: dict) -> dict:
-    """Resolve effective LLM config: build-type-specific overrides global (F-06).
-
-    Returns a config dict suitable for passing to get_chat_model().
-    """
-    bt_llm = build_type_config.get("llm")
-    if bt_llm:
-        # Build a config dict that get_chat_model expects (top-level "llm" key)
-        return {**config, "llm": bt_llm}
-    return config
-
-
-# ============================================================
-# Assembly
-# ============================================================
-
-
-class StandardTieredAssemblyState(TypedDict):
-    """State for the standard-tiered assembly pipeline."""
-
-    # Inputs
-    context_window_id: str
-    conversation_id: str
-    config: dict
-
-    # Intermediate
-    window: Optional[dict]
-    build_type_config: Optional[dict]
-    max_token_budget: int
-    all_messages: list[dict]
-    tier3_messages: list[dict]
-    older_messages: list[dict]
-    chunks: list[list[dict]]
-    tier2_summaries: list[str]
-    tier1_summary: Optional[str]
-    lock_key: str
-    lock_token: Optional[str]
-    lock_acquired: bool
-    had_errors: bool
-    assembly_start_time: Optional[float]
-
-    # Output
-    error: Optional[str]
-
-
-async def acquire_assembly_lock(state: StandardTieredAssemblyState) -> dict:
-    """Acquire a Redis distributed lock for this context window."""
-    # R5-M11: Validate UUID at assembly entry point to fail gracefully
-    try:
-        uuid.UUID(state["context_window_id"])
-        uuid.UUID(state["conversation_id"])
-    except (ValueError, AttributeError):
-        _log.error(
-            "Invalid UUID in assembly input: context_window_id=%s, conversation_id=%s",
-            state.get("context_window_id"),
-            state.get("conversation_id"),
-        )
-        return {"error": "Invalid UUID in assembly input", "lock_acquired": False}
-
-    verbose_log(state["config"], _log, "standard_tiered.acquire_lock ENTER window=%s", state["context_window_id"])
-    lock_key = f"assembly_in_progress:{state['context_window_id']}"
-    lock_token = str(uuid.uuid4())
-    redis = get_redis()
-
-    acquired = await redis.set(
-        lock_key, lock_token,
-        ex=get_tuning(state["config"], "assembly_lock_ttl_seconds", 300),
-        nx=True,
-    )
-    if not acquired:
-        _log.info(
-            "Context assembly: lock not acquired for window=%s — skipping",
-            state["context_window_id"],
-        )
-        return {"lock_key": lock_key, "lock_token": None, "lock_acquired": False}
-
-    return {"lock_key": lock_key, "lock_token": lock_token, "lock_acquired": True, "assembly_start_time": time.monotonic()}
-
-
-async def load_window_config(state: StandardTieredAssemblyState) -> dict:
-    """Load the context window and resolve its build type configuration."""
-    pool = get_pg_pool()
-
-    window = await pool.fetchrow(
-        "SELECT * FROM context_windows WHERE id = $1",
-        uuid.UUID(state["context_window_id"]),
-    )
-    if window is None:
-        return {"error": f"Context window {state['context_window_id']} not found"}
-
-    window_dict = dict(window)
-
-    try:
-        build_type_config = get_build_type_config(state["config"], window_dict["build_type"])
-    except ValueError as exc:
-        return {"error": str(exc)}
-
-    return {
-        "window": window_dict,
-        "build_type_config": build_type_config,
-        "max_token_budget": window_dict["max_token_budget"],
-    }
-
-
-async def load_messages(state: StandardTieredAssemblyState) -> dict:
-    """Load messages for the conversation in chronological order.
-
-    R2-F11: Adaptive message load limit. Instead of a fixed limit, estimate
-    the needed messages from the tier3 token budget and average tokens per
-    message. This avoids loading far more messages than could ever fit in
-    the context window while still providing enough for summarization.
-    """
-    pool = get_pg_pool()
-    build_type_config = state.get("build_type_config") or {}
-    max_budget = state.get("max_token_budget", 8192)
-    tier3_pct = build_type_config.get("tier3_pct", 0.72)
-    tier3_budget = int(max_budget * tier3_pct)
-    tokens_per_message = get_tuning(state["config"], "tokens_per_message_estimate", 150)
-    adaptive_limit = max(50, tier3_budget // tokens_per_message)
-
-    rows = await pool.fetch(
-        """
-        SELECT id, role, sender, content, sequence_number, token_count, created_at
-        FROM conversation_messages
-        WHERE conversation_id = $1
-        ORDER BY sequence_number DESC
-        LIMIT $2
-        """,
-        uuid.UUID(state["conversation_id"]),
-        adaptive_limit,
-    )
-
-    rows = list(reversed(rows))
-    messages = [dict(r) for r in rows]
-    _log.info(
-        "Context assembly: loaded %d messages for window=%s",
-        len(messages),
-        state["context_window_id"],
-    )
-    return {"all_messages": messages}
-
-
-async def calculate_tier_boundaries(state: StandardTieredAssemblyState) -> dict:
-    """Calculate which messages belong to each tier.
-
-    F-05: Applies dynamic tier scaling based on conversation length.
-    """
-    messages = state["all_messages"]
-    if not messages:
-        return {"tier3_messages": [], "older_messages": [], "chunks": []}
-
-    build_type_config = state["build_type_config"]
-    max_budget = state["max_token_budget"]
-
-    # F-05: Dynamic tier scaling
-    scaled_config = scale_tier_percentages(build_type_config, len(messages))
-
-    tier3_pct = scaled_config.get("tier3_pct", 0.72)
-    tier3_budget = int(max_budget * tier3_pct)
-
-    # Walk backwards to fill tier 3 budget
-    tier3_messages = []
-    tier3_tokens_used = 0
-    tier3_start_seq = messages[-1]["sequence_number"] + 1
-
-    for msg in reversed(messages):
-        msg_tokens = msg.get("token_count") or max(1, len(msg.get("content") or "") // 4)
-        if tier3_tokens_used + msg_tokens <= tier3_budget:
-            tier3_messages.insert(0, msg)
-            tier3_tokens_used += msg_tokens
-            tier3_start_seq = msg["sequence_number"]
-        else:
-            break
-
-    # Messages before tier 3 boundary need summarization
-    older_messages = [m for m in messages if m["sequence_number"] < tier3_start_seq]
-
-    # Incremental: find what's already covered by existing tier 2 summaries
-    pool = get_pg_pool()
-    existing_t2 = await pool.fetch(
-        """
-        SELECT summarizes_to_seq
-        FROM conversation_summaries
-        WHERE context_window_id = $1
-          AND tier = 2
-          AND is_active = TRUE
-        ORDER BY summarizes_to_seq DESC
-        LIMIT 1
-        """,
-        uuid.UUID(state["context_window_id"]),
-    )
-
-    max_summarized_seq = 0
-    if existing_t2:
-        max_summarized_seq = existing_t2[0]["summarizes_to_seq"]
-
-    # Only process messages not yet summarized
-    unsummarized = [m for m in older_messages if m["sequence_number"] > max_summarized_seq]
-
-    # Chunk unsummarized messages into groups
-    chunk_size = get_tuning(state["config"], "chunk_size", 20)
-    chunks = [
-        unsummarized[i : i + chunk_size]
-        for i in range(0, len(unsummarized), chunk_size)
-    ]
-
-    if max_summarized_seq > 0:
-        _log.info(
-            "Incremental assembly: %d new messages to summarize (already covered through seq %d)",
-            len(unsummarized),
-            max_summarized_seq,
-        )
-
-    return {
-        "tier3_messages": tier3_messages,
-        "older_messages": older_messages,
-        "chunks": chunks,
-    }
-
-
-async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
-    """LLM-summarize each new chunk of older messages."""
-    chunks = state["chunks"]
-    if not chunks:
-        return {"tier2_summaries": []}
-
-    config = state["config"]
-    build_type_config = state.get("build_type_config") or {}
-
-    # F-06: Use build-type-specific LLM config if available
-    effective_config = _resolve_llm_config(config, build_type_config)
-    llm_config = effective_config.get("llm", {})
-    llm = get_chat_model(effective_config)
-
-    pool = get_pg_pool()
-
-    # M-23: Load prompt once before the concurrent calls
-    try:
-        chunk_prompt = await async_load_prompt("chunk_summarization")
-    except RuntimeError as exc:
-        _log.error("Failed to load chunk_summarization prompt: %s", exc)
-        return {"tier2_summaries": [], "error": f"Prompt loading failed: {exc}"}
-
-    # R5-M13: Prepare Redis client and lock info for TTL renewal during summarization
-    redis = get_redis()
-    lock_key = state.get("lock_key", "")
-    lock_token = state.get("lock_token")
-    lock_ttl = get_tuning(config, "assembly_lock_ttl_seconds", 300)
-
-    async def _summarize_chunk(chunk: list[dict]) -> tuple[list[dict], str | None]:
-        # R5-M13: Renew lock TTL before each chunk summarization to prevent
-        # expiry during long-running LLM calls
-        if lock_key and lock_token:
-            current_val = await redis.get(lock_key)
-            if current_val == lock_token:  # decode_responses=True, already a string
-                await redis.expire(lock_key, lock_ttl)
-
-        chunk_text = "\n".join(
-            f"[{m['role']} | {m['sender']}] {m.get('content') or ''}" for m in chunk
-        )
-        messages = [
-            SystemMessage(content=chunk_prompt),
-            HumanMessage(content=chunk_text),
-        ]
-        try:
-            response = await llm.ainvoke(messages)
-            return (chunk, response.content)
-        except (openai.APIError, httpx.HTTPError, ValueError) as exc:
-            _log.error(
-                "Chunk summarization failed for window=%s: %s",
-                state["context_window_id"],
-                exc,
-            )
-            return (chunk, None)
-
-    # m16: Limit concurrent LLM calls
-    max_concurrent = get_tuning(config, "max_concurrent_chunk_summaries", 5)
-    semaphore = asyncio.Semaphore(max_concurrent)
-
-    async def _bounded_summarize(chunk: list[dict]) -> tuple[list[dict], str | None]:
-        async with semaphore:
-            return await _summarize_chunk(chunk)
-
-    llm_results = await asyncio.gather(*[_bounded_summarize(chunk) for chunk in chunks])
-
-    # M-09: Track whether any chunk failed
-    had_errors = any(summary_text is None for _, summary_text in llm_results)
-
-    # Insert summaries sequentially to preserve ordering
-    new_summaries = []
-    for chunk, summary_text in llm_results:
-        if summary_text is None:
-            continue
-
-        chunk_tokens = sum(
-            m.get("token_count") or max(1, len(m.get("content") or "") // 4) for m in chunk
-        )
-
-        # Idempotency: skip if summary already exists for this range
-        existing = await pool.fetchval(
-            """
-            SELECT id FROM conversation_summaries
-            WHERE context_window_id = $1
-              AND tier = 2
-              AND summarizes_from_seq = $2
-              AND summarizes_to_seq = $3
-              AND is_active = TRUE
-            """,
-            uuid.UUID(state["context_window_id"]),
-            chunk[0]["sequence_number"],
-            chunk[-1]["sequence_number"],
-        )
-        if existing:
-            _log.info(
-                "Skipping duplicate summary for seq %d-%d",
-                chunk[0]["sequence_number"],
-                chunk[-1]["sequence_number"],
-            )
-            continue
-
-        # R5-M14: Catch UniqueViolationError in case a concurrent assembler
-        # already inserted a summary for this range between our pre-check
-        # and this INSERT.
-        try:
-            await pool.execute(
-                """
-                INSERT INTO conversation_summaries
-                    (conversation_id, context_window_id, summary_text, tier,
-                     summarizes_from_seq, summarizes_to_seq, message_count,
-                     original_token_count, summary_token_count, summarized_by_model)
-                VALUES ($1, $2, $3, 2, $4, $5, $6, $7, $8, $9)
-                """,
-                uuid.UUID(state["conversation_id"]),
-                uuid.UUID(state["context_window_id"]),
-                summary_text,
-                chunk[0]["sequence_number"],
-                chunk[-1]["sequence_number"],
-                len(chunk),
-                chunk_tokens,
-                len(summary_text) // 4,
-                llm_config.get("model", "unknown"),
-            )
-        except asyncpg.UniqueViolationError:
-            _log.info(
-                "Concurrent summary insert for seq %d-%d — skipping (other assembler won)",
-                chunk[0]["sequence_number"],
-                chunk[-1]["sequence_number"],
-            )
-            continue
-        new_summaries.append(summary_text)
-
-    _log.info(
-        "Context assembly: wrote %d tier 2 summaries for window=%s",
-        len(new_summaries),
-        state["context_window_id"],
-    )
-    result: dict = {"tier2_summaries": new_summaries}
-    if had_errors:
-        result["had_errors"] = True
-    return result
-
-
-async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> dict:
-    """Consolidate oldest tier 2 summaries into a tier 1 archival summary."""
-    pool = get_pg_pool()
-
-    active_t2 = await pool.fetch(
-        """
-        SELECT id, summary_text, summarizes_from_seq, summarizes_to_seq, message_count
-        FROM conversation_summaries
-        WHERE context_window_id = $1
-          AND tier = 2
-          AND is_active = TRUE
-        ORDER BY summarizes_from_seq ASC
-        """,
-        uuid.UUID(state["context_window_id"]),
-    )
-
-    if len(active_t2) <= get_tuning(state["config"], "consolidation_threshold", 3):
-        return {"tier1_summary": None}
-
-    keep_recent = get_tuning(state["config"], "consolidation_keep_recent", 2)
-
-    # R6-M11: Guard against empty consolidation list when keep_recent >= len(active_t2)
-    if len(active_t2) <= keep_recent:
-        return {"tier1_summary": None}
-
-    to_consolidate = list(active_t2)[:-keep_recent]
-
-    # M-16: Include existing tier 1 summary in consolidation
-    existing_t1 = await pool.fetchrow(
-        """
-        SELECT summary_text
-        FROM conversation_summaries
-        WHERE context_window_id = $1
-          AND tier = 1
-          AND is_active = TRUE
-        ORDER BY summarizes_to_seq DESC
-        LIMIT 1
-        """,
-        uuid.UUID(state["context_window_id"]),
-    )
-
-    consolidation_parts = []
-    if existing_t1 and existing_t1["summary_text"]:
-        consolidation_parts.append(
-            f"[Existing archival summary]\n{existing_t1['summary_text']}"
-        )
-    consolidation_parts.extend(r["summary_text"] for r in to_consolidate)
-    consolidation_text = "\n\n".join(consolidation_parts)
-
-    config = state["config"]
-    build_type_config = state.get("build_type_config") or {}
-
-    # F-06: Use build-type-specific LLM config if available
-    effective_config = _resolve_llm_config(config, build_type_config)
-    llm_config = effective_config.get("llm", {})
-
-    # M-23: Catch prompt-loading failures
-    try:
-        archival_prompt = await async_load_prompt("archival_consolidation")
-    except RuntimeError as exc:
-        _log.error("Failed to load archival_consolidation prompt: %s", exc)
-        return {"tier1_summary": None, "error": f"Prompt loading failed: {exc}"}
-
-    llm = get_chat_model(effective_config)
-
-    messages = [
-        SystemMessage(content=archival_prompt),
-        HumanMessage(content=consolidation_text),
-    ]
-
-    try:
-        response = await llm.ainvoke(messages)
-        archival_text = response.content
-
-        if archival_text:
-            async with pool.acquire() as conn:
-                async with conn.transaction():
-                    # Deactivate existing tier 1
-                    await conn.execute(
-                        """
-                        UPDATE conversation_summaries
-                        SET is_active = FALSE
-                        WHERE context_window_id = $1 AND tier = 1 AND is_active = TRUE
-                        """,
-                        uuid.UUID(state["context_window_id"]),
-                    )
-
-                    # Deactivate consolidated tier 2 chunks
-                    consolidated_ids = [r["id"] for r in to_consolidate]
-                    await conn.execute(
-                        """
-                        UPDATE conversation_summaries
-                        SET is_active = FALSE
-                        WHERE id = ANY($1::uuid[])
-                        """,
-                        consolidated_ids,
-                    )
-
-                    # Insert new tier 1 archival summary
-                    await conn.execute(
-                        """
-                        INSERT INTO conversation_summaries
-                            (conversation_id, context_window_id, summary_text, tier,
-                             summarizes_from_seq, summarizes_to_seq, message_count,
-                             summarized_by_model)
-                        VALUES ($1, $2, $3, 1, $4, $5, $6, $7)
-                        """,
-                        uuid.UUID(state["conversation_id"]),
-                        uuid.UUID(state["context_window_id"]),
-                        archival_text,
-                        to_consolidate[0]["summarizes_from_seq"],
-                        to_consolidate[-1]["summarizes_to_seq"],
-                        sum(r.get("message_count") or 0 for r in to_consolidate),
-                        llm_config.get("model", "unknown"),
-                    )
-
-            _log.info(
-                "Context assembly: consolidated %d tier 2 summaries into tier 1 for window=%s",
-                len(to_consolidate),
-                state["context_window_id"],
-            )
-            return {"tier1_summary": archival_text}
-
-    except (openai.APIError, httpx.HTTPError, ValueError) as exc:
-        _log.error(
-            "Archival consolidation failed for window=%s: %s",
-            state["context_window_id"],
-            exc,
-        )
-        return {"tier1_summary": None, "had_errors": True}
-
-    return {"tier1_summary": None}
-
-
-async def finalize_assembly(state: StandardTieredAssemblyState) -> dict:
-    """Update last_assembled_at and observe duration metric.
-
-    M-09: Skip last_assembled_at update if there were partial failures.
-    """
-    if state.get("had_errors"):
-        _log.warning(
-            "Context assembly had errors for window=%s — skipping last_assembled_at update",
-            state["context_window_id"],
-        )
-    else:
-        pool = get_pg_pool()
-        await pool.execute(
-            "UPDATE context_windows SET last_assembled_at = NOW() WHERE id = $1",
-            uuid.UUID(state["context_window_id"]),
-        )
-
-    start_time = state.get("assembly_start_time")
-    if start_time is not None:
-        duration = time.monotonic() - start_time
-        CONTEXT_ASSEMBLY_DURATION.labels(build_type="standard-tiered").observe(duration)
-
-    _log.info(
-        "Context assembly %s for window=%s",
-        "complete (with errors)" if state.get("had_errors") else "complete",
-        state["context_window_id"],
-    )
-    return {}
-
-
-async def _atomic_lock_release(redis_client, lock_key: str, lock_token: str) -> bool:
-    """Atomically release a Redis lock only if we still own it (CB-R3-02)."""
-    lua_script = """
-    if redis.call("GET", KEYS[1]) == ARGV[1] then
-        return redis.call("DEL", KEYS[1])
-    else
-        return 0
-    end
-    """
-    result = await redis_client.eval(lua_script, 1, lock_key, lock_token)
-    return result == 1
-
-
-async def release_assembly_lock(state: StandardTieredAssemblyState) -> dict:
-    """Release the Redis assembly lock."""
-    lock_key = state.get("lock_key", "")
-    lock_token = state.get("lock_token")
-    if lock_key and state.get("lock_acquired") and lock_token:
-        redis = get_redis()
-        released = await _atomic_lock_release(redis, lock_key, lock_token)
-        if not released:
-            _log.debug(
-                "Lock %s was not released (expired or taken by another worker)",
-                lock_key,
-            )
-    return {}
-
-
-def route_after_lock(state: StandardTieredAssemblyState) -> str:
-    if not state.get("lock_acquired"):
-        return END
-    return "load_window_config"
-
-
-def route_after_load_config(state: StandardTieredAssemblyState) -> str:
-    if state.get("error"):
-        return "release_assembly_lock"
-    return "load_messages"
-
-
-def route_after_load_messages(state: StandardTieredAssemblyState) -> str:
-    if state.get("error"):
-        return "release_assembly_lock"
-    if not state.get("all_messages"):
-        return "finalize_assembly"
-    return "calculate_tier_boundaries"
-
-
-def route_after_calculate_tiers(state: StandardTieredAssemblyState) -> str:
-    if state.get("error"):
-        return "release_assembly_lock"
-    if not state.get("chunks"):
-        return "consolidate_archival_summary"
-    return "summarize_message_chunks"
-
-
-def route_after_summarize(state: StandardTieredAssemblyState) -> str:
-    if state.get("error"):
-        return "release_assembly_lock"
-    return "consolidate_archival_summary"
-
-
-def build_standard_tiered_assembly():
-    """Build and compile the standard-tiered assembly StateGraph."""
-    workflow = StateGraph(StandardTieredAssemblyState)
-
-    workflow.add_node("acquire_assembly_lock", acquire_assembly_lock)
-    workflow.add_node("load_window_config", load_window_config)
-    workflow.add_node("load_messages", load_messages)
-    workflow.add_node("calculate_tier_boundaries", calculate_tier_boundaries)
-    workflow.add_node("summarize_message_chunks", summarize_message_chunks)
-    workflow.add_node("consolidate_archival_summary", consolidate_archival_summary)
-    workflow.add_node("finalize_assembly", finalize_assembly)
-    workflow.add_node("release_assembly_lock", release_assembly_lock)
-
-    workflow.set_entry_point("acquire_assembly_lock")
-
-    workflow.add_conditional_edges(
-        "acquire_assembly_lock",
-        route_after_lock,
-        {"load_window_config": "load_window_config", END: END},
-    )
-    workflow.add_conditional_edges(
-        "load_window_config",
-        route_after_load_config,
-        {"load_messages": "load_messages", "release_assembly_lock": "release_assembly_lock"},
-    )
-    workflow.add_conditional_edges(
-        "load_messages",
-        route_after_load_messages,
-        {
-            "calculate_tier_boundaries": "calculate_tier_boundaries",
-            "finalize_assembly": "finalize_assembly",
-            "release_assembly_lock": "release_assembly_lock",
-        },
-    )
-    workflow.add_conditional_edges(
-        "calculate_tier_boundaries",
-        route_after_calculate_tiers,
-        {
-            "summarize_message_chunks": "summarize_message_chunks",
-            "consolidate_archival_summary": "consolidate_archival_summary",
-            "release_assembly_lock": "release_assembly_lock",
-        },
-    )
-    workflow.add_conditional_edges(
-        "summarize_message_chunks",
-        route_after_summarize,
-        {
-            "consolidate_archival_summary": "consolidate_archival_summary",
-            "release_assembly_lock": "release_assembly_lock",
-        },
-    )
-    workflow.add_edge("consolidate_archival_summary", "finalize_assembly")
-    workflow.add_edge("finalize_assembly", "release_assembly_lock")
-    workflow.add_edge("release_assembly_lock", END)
-
-    return workflow.compile()
-
-
-# ============================================================
-# Retrieval
-# ============================================================
-
-
-class StandardTieredRetrievalState(TypedDict):
-    """State for the standard-tiered retrieval flow."""
-
-    # Inputs
-    context_window_id: str
-    config: dict
-
-    # Intermediate
-    window: Optional[dict]
-    build_type_config: Optional[dict]
-    conversation_id: Optional[str]
-    max_token_budget: int
-    tier1_summary: Optional[str]
-    tier2_summaries: list[str]
-    recent_messages: list[dict]
-    assembly_status: str
-
-    # Output
-    context_messages: Optional[list[dict]]
-    context_tiers: Optional[dict]
-    total_tokens_used: int
-    warnings: Annotated[list[str], operator.add]  # R5-m5: accumulate, don't overwrite
-    error: Optional[str]
-
-
-async def ret_load_window(state: StandardTieredRetrievalState) -> dict:
-    """Load the context window and its build type configuration."""
-    # R5-M11: Validate UUID at retrieval entry point to fail gracefully
-    try:
-        uuid.UUID(state["context_window_id"])
-    except (ValueError, AttributeError):
-        _log.error(
-            "Invalid UUID in retrieval input: context_window_id=%s",
-            state.get("context_window_id"),
-        )
-        return {"error": "Invalid UUID in retrieval input", "assembly_status": "error"}
-
-    verbose_log(state["config"], _log, "standard_tiered.retrieval.load_window ENTER window=%s", state["context_window_id"])
-    pool = get_pg_pool()
-
-    window = await pool.fetchrow(
-        "SELECT * FROM context_windows WHERE id = $1",
-        uuid.UUID(state["context_window_id"]),
-    )
-    if window is None:
-        return {
-            "error": f"Context window {state['context_window_id']} not found",
-            "assembly_status": "error",
-        }
-
-    # Update last_accessed_at on every retrieval
-    await pool.execute(
-        "UPDATE context_windows SET last_accessed_at = NOW() WHERE id = $1",
-        uuid.UUID(state["context_window_id"]),
-    )
-
-    window_dict = dict(window)
-
-    try:
-        build_type_config = get_build_type_config(state["config"], window_dict["build_type"])
-    except ValueError as exc:
-        return {"error": str(exc), "assembly_status": "error"}
-
-    return {
-        "window": window_dict,
-        "build_type_config": build_type_config,
-        "conversation_id": str(window_dict["conversation_id"]),
-        "max_token_budget": window_dict["max_token_budget"],
-    }
-
-
-async def ret_wait_for_assembly(state: StandardTieredRetrievalState) -> dict:
-    """Block if context assembly is in progress, with timeout.
-
-    R6-M9: If Redis is unavailable, proceed without waiting rather than crashing.
-    """
-    try:
-        redis = get_redis()
-    except RuntimeError:
-        _log.warning("Retrieval: Redis not available, proceeding without assembly wait")
-        return {"assembly_status": "ready"}
-
-    lock_key = f"assembly_in_progress:{state['context_window_id']}"
-
-    timeout = get_tuning(state["config"], "assembly_wait_timeout_seconds", 50)
-    poll_interval = get_tuning(state["config"], "assembly_poll_interval_seconds", 2)
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            in_progress = await redis.exists(lock_key)
-        except (ConnectionError, OSError, RuntimeError) as exc:
-            _log.warning(
-                "Retrieval: Redis error during assembly wait, proceeding: %s", exc
-            )
-            return {"assembly_status": "ready"}
-        if not in_progress:
-            return {"assembly_status": "ready"}
-
-        elapsed = timeout - (deadline - time.monotonic())
-        _log.info(
-            "Retrieval: waiting for assembly on window=%s (%.0fs/%ds)",
-            state["context_window_id"],
-            elapsed,
-            timeout,
-        )
-        await asyncio.sleep(poll_interval)
-
-    _log.warning(
-        "Retrieval: assembly timeout for window=%s after %ds",
-        state["context_window_id"],
-        timeout,
-    )
-    return {
-        "assembly_status": "timeout",
-        "warnings": [
-            "Context assembly was still in progress at retrieval time; "
-            "context may be stale."
-        ],
-    }
-
-
-async def ret_load_summaries(state: StandardTieredRetrievalState) -> dict:
-    """Load active tier 1 and tier 2 summaries."""
-    pool = get_pg_pool()
-
-    summaries = await pool.fetch(
-        """
-        SELECT tier, summary_text, summarizes_from_seq
-        FROM conversation_summaries
-        WHERE context_window_id = $1
-          AND is_active = TRUE
-        ORDER BY tier ASC, summarizes_from_seq ASC
-        """,
-        uuid.UUID(state["context_window_id"]),
-    )
-
-    tier1 = None
-    tier2_list = []
-    for s in summaries:
-        if s["tier"] == 1:
-            tier1 = s["summary_text"]
-        elif s["tier"] == 2:
-            tier2_list.append(s["summary_text"])
-
-    return {"tier1_summary": tier1, "tier2_summaries": tier2_list}
-
-
-async def ret_load_recent_messages(state: StandardTieredRetrievalState) -> dict:
-    """Load tier 3 recent verbatim messages within the remaining token budget.
-
-    F-05: Applies dynamic tier scaling based on conversation length.
-    """
-    pool = get_pg_pool()
-    build_type_config = state["build_type_config"]
-    max_budget = state["max_token_budget"]
-
-    # Count total messages for F-05 tier scaling
-    total_msg_count = await pool.fetchval(
-        "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = $1",
-        uuid.UUID(state["conversation_id"]),
-    )
-    scaled_config = scale_tier_percentages(build_type_config, total_msg_count or 0)
-
-    tier3_pct = scaled_config.get("tier3_pct", 0.72)
-    tier3_budget = int(max_budget * tier3_pct)
-
-    # Calculate tokens already used by summaries
-    summary_tokens = 0
-    if state.get("tier1_summary"):
-        summary_tokens += len(state["tier1_summary"]) // 4
-    for s in state.get("tier2_summaries", []):
-        summary_tokens += len(s) // 4
-
-    remaining_budget = max(0, min(tier3_budget, max_budget - summary_tokens))
-
-    # M-06: Avoid loading messages already covered by summaries
-    highest_summarized_seq = await pool.fetchval(
-        """
-        SELECT COALESCE(MAX(summarizes_to_seq), 0)
-        FROM conversation_summaries
-        WHERE context_window_id = $1
-          AND tier = 2
-          AND is_active = TRUE
-        """,
-        uuid.UUID(state["context_window_id"]),
-    )
-
-    # R2-F11: Adaptive message load limit based on tier3 token budget
-    tokens_per_message = get_tuning(state["config"], "tokens_per_message_estimate", 150)
-    adaptive_limit = max(50, tier3_budget // tokens_per_message)
-
-    all_messages = await pool.fetch(
-        """
-        SELECT id, role, sender, content, sequence_number, token_count,
-               tool_calls, tool_call_id, created_at
-        FROM conversation_messages
-        WHERE conversation_id = $1
-          AND sequence_number > $2
-        ORDER BY sequence_number DESC
-        LIMIT $3
-        """,
-        uuid.UUID(state["conversation_id"]),
-        highest_summarized_seq,
-        adaptive_limit,
-    )
-
-    recent = []
-    tokens_used = 0
-
-    for msg in all_messages:
-        msg_tokens = msg["token_count"] or max(1, len(msg.get("content") or "") // 4)
-        if tokens_used + msg_tokens <= remaining_budget:
-            recent.insert(0, dict(msg))
-            tokens_used += msg_tokens
-        else:
-            break
-
-    return {
-        "recent_messages": recent,
-        "total_tokens_used": summary_tokens + tokens_used,
-    }
-
-
-def _estimate_tokens(text: str) -> int:
-    """Estimate token count from text length (approx 4 chars per token)."""
-    return max(1, len(text) // 4)
-
-
-async def ret_assemble_context(state: StandardTieredRetrievalState) -> dict:
-    """Assemble the final context messages array from all tiers.
-
-    ARCH-03: Produces a structured messages array matching the OpenAI format.
-    ARCH-15: Summaries are inserted as system messages.
-    """
-    max_budget = state.get("max_token_budget", 0)
-    cumulative_tokens = 0
-    messages: list[dict] = []
-
-    # Tier 1: Archival summary
-    if state.get("tier1_summary"):
-        content = f"[Archival context]\n{state['tier1_summary']}"
-        cumulative_tokens += _estimate_tokens(content)
-        messages.append({"role": "system", "content": content})
-
-    # Tier 2: Chunk summaries
-    if state.get("tier2_summaries"):
-        content = "[Recent summaries]\n" + "\n\n".join(state["tier2_summaries"])
-        cumulative_tokens += _estimate_tokens(content)
-        messages.append({"role": "system", "content": content})
-
-    # Tier 3: Recent verbatim messages (M-08: newest first truncation)
-    truncated_recent_messages: list[dict] = []
-    if state.get("recent_messages"):
-        remaining = max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
-        msg_tokens = 0
-        for m in reversed(state["recent_messages"]):
-            msg_content = m.get("content", "")
-            msg_token_count = _estimate_tokens(msg_content)
-            if msg_tokens + msg_token_count > remaining:
-                break
-            truncated_recent_messages.insert(0, m)
-            msg_tokens += msg_token_count
-        for m in truncated_recent_messages:
-            msg = {"role": m["role"], "content": m["content"]}
-            if m.get("tool_calls"):
-                msg["tool_calls"] = m["tool_calls"]
-            if m.get("tool_call_id"):
-                msg["tool_call_id"] = m["tool_call_id"]
-            if m.get("sender"):
-                msg["name"] = m["sender"]
-            messages.append(msg)
-            cumulative_tokens += _estimate_tokens(m.get("content", ""))
-
-    context_tiers = {
-        "archival_summary": state.get("tier1_summary"),
-        "chunk_summaries": state.get("tier2_summaries", []),
-        "semantic_messages": [],
-        "knowledge_graph_facts": [],
-        "recent_messages": [
-            {
-                "id": str(m["id"]),
-                "role": m["role"],
-                "sender": m["sender"],
-                "content": m["content"],
-                "sequence_number": m["sequence_number"],
-            }
-            for m in truncated_recent_messages
-        ],
-    }
-
-    return {
-        "context_messages": messages,
-        "context_tiers": context_tiers,
-    }
-
-
-def ret_route_after_load_window(state: StandardTieredRetrievalState) -> str:
-    if state.get("error"):
-        return END
-    return "ret_wait_for_assembly"
-
-
-def ret_route_after_wait(state: StandardTieredRetrievalState) -> str:
-    return "ret_load_summaries"
-
-
-def build_standard_tiered_retrieval():
-    """Build and compile the standard-tiered retrieval StateGraph."""
-    workflow = StateGraph(StandardTieredRetrievalState)
-
-    workflow.add_node("ret_load_window", ret_load_window)
-    workflow.add_node("ret_wait_for_assembly", ret_wait_for_assembly)
-    workflow.add_node("ret_load_summaries", ret_load_summaries)
-    workflow.add_node("ret_load_recent_messages", ret_load_recent_messages)
-    workflow.add_node("ret_assemble_context", ret_assemble_context)
-
-    workflow.set_entry_point("ret_load_window")
-
-    workflow.add_conditional_edges(
-        "ret_load_window",
-        ret_route_after_load_window,
-        {"ret_wait_for_assembly": "ret_wait_for_assembly", END: END},
-    )
-    workflow.add_conditional_edges(
-        "ret_wait_for_assembly",
-        ret_route_after_wait,
-        {"ret_load_summaries": "ret_load_summaries"},
-    )
-    workflow.add_edge("ret_load_summaries", "ret_load_recent_messages")
-    workflow.add_edge("ret_load_recent_messages", "ret_assemble_context")
-    workflow.add_edge("ret_assemble_context", END)
-
-    return workflow.compile()
-
-
-# ============================================================
-# Registration
-# ============================================================
-
-register_build_type("standard-tiered", build_standard_tiered_assembly, build_standard_tiered_retrieval)
-```
-
----
-
-`app/flows/build_types/tier_scaling.py`
-
-```python
-"""
-Dynamic tier scaling (F-05).
-
-Adjusts tier percentages based on conversation length. Short conversations
-use more tier 3 (verbatim) budget. Long conversations shift budget toward
-tier 1/tier 2 (compressed) layers to fit more history.
-
-The config values are starting points; this function adjusts them.
-"""
-
-import logging
-
-_log = logging.getLogger("context_broker.flows.build_types.tier_scaling")
-
-# Thresholds for conversation length categories
-_SHORT_CONVERSATION = 50
-_LONG_CONVERSATION = 500
-
-
-def scale_tier_percentages(
-    build_type_config: dict,
-    message_count: int,
-) -> dict:
-    """Return a copy of build_type_config with tier percentages adjusted for message count.
-
-    F-05: Dynamic tier scaling.
-
-    - Short conversations (< 50 messages): boost tier3 by shifting from tier1/tier2.
-      Rationale: there's little to summarize, so maximize verbatim budget.
-    - Medium conversations (50-500 messages): use config as-is.
-    - Long conversations (> 500 messages): boost tier1/tier2 by shifting from tier3.
-      Rationale: more history to compress, summaries are more valuable.
-
-    The adjustment is a simple linear interpolation within each range.
-    Non-tier percentage keys (knowledge_graph_pct, semantic_retrieval_pct) are
-    left unchanged — only tier1/2/3 are rebalanced.
-
-    Args:
-        build_type_config: The build type config dict (must contain tier*_pct keys).
-        message_count: Total number of messages in the conversation.
-
-    Returns:
-        A new dict with adjusted tier percentages.
-    """
-    config = dict(build_type_config)
-
-    tier1_pct = config.get("tier1_pct", 0)
-    tier2_pct = config.get("tier2_pct", 0)
-    tier3_pct = config.get("tier3_pct", 0)
-
-    # Only adjust if all three tiers are present
-    if not (tier1_pct or tier2_pct or tier3_pct):
-        return config
-
-    tier_total = tier1_pct + tier2_pct + tier3_pct
-
-    if message_count < _SHORT_CONVERSATION:
-        # Short conversations: boost tier3 at the expense of tier1/tier2.
-        # At 0 messages, shift 80% of tier1+tier2 budget to tier3.
-        # Linear ramp from 80% shift at 0 messages to 0% shift at 50 messages.
-        ratio = 1.0 - (message_count / _SHORT_CONVERSATION)
-        shift_factor = 0.8 * ratio  # max 80% of tier1+tier2 shifts to tier3
-
-        shift_amount = (tier1_pct + tier2_pct) * shift_factor
-        # Distribute the reduction proportionally between tier1 and tier2
-        if tier1_pct + tier2_pct > 0:
-            t1_share = tier1_pct / (tier1_pct + tier2_pct)
-            t2_share = tier2_pct / (tier1_pct + tier2_pct)
-        else:
-            t1_share = 0.5
-            t2_share = 0.5
-
-        config["tier1_pct"] = round(tier1_pct - shift_amount * t1_share, 4)
-        config["tier2_pct"] = round(tier2_pct - shift_amount * t2_share, 4)
-        config["tier3_pct"] = round(tier3_pct + shift_amount, 4)
-
-        _log.debug(
-            "F-05: Short conversation (%d msgs) — tier scaling: t1=%.2f%% t2=%.2f%% t3=%.2f%%",
-            message_count,
-            config["tier1_pct"] * 100,
-            config["tier2_pct"] * 100,
-            config["tier3_pct"] * 100,
-        )
-
-    elif message_count > _LONG_CONVERSATION:
-        # Long conversations: boost tier1/tier2 at the expense of tier3.
-        # Linear ramp from 0% shift at 500 messages to 30% shift at 2000 messages.
-        excess = min(message_count - _LONG_CONVERSATION, 1500)
-        ratio = excess / 1500
-        shift_factor = 0.3 * ratio  # max 30% of tier3 shifts to tier1+tier2
-
-        shift_amount = tier3_pct * shift_factor
-        # Distribute the gain: 40% to tier1, 60% to tier2
-        config["tier1_pct"] = round(tier1_pct + shift_amount * 0.4, 4)
-        config["tier2_pct"] = round(tier2_pct + shift_amount * 0.6, 4)
-        config["tier3_pct"] = round(tier3_pct - shift_amount, 4)
-
-        _log.debug(
-            "F-05: Long conversation (%d msgs) — tier scaling: t1=%.2f%% t2=%.2f%% t3=%.2f%%",
-            message_count,
-            config["tier1_pct"] * 100,
-            config["tier2_pct"] * 100,
-            config["tier3_pct"] * 100,
-        )
-
-    # Ensure no negative values (defensive)
-    for key in ("tier1_pct", "tier2_pct", "tier3_pct"):
-        if config.get(key, 0) < 0:
-            config[key] = 0.0
-
-    # R5-m7: Renormalize tier percentages so they sum to exactly the original
-    # tier_total, avoiding floating-point drift after adjustments.
-    new_tier_sum = config["tier1_pct"] + config["tier2_pct"] + config["tier3_pct"]
-    if new_tier_sum > 0 and abs(new_tier_sum - tier_total) > 1e-9:
-        factor = tier_total / new_tier_sum
-        config["tier1_pct"] = round(config["tier1_pct"] * factor, 6)
-        config["tier2_pct"] = round(config["tier2_pct"] * factor, 6)
-        config["tier3_pct"] = round(config["tier3_pct"] * factor, 6)
-
-    return config
-```
-
----
-
-`app/flows/context_assembly.py`
-
-```python
-"""
-Context Assembly — backward-compatibility shim (ARCH-18).
-
-The assembly logic has moved to app.flows.build_types.standard_tiered.
-This module re-exports the original symbols so existing imports and
-tests continue to work.
-
-build_context_assembly() returns the standard-tiered assembly graph
-for backward compatibility.
-"""
-
-# Re-export from the new location
-from app.flows.build_types.standard_tiered import (  # noqa: F401
-    StandardTieredAssemblyState as ContextAssemblyState,
-    acquire_assembly_lock,
-    calculate_tier_boundaries,
-    consolidate_archival_summary,
-    finalize_assembly,
-    load_messages,
-    load_window_config,
-    release_assembly_lock,
-    summarize_message_chunks,
-    build_standard_tiered_assembly as build_context_assembly,
-    _atomic_lock_release,
-)
-```
-
----
-
-`app/flows/contracts.py`
+## app/flows/contracts.py
 
 ```python
 """
@@ -2786,11 +2662,3355 @@ class RetrievalOutput(TypedDict, total=False):
     total_tokens_used: int
     warnings: list[str]
     error: Optional[str]
+
 ```
 
----
+## app/flows/imperator_wrapper.py
 
-`app/flows/conversation_ops_flow.py`
+```python
+"""
+Imperator flow wrapper — kernel-side metrics and lifecycle management.
+
+Looks up the TE's Imperator from the stategraph_registry and invokes
+it with metrics recording. This is the kernel's interface to the TE.
+
+Per REQ-001 §6.4: metrics produced inside the flow layer, not route handlers.
+"""
+
+import logging
+import time
+import uuid
+from typing import AsyncGenerator
+
+from app.metrics_registry import CHAT_REQUESTS, CHAT_REQUEST_DURATION
+
+_log = logging.getLogger("context_broker.flows.imperator_wrapper")
+
+# Lazy singleton — rebuilt on install_stategraph() or TE config change.
+_imperator_flow = None
+_te_config_mtime: float = 0.0
+
+
+def _get_flow():
+    """Get the compiled Imperator flow from the TE registry.
+
+    Recompiles when TE config changes (detects admin_tools toggle,
+    model changes, etc.) without requiring container restart.
+    """
+    global _imperator_flow, _te_config_mtime
+    import os
+
+    from app.config import TE_CONFIG_PATH
+
+    # Check if TE config changed since last compilation
+    try:
+        current_mtime = os.stat(TE_CONFIG_PATH).st_mtime
+    except (OSError, FileNotFoundError):
+        current_mtime = 0.0
+
+    if _imperator_flow is not None and current_mtime != _te_config_mtime:
+        _log.info("TE config changed — recompiling Imperator flow")
+        _imperator_flow = None
+
+    if _imperator_flow is None:
+        from app.stategraph_registry import get_imperator_builder
+
+        builder = get_imperator_builder()
+        if builder is None:
+            raise RuntimeError(
+                "No TE package registered. Install a TE package with "
+                "install_stategraph or ensure one is installed at startup."
+            )
+        _imperator_flow = builder()
+        _te_config_mtime = current_mtime
+    return _imperator_flow
+
+
+def invalidate():
+    """Clear the cached flow. Called after install_stategraph()."""
+    global _imperator_flow
+    _imperator_flow = None
+    _log.info("Imperator flow cache invalidated")
+
+
+async def invoke_with_metrics(initial_state: dict, config: dict | None = None) -> dict:
+    """Invoke the Imperator flow and record chat metrics.
+
+    Per REQ-001 §6.4: metrics produced inside the flow layer, not route handlers.
+    """
+    start_time = time.monotonic()
+    status = "error"
+    try:
+        # Each invocation gets a unique thread_id. MemorySaver persists state
+        # WITHIN a single ReAct execution (agent → tool → agent → response),
+        # not across separate user turns. Cross-turn conversation memory comes
+        # from the Context Broker via get_context, not from MemorySaver.
+        thread_id = str(uuid.uuid4())
+        result = await _get_flow().ainvoke(
+            initial_state,
+            config={"configurable": {"thread_id": thread_id}},
+        )
+        status = "success"
+        return result
+    finally:
+        duration = time.monotonic() - start_time
+        CHAT_REQUESTS.labels(status=status).inc()
+        CHAT_REQUEST_DURATION.observe(duration)
+
+
+async def astream_events_with_metrics(
+    initial_state: dict,
+    config: dict | None = None,
+) -> AsyncGenerator:
+    """Stream Imperator events and record chat metrics.
+
+    Per REQ-001 §6.4: metrics produced inside the flow layer, not route handlers.
+    """
+    start_time = time.monotonic()
+    status = "error"
+    try:
+        thread_id = str(uuid.uuid4())
+        async for event in _get_flow().astream_events(
+            initial_state,
+            version="v2",
+            config={"configurable": {"thread_id": thread_id}},
+        ):
+            yield event
+        status = "success"
+    finally:
+        duration = time.monotonic() - start_time
+        CHAT_REQUESTS.labels(status=status).inc()
+        CHAT_REQUEST_DURATION.observe(duration)
+
+```
+
+## app/flows/install_stategraph.py
+
+```python
+"""
+install_stategraph — runtime StateGraph package installation (REQ-001 §10.1).
+
+MCP tool that installs AE or TE packages at runtime without container restart.
+Uses pip install --user with the configured package source (local/pypi/devpi).
+After installation, rescans entry_points to discover and register new StateGraphs.
+"""
+
+import asyncio
+import logging
+import subprocess
+
+_log = logging.getLogger("context_broker.flows.install_stategraph")
+
+
+async def install_stategraph(
+    package_name: str,
+    version: str | None = None,
+) -> dict:
+    """Install a StateGraph package and rescan entry_points.
+
+    Runs pip install --user from the configured source, then calls
+    scan() to refresh the registry. Clears compiled graph caches
+    so next invocation uses the updated package.
+    """
+    from app.config import load_config
+
+    config = load_config()
+    packages_config = config.get("packages", {})
+    source = packages_config.get("source", "pypi")
+
+    # Build pip install command
+    pkg_spec = f"{package_name}=={version}" if version else package_name
+    cmd = ["pip", "install", "--user", "--no-cache-dir"]
+
+    if source == "devpi":
+        devpi_url = packages_config.get("devpi_url")
+        if devpi_url:
+            cmd.extend(["--index-url", devpi_url])
+    elif source == "local":
+        local_path = packages_config.get("local_path", "/app/packages")
+        cmd.extend(["--no-index", "--find-links", local_path])
+    # pypi: no extra flags needed
+
+    cmd.append(pkg_spec)
+
+    _log.info("Installing StateGraph package: %s (source=%s)", pkg_spec, source)
+
+    # Run pip in executor to avoid blocking the event loop
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, _run_pip, cmd)
+
+    if result["returncode"] != 0:
+        _log.error("pip install failed: %s", result["stderr"])
+        return {
+            "status": "error",
+            "package": pkg_spec,
+            "error": f"Installation failed: {result['stderr'][:500]}",
+        }
+
+    _log.info("pip install succeeded for %s", pkg_spec)
+
+    # Rescan entry_points to discover the new/updated package
+    from app.stategraph_registry import scan
+
+    discovered = scan()
+
+    # Clear compiled graph caches so next use picks up new code
+    from app.flows.build_type_registry import clear_compiled_cache
+
+    clear_compiled_cache()
+
+    # Record in database (best-effort)
+    await _record_package_install(package_name, version or "latest")
+
+    return {
+        "status": "installed",
+        "package": pkg_spec,
+        "discovered": discovered,
+    }
+
+
+def _run_pip(cmd: list[str]) -> dict:
+    """Run pip as a subprocess with timeout."""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        return {
+            "returncode": proc.returncode,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "pip install timed out after 120 seconds",
+        }
+
+
+async def _record_package_install(package_name: str, version: str) -> None:
+    """Record the package installation in PostgreSQL (best-effort)."""
+    try:
+        from app.database import get_pg_pool
+
+        pool = get_pg_pool()
+        await pool.execute(
+            """
+            INSERT INTO stategraph_packages (package_name, version, installed_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (package_name) DO UPDATE
+            SET version = EXCLUDED.version, installed_at = NOW()
+            """,
+            package_name,
+            version,
+        )
+    except (OSError, RuntimeError) as exc:
+        _log.warning("Failed to record package install in DB: %s", exc)
+
+```
+
+## app/flows/tool_dispatch.py
+
+```python
+"""
+Tool dispatch — routes MCP tool calls to compiled StateGraph flows.
+
+All tool logic lives in StateGraph flows loaded dynamically from AE/TE
+packages via entry_points (REQ-001 §10). This module is the thin
+kernel-side routing layer that maps tool names to their flows using
+the stategraph_registry.
+"""
+
+import logging
+import time
+from typing import Any
+
+from app.flows.build_type_registry import get_retrieval_graph
+from app.metrics_registry import MCP_REQUESTS, MCP_REQUEST_DURATION
+from app.stategraph_registry import get_flow_builder, get_imperator_builder
+from app.models import (
+    GetContextInput,
+    ImperatorChatInput,
+    CreateContextWindowInput,
+    CreateConversationInput,
+    GetHistoryInput,
+    DeleteConversationInput,
+    ListConversationsInput,
+    QueryLogsInput,
+    SearchLogsInput,
+    MemAddInput,
+    MemDeleteInput,
+    MemGetContextInput,
+    MemListInput,
+    MemSearchInput,
+    MetricsGetInput,
+    RetrieveContextInput,
+    SearchContextWindowsInput,
+    SearchConversationsInput,
+    SearchKnowledgeInput,
+    SearchMessagesInput,
+    StoreMessageCoreInput,
+    StoreMessageInput,
+)
+
+_log = logging.getLogger("context_broker.flows.tool_dispatch")
+
+# Lazy-initialized flow singletons — compiled on first use from
+# dynamically loaded packages via the stategraph_registry.
+_flow_cache: dict[str, Any] = {}
+
+
+def _get_flow(name: str) -> Any:
+    """Get a compiled flow by registry name (lazy singleton)."""
+    if name not in _flow_cache:
+        builder = get_flow_builder(name)
+        if builder is None:
+            raise RuntimeError(
+                f"Flow '{name}' not available. Is the AE package installed?"
+            )
+        _flow_cache[name] = builder()
+    return _flow_cache[name]
+
+
+def _get_imperator_flow() -> Any:
+    """Get the compiled Imperator flow from the TE registry."""
+    if "imperator" not in _flow_cache:
+        builder = get_imperator_builder()
+        if builder is None:
+            raise RuntimeError(
+                "No TE package registered. Install a TE package with "
+                "install_stategraph or ensure one is installed at startup."
+            )
+        _flow_cache["imperator"] = builder()
+    return _flow_cache["imperator"]
+
+
+def invalidate_flow_cache() -> None:
+    """Clear all cached flows. Called after install_stategraph()."""
+    _flow_cache.clear()
+    _log.info("Flow dispatch cache cleared")
+
+
+async def dispatch_tool(
+    tool_name: str,
+    arguments: dict[str, Any],
+    config: dict[str, Any],
+    app_state: Any,
+) -> dict[str, Any]:
+    """Route a tool call to its StateGraph flow.
+
+    Validates inputs using Pydantic models before invoking flows.
+    Raises ValueError for unknown tools or validation errors.
+    """
+    _log.info("Dispatching tool: %s", tool_name)
+    _start_time = time.monotonic()
+    _status = "error"
+
+    try:
+        result = await _dispatch_tool_inner(tool_name, arguments, config, app_state)
+        _status = "success"
+        return result
+    finally:
+        _duration = time.monotonic() - _start_time
+        MCP_REQUESTS.labels(tool=tool_name, status=_status).inc()
+        MCP_REQUEST_DURATION.labels(tool=tool_name).observe(_duration)
+
+
+async def _dispatch_tool_inner(
+    tool_name: str,
+    arguments: dict[str, Any],
+    config: dict[str, Any],
+    app_state: Any,
+) -> dict[str, Any]:
+    """Inner dispatch — routes tool calls to their StateGraph flows."""
+
+    # ============================================================
+    # Core tools (D-02)
+    # ============================================================
+
+    if tool_name == "get_context":
+        validated = GetContextInput(**arguments)
+        result = await _get_flow("get_context").ainvoke(
+            {
+                "build_type": validated.build_type,
+                "budget": validated.budget,
+                "snapped_budget": 0,
+                "conversation_id": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
+                "config": config,
+                "context_window_id": None,
+                "context_messages": None,
+                "context_tiers": None,
+                "total_tokens_used": 0,
+                "assembly_status": "pending",
+                "warnings": [],
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        response: dict[str, Any] = {
+            "conversation_id": result.get("conversation_id"),
+            "context": result.get("context_messages"),
+            "tiers": result.get("context_tiers"),
+            "total_tokens": result.get("total_tokens_used", 0),
+            "assembly_status": result.get("assembly_status", "ready"),
+        }
+        if result.get("warnings"):
+            response["warnings"] = result["warnings"]
+        return response
+
+    elif tool_name == "store_message":
+        validated = StoreMessageCoreInput(**arguments)
+        result = await _get_flow("message_pipeline").ainvoke(
+            {
+                "context_window_id": None,
+                "conversation_id_input": str(validated.conversation_id),
+                "role": validated.role,
+                "sender": validated.sender,
+                "recipient": validated.recipient,
+                "content": validated.content,
+                "model_name": validated.model_name,
+                "tool_calls": validated.tool_calls,
+                "tool_call_id": validated.tool_call_id,
+                "message_id": None,
+                "sequence_number": None,
+                "was_collapsed": False,
+                "queued_jobs": [],
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        return {
+            "message_id": result.get("message_id"),
+            "sequence_number": result.get("sequence_number"),
+        }
+
+    elif tool_name == "search_messages":
+        validated = SearchMessagesInput(**arguments)
+        result = await _get_flow("message_search").ainvoke(
+            {
+                "query": validated.query,
+                "conversation_id": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
+                "sender": validated.sender,
+                "role": validated.role,
+                "date_from": validated.date_from,
+                "date_to": validated.date_to,
+                "limit": validated.limit,
+                "config": config,
+                "query_embedding": None,
+                "candidates": [],
+                "reranked_results": [],
+                "warning": None,
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        response = {"messages": result.get("reranked_results", [])}
+        if result.get("warning"):
+            response["warning"] = result["warning"]
+        return response
+
+    elif tool_name == "search_knowledge":
+        validated = SearchKnowledgeInput(**arguments)
+        result = await _get_flow("memory_search").ainvoke(
+            {
+                "query": validated.query,
+                "user_id": validated.user_id,
+                "limit": validated.limit,
+                "config": config,
+                "memories": [],
+                "relations": [],
+                "degraded": False,
+                "error": None,
+            }
+        )
+        if result.get("error") and not result.get("degraded"):
+            raise ValueError(result["error"])
+        return {
+            "memories": result.get("memories", []),
+            "relations": result.get("relations", []),
+            "degraded": result.get("degraded", False),
+        }
+
+    # ============================================================
+    # Management tools (keep existing names)
+    # ============================================================
+
+    elif tool_name == "conv_create_conversation":
+        validated = CreateConversationInput(**arguments)
+        result = await _get_flow("create_conversation").ainvoke(
+            {
+                "conversation_id": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
+                "title": validated.title,
+                "flow_id": validated.flow_id,
+                "user_id": validated.user_id,
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        return {"conversation_id": result["conversation_id"]}
+
+    elif tool_name == "conv_delete_conversation":
+        validated = DeleteConversationInput(**arguments)
+        from app.database import get_pg_pool
+
+        pool = get_pg_pool()
+        # Delete messages first (FK constraint), then conversation
+        await pool.execute(
+            "DELETE FROM conversation_summaries WHERE context_window_id IN "
+            "(SELECT id FROM context_windows WHERE conversation_id = $1)",
+            validated.conversation_id,
+        )
+        await pool.execute(
+            "DELETE FROM context_windows WHERE conversation_id = $1",
+            validated.conversation_id,
+        )
+        await pool.execute(
+            "DELETE FROM conversation_messages WHERE conversation_id = $1",
+            validated.conversation_id,
+        )
+        result = await pool.execute(
+            "DELETE FROM conversations WHERE id = $1",
+            validated.conversation_id,
+        )
+        return {"deleted": result == "DELETE 1"}
+
+    elif tool_name == "conv_list_conversations":
+        validated = ListConversationsInput(**arguments)
+        from app.database import get_pg_pool
+
+        pool = get_pg_pool()
+
+        if validated.participant:
+            # Filter to conversations where participant appears as sender or recipient
+            rows = await pool.fetch(
+                """
+                SELECT DISTINCT c.id, c.title, c.flow_id, c.user_id, c.created_at,
+                       (SELECT COUNT(*) FROM conversation_messages cm
+                        WHERE cm.conversation_id = c.id) AS message_count
+                FROM conversations c
+                WHERE EXISTS (
+                    SELECT 1 FROM conversation_messages cm
+                    WHERE cm.conversation_id = c.id
+                    AND (cm.sender = $1 OR cm.recipient = $1)
+                )
+                ORDER BY c.created_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                validated.participant,
+                validated.limit,
+                validated.offset,
+            )
+        else:
+            rows = await pool.fetch(
+                """
+                SELECT c.id, c.title, c.flow_id, c.user_id, c.created_at,
+                       (SELECT COUNT(*) FROM conversation_messages cm
+                        WHERE cm.conversation_id = c.id) AS message_count
+                FROM conversations c
+                ORDER BY c.created_at DESC
+                LIMIT $1 OFFSET $2
+                """,
+                validated.limit,
+                validated.offset,
+            )
+
+        conversations = [
+            {
+                "id": str(row["id"]),
+                "title": row["title"],
+                "flow_id": row["flow_id"],
+                "user_id": row["user_id"],
+                "created_at": (
+                    row["created_at"].isoformat() if row["created_at"] else None
+                ),
+                "message_count": row["message_count"],
+            }
+            for row in rows
+        ]
+        return {"conversations": conversations}
+
+    elif tool_name == "conv_store_message":
+        validated = StoreMessageInput(**arguments)
+        result = await _get_flow("message_pipeline").ainvoke(
+            {
+                "context_window_id": (
+                    str(validated.context_window_id)
+                    if validated.context_window_id
+                    else None
+                ),
+                "conversation_id_input": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
+                "role": validated.role,
+                "sender": validated.sender,
+                "recipient": validated.recipient,
+                "content": validated.content,
+                "model_name": validated.model_name,
+                "tool_calls": validated.tool_calls,
+                "tool_call_id": validated.tool_call_id,
+                "message_id": None,
+                "sequence_number": None,
+                "was_collapsed": False,
+                "queued_jobs": [],
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        return {
+            "message_id": result.get("message_id"),
+            "sequence_number": result.get("sequence_number"),
+            "was_collapsed": result.get("was_collapsed", False),
+            "queued_jobs": result.get("queued_jobs", []),
+        }
+
+    elif tool_name == "conv_retrieve_context":
+        validated = RetrieveContextInput(**arguments)
+        # ARCH-18: Look up the build type from the context window, then
+        # dispatch to the correct retrieval graph from the registry.
+        import uuid as _uuid
+        from app.database import get_pg_pool as _get_pg_pool
+
+        _pool = _get_pg_pool()
+        _window_row = await _pool.fetchrow(
+            "SELECT build_type FROM context_windows WHERE id = $1",
+            _uuid.UUID(str(validated.context_window_id)),
+        )
+        if _window_row is None:
+            raise ValueError(f"Context window {validated.context_window_id} not found")
+
+        _build_type = _window_row["build_type"]
+        # R7-m19: Null check for build_type before registry lookup
+        if not _build_type:
+            raise ValueError(
+                f"Context window {validated.context_window_id} has no build_type set"
+            )
+        retrieval_graph = get_retrieval_graph(_build_type)
+
+        result = await retrieval_graph.ainvoke(
+            {
+                "context_window_id": str(validated.context_window_id),
+                "config": config,
+                "window": None,
+                "build_type_config": None,
+                "conversation_id": None,
+                "max_token_budget": 0,
+                "tier1_summary": None,
+                "tier2_summaries": [],
+                "recent_messages": [],
+                "semantic_messages": [],
+                "knowledge_graph_facts": [],
+                "assembly_status": "pending",
+                "context_messages": None,
+                "context_tiers": None,
+                "total_tokens_used": 0,
+                "warnings": [],
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        response: dict[str, Any] = {
+            "context": result.get("context_messages"),
+            "tiers": result.get("context_tiers"),
+            "total_tokens": result.get("total_tokens_used", 0),
+            "assembly_status": result.get("assembly_status", "ready"),
+        }
+        # m4: Surface retrieval warnings (e.g., assembly timeout) to the caller
+        if result.get("warnings"):
+            response["warnings"] = result["warnings"]
+        return response
+
+    elif tool_name == "conv_create_context_window":
+        validated = CreateContextWindowInput(**arguments)
+        result = await _get_flow("create_context_window").ainvoke(
+            {
+                "conversation_id": str(validated.conversation_id),
+                "participant_id": validated.participant_id,
+                "build_type": validated.build_type,
+                "max_tokens_override": validated.max_tokens,
+                "config": config,
+                "context_window_id": None,
+                "resolved_token_budget": 0,
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        return {
+            "context_window_id": result.get("context_window_id"),
+            "resolved_token_budget": result.get("resolved_token_budget"),
+        }
+
+    elif tool_name == "conv_search":
+        validated = SearchConversationsInput(**arguments)
+        result = await _get_flow("conversation_search").ainvoke(
+            {
+                "query": validated.query,
+                "limit": validated.limit,
+                "offset": validated.offset,
+                "date_from": validated.date_from,
+                "date_to": validated.date_to,
+                "flow_id": validated.flow_id,
+                "user_id": validated.user_id,
+                "sender": validated.sender,
+                "config": config,
+                "query_embedding": None,
+                "results": [],
+                "warning": None,
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        response: dict[str, Any] = {"conversations": result.get("results", [])}
+        if result.get("warning"):
+            response["warning"] = result["warning"]
+        return response
+
+    elif tool_name == "conv_search_messages":
+        validated = SearchMessagesInput(**arguments)
+        result = await _get_flow("message_search").ainvoke(
+            {
+                "query": validated.query,
+                "conversation_id": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
+                "sender": validated.sender,
+                "role": validated.role,
+                "date_from": validated.date_from,
+                "date_to": validated.date_to,
+                "limit": validated.limit,
+                "config": config,
+                "query_embedding": None,
+                "candidates": [],
+                "reranked_results": [],
+                "warning": None,
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        response = {"messages": result.get("reranked_results", [])}
+        if result.get("warning"):
+            response["warning"] = result["warning"]
+        return response
+
+    elif tool_name == "conv_get_history":
+        validated = GetHistoryInput(**arguments)
+        result = await _get_flow("get_history").ainvoke(
+            {
+                "conversation_id": str(validated.conversation_id),
+                "limit": validated.limit,
+                "conversation": None,
+                "messages": [],
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        return {
+            "conversation": result.get("conversation"),
+            "messages": result.get("messages", []),
+        }
+
+    elif tool_name == "conv_search_context_windows":
+        validated = SearchContextWindowsInput(**arguments)
+        result = await _get_flow("search_context_windows").ainvoke(
+            {
+                "context_window_id": (
+                    str(validated.context_window_id)
+                    if validated.context_window_id
+                    else None
+                ),
+                "conversation_id": (
+                    str(validated.conversation_id)
+                    if validated.conversation_id
+                    else None
+                ),
+                "participant_id": validated.participant_id,
+                "build_type": validated.build_type,
+                "limit": validated.limit,
+                "results": [],
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        return {"context_windows": result.get("results", [])}
+
+    elif tool_name == "query_logs":
+        validated = QueryLogsInput(**arguments)
+        from app.database import get_pg_pool as _get_pool
+
+        pool = _get_pool()
+        conditions = []
+        args: list = []
+        idx = 1
+
+        if validated.container_name:
+            conditions.append(f"container_name ILIKE ${idx}")
+            args.append(f"%{validated.container_name}%")
+            idx += 1
+        if validated.level:
+            conditions.append(f"data->>'level' = ${idx}")
+            args.append(validated.level.upper())
+            idx += 1
+        if validated.since:
+            conditions.append(f"log_timestamp >= ${idx}::timestamptz")
+            args.append(validated.since)
+            idx += 1
+        if validated.until:
+            conditions.append(f"log_timestamp <= ${idx}::timestamptz")
+            args.append(validated.until)
+            idx += 1
+        if validated.keyword:
+            conditions.append(f"message ILIKE ${idx}")
+            args.append(f"%{validated.keyword}%")
+            idx += 1
+
+        where = " AND ".join(conditions) if conditions else "1=1"
+        args.append(validated.limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT container_name, log_timestamp, message, data
+            FROM system_logs
+            WHERE {where}
+            ORDER BY log_timestamp DESC
+            LIMIT ${idx}
+            """,
+            *args,
+        )
+        entries = []
+        for row in rows:
+            data = row["data"] if isinstance(row["data"], dict) else {}
+            entries.append(
+                {
+                    "timestamp": (
+                        row["log_timestamp"].isoformat()
+                        if row["log_timestamp"]
+                        else None
+                    ),
+                    "container_name": row["container_name"],
+                    "level": data.get("level", "unknown"),
+                    "logger": data.get("logger", ""),
+                    "message": row["message"] or "",
+                }
+            )
+        return {"entries": entries, "count": len(entries)}
+
+    elif tool_name == "search_logs":
+        validated = SearchLogsInput(**arguments)
+        from app.config import async_load_config as _aload
+
+        cfg = await _aload()
+        log_emb_config = cfg.get("log_embeddings")
+        if not log_emb_config:
+            raise ValueError(
+                "Log vectorization is not enabled. "
+                "Add a 'log_embeddings' section to config.yml to enable semantic log search."
+            )
+
+        # Embed the query
+        from app.config import get_embeddings_model
+
+        emb_model = get_embeddings_model(cfg, config_key="log_embeddings")
+        query_vec = await emb_model.aembed_query(validated.query)
+        vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
+
+        from app.database import get_pg_pool as _get_pool2
+
+        pool = _get_pool2()
+        conditions = ["embedding IS NOT NULL"]
+        args_search: list = [vec_str]
+        idx_s = 2
+
+        if validated.container_name:
+            conditions.append(f"container_name ILIKE ${idx_s}")
+            args_search.append(f"%{validated.container_name}%")
+            idx_s += 1
+        if validated.level:
+            conditions.append(f"data->>'level' = ${idx_s}")
+            args_search.append(validated.level.upper())
+            idx_s += 1
+        if validated.since:
+            conditions.append(f"log_timestamp >= ${idx_s}::timestamptz")
+            args_search.append(validated.since)
+            idx_s += 1
+
+        where = " AND ".join(conditions)
+        args_search.append(validated.limit)
+
+        rows = await pool.fetch(
+            f"""
+            SELECT container_name, log_timestamp, message, data,
+                   1 - (embedding <=> $1::vector) AS similarity
+            FROM system_logs
+            WHERE {where}
+            ORDER BY embedding <=> $1::vector
+            LIMIT ${idx_s}
+            """,
+            *args_search,
+        )
+        entries = []
+        for row in rows:
+            data = row["data"] if isinstance(row["data"], dict) else {}
+            entries.append(
+                {
+                    "timestamp": (
+                        row["log_timestamp"].isoformat()
+                        if row["log_timestamp"]
+                        else None
+                    ),
+                    "container_name": row["container_name"],
+                    "level": data.get("level", "unknown"),
+                    "message": row["message"] or "",
+                    "similarity": round(float(row["similarity"]), 4),
+                }
+            )
+        return {"entries": entries, "count": len(entries)}
+
+    elif tool_name == "mem_search":
+        validated = MemSearchInput(**arguments)
+        result = await _get_flow("memory_search").ainvoke(
+            {
+                "query": validated.query,
+                "user_id": validated.user_id,
+                "limit": validated.limit,
+                "config": config,
+                "memories": [],
+                "relations": [],
+                "degraded": False,
+                "error": None,
+            }
+        )
+        if result.get("error") and not result.get("degraded"):
+            raise ValueError(result["error"])
+        return {
+            "memories": result.get("memories", []),
+            "relations": result.get("relations", []),
+            "degraded": result.get("degraded", False),
+        }
+
+    elif tool_name == "mem_get_context":
+        validated = MemGetContextInput(**arguments)
+        result = await _get_flow("memory_context").ainvoke(
+            {
+                "query": validated.query,
+                "user_id": validated.user_id,
+                "limit": validated.limit,
+                "config": config,
+                "memories": [],
+                "context_text": "",
+                "degraded": False,
+                "error": None,
+            }
+        )
+        if result.get("error") and not result.get("degraded"):
+            raise ValueError(result["error"])
+        return {
+            "context": result.get("context_text", ""),
+            "memories": result.get("memories", []),
+        }
+
+    elif tool_name == "imperator_chat":
+        validated = ImperatorChatInput(**arguments)
+        from langchain_core.messages import HumanMessage
+
+        # Unique thread_id per invocation — MemorySaver persists within
+        # a single ReAct execution, not across user turns.
+        import uuid as _uuid
+
+        thread_id = str(_uuid.uuid4())
+
+        result = await _get_imperator_flow().ainvoke(
+            {
+                "messages": [HumanMessage(content=validated.message)],
+                "context_window_id": (
+                    str(validated.context_window_id)
+                    if validated.context_window_id
+                    else None
+                ),
+                "config": config,
+                "response_text": None,
+                "error": None,
+                "iteration_count": 0,
+            },
+            config={"configurable": {"thread_id": thread_id}},
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        return {
+            "response": result.get("response_text", ""),
+        }
+
+    elif tool_name == "mem_add":
+        # M-18: Routed through StateGraph flow instead of direct Mem0 call
+        validated = MemAddInput(**arguments)
+        result = await _get_flow("mem_add").ainvoke(
+            {
+                "content": validated.content,
+                "user_id": validated.user_id,
+                "config": config,
+                "result": None,
+                "degraded": False,
+                "error": None,
+            }
+        )
+        if result.get("error") and not result.get("degraded"):
+            raise ValueError(result["error"])
+        return {"status": "added", "result": result.get("result")}
+
+    elif tool_name == "mem_list":
+        # M-18: Routed through StateGraph flow instead of direct Mem0 call
+        validated = MemListInput(**arguments)
+        result = await _get_flow("mem_list").ainvoke(
+            {
+                "user_id": validated.user_id,
+                "limit": validated.limit,
+                "config": config,
+                "memories": [],
+                "degraded": False,
+                "error": None,
+            }
+        )
+        if result.get("error") and not result.get("degraded"):
+            raise ValueError(result["error"])
+        return {"memories": result.get("memories", [])}
+
+    elif tool_name == "mem_delete":
+        # M-18: Routed through StateGraph flow instead of direct Mem0 call
+        validated = MemDeleteInput(**arguments)
+        result = await _get_flow("mem_delete").ainvoke(
+            {
+                "memory_id": validated.memory_id,
+                "config": config,
+                "deleted": False,
+                "degraded": False,
+                "error": None,
+            }
+        )
+        if result.get("error") and not result.get("degraded"):
+            raise ValueError(result["error"])
+        return {"status": "deleted", "memory_id": validated.memory_id}
+
+    elif tool_name == "metrics_get":
+        MetricsGetInput(**arguments)
+        result = await _get_flow("metrics").ainvoke(
+            {
+                "action": "collect",
+                "metrics_output": "",
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        return {"metrics": result.get("metrics_output", "")}
+
+    elif tool_name == "install_stategraph":
+        package_name = arguments.get("package_name", "")
+        version = arguments.get("version")
+        if not package_name:
+            raise ValueError("package_name is required")
+        from app.flows.install_stategraph import install_stategraph
+
+        result = await install_stategraph(package_name, version)
+        # Invalidate all cached flows so next call uses new package
+        invalidate_flow_cache()
+        from app.flows.imperator_wrapper import invalidate as invalidate_imperator
+
+        invalidate_imperator()
+        return result
+
+    else:
+        raise ValueError(f"Unknown tool: {tool_name}")
+
+```
+
+## app/imperator/__init__.py
+
+```python
+
+```
+
+## app/imperator/state_manager.py
+
+```python
+"""
+Imperator persistent state manager.
+
+Manages the Imperator's conversation_id across restarts.
+Reads/writes /data/imperator_state.json.
+
+On first boot: creates a new conversation, writes the ID.
+On subsequent boots: reads the ID and verifies it exists in the DB.
+If missing: creates a new conversation.
+
+Context windows are created automatically by get_context (D-03) —
+the state manager only tracks the conversation.
+"""
+
+import json
+import logging
+import uuid
+from pathlib import Path
+from typing import Optional
+
+from app.database import get_pg_pool
+
+_log = logging.getLogger("context_broker.imperator.state_manager")
+
+IMPERATOR_STATE_FILE = Path("/data/imperator_state.json")
+
+
+class ImperatorStateManager:
+    """Manages the Imperator's persistent conversation state."""
+
+    def __init__(self, config: dict) -> None:
+        self._config = config
+        self._conversation_id: Optional[uuid.UUID] = None
+
+    async def initialize(self) -> None:
+        """Initialize the Imperator's conversation state.
+
+        Reads the state file if it exists and verifies the conversation.
+        Creates a new conversation if needed.
+        """
+        saved_conv_id = self._read_state_file()
+
+        if saved_conv_id is not None:
+            if await self._conversation_exists(saved_conv_id):
+                self._conversation_id = saved_conv_id
+                _log.info("Imperator: resuming conversation %s", self._conversation_id)
+                return
+            else:
+                _log.warning(
+                    "Imperator: conversation %s no longer exists, creating new",
+                    saved_conv_id,
+                )
+
+        # Create new conversation
+        self._conversation_id = await self._create_imperator_conversation()
+        self._write_state_file(self._conversation_id)
+        _log.info("Imperator: created new conversation %s", self._conversation_id)
+
+    async def get_conversation_id(self) -> Optional[uuid.UUID]:
+        """Return the Imperator's current conversation ID."""
+        return self._conversation_id
+
+    async def get_context_window_id(self) -> Optional[uuid.UUID]:
+        """Backward compatibility — returns conversation_id.
+
+        The chat route and tool dispatch use this. With D-03, context windows
+        are created automatically by get_context. This returns the conversation_id
+        which is used as the MemorySaver thread_id.
+        """
+        return self._conversation_id
+
+    def _read_state_file(self) -> Optional[uuid.UUID]:
+        """Read the conversation ID from the state file."""
+        if not IMPERATOR_STATE_FILE.exists():
+            return None
+
+        try:
+            with open(IMPERATOR_STATE_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+
+            conv_str = data.get("conversation_id")
+            if conv_str:
+                return uuid.UUID(conv_str)
+        except (json.JSONDecodeError, ValueError, OSError) as exc:
+            _log.warning("Failed to read imperator state file: %s", exc)
+
+        return None
+
+    def _write_state_file(self, conversation_id: uuid.UUID) -> None:
+        """Write the conversation ID to the state file."""
+        try:
+            IMPERATOR_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(IMPERATOR_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump({"conversation_id": str(conversation_id)}, f)
+        except OSError as exc:
+            _log.error("Failed to write imperator state file: %s", exc)
+
+    async def _conversation_exists(self, conversation_id: uuid.UUID) -> bool:
+        """Check if a conversation exists in PostgreSQL."""
+        pool = get_pg_pool()
+        row = await pool.fetchrow(
+            "SELECT id FROM conversations WHERE id = $1", conversation_id
+        )
+        return row is not None
+
+    async def _create_imperator_conversation(self) -> uuid.UUID:
+        """Create a new conversation for the Imperator.
+
+        Uses direct SQL because the state_manager runs during startup
+        before flows are compiled (G5-17).
+        """
+        pool = get_pg_pool()
+        new_id = uuid.uuid4()
+        # R7-m27: Include flow_id and user_id in the INSERT
+        await pool.execute(
+            "INSERT INTO conversations (id, title, flow_id, user_id) VALUES ($1, $2, $3, $4)",
+            new_id,
+            "Imperator — System Conversation",
+            "imperator",
+            "system",
+        )
+        return new_id
+
+```
+
+## app/routes/__init__.py
+
+```python
+
+```
+
+## app/routes/caller_identity.py
+
+```python
+"""Resolve caller identity from HTTP requests.
+
+Used by both the OpenAI chat and MCP endpoints to determine who is
+sending messages. The resolved identity is used as the sender field
+on stored messages.
+
+Priority: user field from request body → reverse DNS on source IP → "unknown"
+"""
+
+import logging
+import socket
+
+from fastapi import Request
+
+_log = logging.getLogger("context_broker.routes.caller_identity")
+
+# Cache reverse lookups to avoid repeated DNS calls
+_dns_cache: dict[str, str] = {}
+
+
+def resolve_caller(request: Request, user_field: str | None = None) -> str:
+    """Resolve the caller's identity from the HTTP request.
+
+    Args:
+        request: The FastAPI request object.
+        user_field: The 'user' field from the request body (OpenAI standard).
+                    Takes priority over reverse lookup.
+
+    Returns:
+        The caller's identity string.
+    """
+    # Priority 1: explicit user field from request body
+    if user_field:
+        return user_field
+
+    # Priority 2: reverse DNS lookup on source IP (works in Docker networking)
+    if request.client and request.client.host:
+        client_ip = request.client.host
+        if client_ip in _dns_cache:
+            return _dns_cache[client_ip]
+        try:
+            hostname, _, _ = socket.gethostbyaddr(client_ip)
+            # Docker DNS returns container name as hostname
+            _dns_cache[client_ip] = hostname
+            return hostname
+        except (socket.herror, socket.gaierror, OSError):
+            _log.debug("Reverse DNS failed for %s", client_ip)
+            _dns_cache[client_ip] = client_ip
+            return client_ip
+
+    return "unknown"
+
+```
+
+## app/routes/chat.py
+
+```python
+"""
+OpenAI-compatible chat completions endpoint.
+
+Implements /v1/chat/completions following the OpenAI API specification.
+Routes to the Imperator StateGraph.
+Supports both streaming (SSE) and non-streaming responses.
+"""
+
+import json
+import logging
+import time
+import uuid
+from typing import AsyncGenerator
+
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from pydantic import ValidationError
+
+from app.config import async_load_config
+from app.flows.imperator_wrapper import (
+    astream_events_with_metrics,
+    invoke_with_metrics,
+)
+from app.models import ChatCompletionRequest
+from app.routes.caller_identity import resolve_caller
+
+_log = logging.getLogger("context_broker.routes.chat")
+
+router = APIRouter()
+
+
+@router.post("/v1/chat/completions", response_model=None)
+async def chat_completions(request: Request):
+    """Handle OpenAI-compatible chat completion requests.
+
+    Routes to the Imperator StateGraph. Supports streaming and non-streaming.
+    Metrics are recorded inside the flow layer per REQ-001 §6.4.
+    """
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError) as exc:
+        _log.warning("Chat: failed to parse request body: %s", exc)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {"message": "Invalid JSON", "type": "invalid_request_error"}
+            },
+        )
+
+    try:
+        chat_request = ChatCompletionRequest(**body)
+    except ValidationError as exc:
+        _log.warning("Chat: request validation failed: %s", exc)
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+
+    # R7-M9: Wrap config load in try/except with error response
+    try:
+        config = await async_load_config()
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log.error("Chat: config load failed: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "message": "Configuration unavailable",
+                    "type": "internal_error",
+                }
+            },
+        )
+
+    imperator_manager = getattr(request.app.state, "imperator_manager", None)
+
+    # Extract the last user message as the primary input
+    user_messages = [m for m in chat_request.messages if m.role == "user"]
+    if not user_messages:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "At least one user message is required",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+
+    # G5-27: Allow clients to specify a context_window_id for multi-client
+    # isolation via x-context-window-id header or context_window_id in the body.
+    # Also accepts the legacy x-conversation-id / conversation_id for compatibility.
+    # Falls back to the default Imperator context window when not provided.
+    context_window_id = (
+        request.headers.get("x-context-window-id")
+        or body.get("context_window_id")
+        or request.headers.get("x-conversation-id")
+        or body.get("conversation_id")
+    )
+    if not context_window_id and imperator_manager is not None:
+        context_window_id = await imperator_manager.get_context_window_id()
+
+    # Convert plain messages to LangChain message objects
+    # G5-28: Include ToolMessage so tool-role messages are not coerced to HumanMessage.
+    _role_map = {
+        "user": HumanMessage,
+        "system": SystemMessage,
+        "assistant": AIMessage,
+        "tool": ToolMessage,
+    }
+    lc_messages = []
+    for m in chat_request.messages:
+        cls = _role_map.get(m.role, HumanMessage)
+        if cls is ToolMessage:
+            # ToolMessage requires a tool_call_id; use the one from the
+            # request body if available, otherwise fall back to a placeholder.
+            tool_call_id = getattr(m, "tool_call_id", None) or "unknown"
+            lc_messages.append(
+                ToolMessage(content=m.content, tool_call_id=tool_call_id)
+            )
+        else:
+            lc_messages.append(cls(content=m.content))
+
+    # Resolve caller identity for sender/recipient on stored messages.
+    caller = resolve_caller(request, chat_request.user)
+    config = {
+        **config,
+        "imperator": {
+            **config.get("imperator", {}),
+            "_request_user": caller,
+        },
+    }
+
+    initial_state = {
+        "messages": lc_messages,
+        "context_window_id": str(context_window_id) if context_window_id else None,
+        "config": config,
+        "response_text": None,
+        "error": None,
+    }
+
+    try:
+        if chat_request.stream:
+            return StreamingResponse(
+                _stream_imperator_response(initial_state, chat_request),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        else:
+            # Metrics recorded inside invoke_with_metrics (flow layer)
+            result = await invoke_with_metrics(initial_state)
+
+            if result.get("error"):
+                _log.error("Imperator flow error: %s", result["error"])
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": {
+                            "message": result["error"],
+                            "type": "internal_error",
+                        }
+                    },
+                )
+
+            response_text = result.get("response_text", "")
+
+            return JSONResponse(
+                content=_build_completion_response(response_text, chat_request.model)
+            )
+
+    except (RuntimeError, ConnectionError, OSError) as exc:
+        _log.error("Chat completion failed: %s", exc, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "message": "Internal server error",
+                    "type": "internal_error",
+                }
+            },
+        )
+
+
+async def _stream_imperator_response(
+    initial_state: dict,
+    chat_request: ChatCompletionRequest,
+) -> AsyncGenerator[str, None]:
+    """Stream the Imperator response as SSE tokens.
+
+    M-22: astream_events(version="v2") captures on_chat_model_stream events
+    from nested ainvoke() calls within the LangGraph runtime, so real token
+    streaming works without requiring the agent to use astream() internally.
+    Metrics are recorded inside astream_events_with_metrics (flow layer).
+    """
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    created = int(time.time())
+
+    try:
+        # G5-29: Known limitation — when the ReAct agent processes tool calls,
+        # astream_events may emit no content tokens for those intermediate LLM
+        # turns (only the final non-tool-call turn produces streamable tokens).
+        # Metrics recorded inside the flow wrapper per REQ-001 §6.4.
+        async for event in astream_events_with_metrics(initial_state):
+            if event["event"] == "on_chat_model_stream":
+                token = event["data"]["chunk"].content
+                if token:
+                    chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": chat_request.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": token},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    yield f"data: {json.dumps(chunk)}\n\n"
+
+        # Final chunk with finish_reason
+        final_chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": chat_request.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        yield f"data: {json.dumps(final_chunk)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    except (RuntimeError, ConnectionError, OSError) as exc:
+        _log.error("Streaming imperator response failed: %s", exc, exc_info=True)
+        error_chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": chat_request.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "An error occurred processing your request."},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+        yield "data: [DONE]\n\n"
+
+
+def _build_completion_response(response_text: str, model: str) -> dict:
+    """Build an OpenAI-compatible non-streaming completion response."""
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": response_text,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": -1,
+            "completion_tokens": -1,
+            "total_tokens": -1,
+        },
+    }
+
+```
+
+## app/routes/health.py
+
+```python
+"""
+Health check endpoint.
+
+Tests all backing service connections and returns aggregated status.
+The LangGraph container performs the actual dependency checks —
+nginx proxies the response without performing checks itself.
+"""
+
+import logging
+
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
+from app.config import async_load_config
+from app.stategraph_registry import get_flow_builder
+
+_log = logging.getLogger("context_broker.routes.health")
+
+router = APIRouter()
+
+_health_flow = None
+
+
+def _get_health_flow():
+    global _health_flow
+    if _health_flow is None:
+        builder = get_flow_builder("health_check")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: health_check flow unavailable")
+        _health_flow = builder()
+    return _health_flow
+
+
+@router.get("/health")
+async def health_check(request: Request) -> JSONResponse:
+    """Check connectivity to all backing services.
+
+    Returns 200 if all critical services are healthy.
+    Returns 503 if any critical service is unhealthy.
+    """
+    # R7-M8: Wrap config load in try/except — return degraded health instead of 500
+    try:
+        config = await async_load_config()
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log.warning("Health check: config load failed: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "error": f"Config load failed: {exc}",
+                "database": "unknown",
+                "neo4j": "unknown",
+            },
+        )
+
+    result = await _get_health_flow().ainvoke(
+        {
+            "config": config,
+            "postgres_ok": False,
+            "neo4j_ok": False,
+            "all_healthy": False,
+            "status_detail": None,
+            "http_status": 503,
+        }
+    )
+
+    return JSONResponse(
+        status_code=result["http_status"],
+        content=result["status_detail"],
+    )
+
+```
+
+## app/routes/mcp.py
+
+```python
+"""
+MCP (Model Context Protocol) endpoint.
+
+Implements HTTP/SSE transport for MCP tool access.
+Routes tool calls to compiled StateGraph flows.
+
+Endpoints:
+  GET  /mcp          — Establish SSE session
+  POST /mcp          — Sessionless tool call or route to session
+  POST /mcp?sessionId=xxx — Route to existing session
+"""
+
+import asyncio
+import decimal
+import json
+import logging
+import time
+import uuid
+from collections import OrderedDict
+from typing import Any, AsyncGenerator
+
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import ValidationError
+
+from app.config import async_load_config, get_tuning
+from app.flows.tool_dispatch import dispatch_tool
+from app.models import MCPToolCall
+from app.routes.caller_identity import resolve_caller
+
+_log = logging.getLogger("context_broker.routes.mcp")
+
+
+def _json_default(obj: object) -> object:
+    """Handle non-standard types in MCP JSON responses."""
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+router = APIRouter()
+
+# Active SSE sessions: session_id -> {"queue": asyncio.Queue, "created_at": float}
+# OrderedDict preserves insertion order for efficient eviction of oldest sessions.
+_sessions: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+# R5-M25: Track total queued messages across all sessions to bound memory
+_total_queued_messages: int = 0
+
+# Configurable limits (defaults; overridden by config at request time)
+_MAX_SESSIONS = 1000
+_SESSION_TTL_SECONDS = 3600  # 1 hour
+_MAX_TOTAL_QUEUED = 10000
+
+# R6-M3: Lock for session dict mutations to prevent race conditions
+_session_lock = asyncio.Lock()
+
+
+def _evict_stale_sessions(
+    session_ttl: int = _SESSION_TTL_SECONDS,
+    max_sessions: int = _MAX_SESSIONS,
+    max_total_queued: int = _MAX_TOTAL_QUEUED,
+) -> None:
+    """Remove sessions older than TTL and enforce the max sessions cap.
+
+    R5-M25: Also evict oldest sessions when total queued messages exceed the cap.
+    R7-m15: Accepts parameters instead of reading module globals on every call.
+    """
+    global _total_queued_messages
+    now = time.monotonic()
+    stale_ids = [
+        sid for sid, info in _sessions.items() if now - info["created_at"] > session_ttl
+    ]
+    for sid in stale_ids:
+        info = _sessions.pop(sid, None)
+        if info is not None:
+            _total_queued_messages -= info["queue"].qsize()
+        _log.info("MCP SSE session evicted (TTL): %s", sid)
+
+    # Evict oldest if over cap
+    while len(_sessions) > max_sessions:
+        evicted_id, info = _sessions.popitem(last=False)
+        _total_queued_messages -= info["queue"].qsize()
+        _log.info("MCP SSE session evicted (cap): %s", evicted_id)
+
+    # R5-M25: Evict oldest sessions if total queued messages exceed threshold
+    while _total_queued_messages > max_total_queued and _sessions:
+        evicted_id, info = _sessions.popitem(last=False)
+        _total_queued_messages -= info["queue"].qsize()
+        _log.warning("MCP SSE session evicted (total queue pressure): %s", evicted_id)
+
+
+@router.get("/mcp")
+async def mcp_sse_session(request: Request) -> StreamingResponse:
+    """Establish an SSE session for MCP communication.
+
+    Returns an SSE stream. The client sends tool calls via
+    POST /mcp?sessionId=<id>.
+    """
+    # R7-m15: Read config limits but don't mutate module globals on every request.
+    # Use local variables for this request's session creation.
+    config = await async_load_config()
+    max_sessions = get_tuning(config, "mcp_max_sessions", _MAX_SESSIONS)
+    session_ttl = get_tuning(config, "mcp_session_ttl_seconds", _SESSION_TTL_SECONDS)
+    max_total_queued = get_tuning(config, "mcp_max_total_queued", _MAX_TOTAL_QUEUED)
+
+    session_id = str(uuid.uuid4())
+
+    # R6-M3: Protect session dict mutations with asyncio.Lock
+    async with _session_lock:
+        _evict_stale_sessions(session_ttl, max_sessions, max_total_queued)
+        # G5-26: Bound the per-session queue to prevent memory growth from slow clients
+        message_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        _sessions[session_id] = {"queue": message_queue, "created_at": time.monotonic()}
+
+    _log.info("MCP SSE session established: %s (active=%d)", session_id, len(_sessions))
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        # Send session ID as first event
+        yield f"data: {json.dumps({'sessionId': session_id})}\n\n"
+
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    message = await asyncio.wait_for(message_queue.get(), timeout=30.0)
+                    # R5-M25: Decrement global counter when message is consumed
+                    global _total_queued_messages
+                    _total_queued_messages = max(0, _total_queued_messages - 1)
+                    yield f"data: {json.dumps(message)}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keepalive comment
+                    yield ": keepalive\n\n"
+        finally:
+            # R6-M3: Protect session dict mutations with asyncio.Lock
+            async with _session_lock:
+                # R6-M2: Decrement global counter by remaining queue size before removal
+                removed = _sessions.pop(session_id, None)
+                if removed is not None:
+                    _total_queued_messages = max(
+                        0, _total_queued_messages - removed["queue"].qsize()
+                    )
+            _log.info("MCP SSE session closed: %s", session_id)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/mcp")
+async def mcp_tool_call(
+    request: Request,
+    session_id: str = Query(None, alias="sessionId"),
+) -> JSONResponse:
+    """Handle an MCP tool call.
+
+    Supports both sessionless mode (no sessionId) and session mode.
+    All tool calls are routed through StateGraph flows.
+    """
+    tool_name = "unknown"
+
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError) as exc:
+        _log.warning("MCP: failed to parse request body: %s", exc)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32700, "message": "Parse error"},
+            },
+        )
+
+    try:
+        mcp_request = MCPToolCall(**body)
+    except ValidationError as exc:
+        _log.warning("MCP: invalid request structure: %s", exc)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "error": {"code": -32600, "message": "Invalid Request"},
+            },
+        )
+
+    if mcp_request.method == "initialize":
+        tool_name = "initialize"
+        return JSONResponse(
+            content={
+                "jsonrpc": "2.0",
+                "id": mcp_request.id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {
+                        "name": "context-broker",
+                        "version": "1.0.0",
+                    },
+                },
+            }
+        )
+
+    if mcp_request.method == "tools/list":
+        tool_name = "tools_list"
+        return JSONResponse(
+            content={
+                "jsonrpc": "2.0",
+                "id": mcp_request.id,
+                "result": {"tools": _get_tool_list()},
+            }
+        )
+
+    if mcp_request.method != "tools/call":
+        return JSONResponse(
+            status_code=400,
+            content={
+                "jsonrpc": "2.0",
+                "id": mcp_request.id,
+                "error": {
+                    "code": -32601,
+                    "message": f"Method not found: {mcp_request.method}",
+                },
+            },
+        )
+
+    tool_name = mcp_request.params.get("name", "unknown")
+    tool_arguments = mcp_request.params.get("arguments", {})
+
+    # R7-M9: Wrap config load in try/except with error response
+    try:
+        config = await async_load_config()
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log.error("MCP: config load failed: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "jsonrpc": "2.0",
+                "id": mcp_request.id,
+                "error": {
+                    "code": -32000,
+                    "message": f"Configuration unavailable: {exc}",
+                },
+            },
+        )
+
+    # Resolve caller identity from the HTTP request for sender/recipient
+    caller = resolve_caller(request)
+    config = {
+        **config,
+        "imperator": {
+            **config.get("imperator", {}),
+            "_request_user": caller,
+        },
+    }
+
+    try:
+        result = await dispatch_tool(
+            tool_name, tool_arguments, config, request.app.state
+        )
+
+        response_content = {
+            "jsonrpc": "2.0",
+            "id": mcp_request.id,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            json.dumps(result, default=_json_default)
+                            if isinstance(result, dict)
+                            else str(result)
+                        ),
+                    }
+                ]
+            },
+        }
+
+        # If session mode, push to session queue and return acknowledgment
+        if session_id:
+            if session_id not in _sessions:
+                # G5-25: Unknown sessionId — return error instead of falling through
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": mcp_request.id,
+                        "error": {
+                            "code": -32001,
+                            "message": f"Session not found: {session_id}",
+                        },
+                    },
+                )
+            try:
+                async with _session_lock:
+                    if session_id not in _sessions:
+                        return JSONResponse(
+                            status_code=404,
+                            content={
+                                "jsonrpc": "2.0",
+                                "id": mcp_request.id,
+                                "error": {
+                                    "code": -32001,
+                                    "message": f"Session disconnected: {session_id}",
+                                },
+                            },
+                        )
+                    _sessions[session_id]["queue"].put_nowait(response_content)
+                    global _total_queued_messages
+                    _total_queued_messages += 1
+            except asyncio.QueueFull:
+                _log.warning(
+                    "MCP SSE session queue full for session=%s; dropping response",
+                    session_id,
+                )
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": mcp_request.id,
+                        "error": {
+                            "code": -32000,
+                            "message": "Session queue full — client is not consuming events fast enough",
+                        },
+                    },
+                )
+            return JSONResponse(
+                content={
+                    "jsonrpc": "2.0",
+                    "id": mcp_request.id,
+                    "result": "queued",
+                }
+            )
+
+        return JSONResponse(content=response_content)
+
+    except (ValueError, ValidationError) as exc:
+        _log.warning("MCP tool '%s' validation error: %s", tool_name, exc)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "jsonrpc": "2.0",
+                "id": mcp_request.id,
+                "error": {"code": -32602, "message": str(exc)},
+            },
+        )
+    except (RuntimeError, ConnectionError, OSError) as exc:
+        _log.error("MCP tool '%s' failed: %s", tool_name, exc, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "jsonrpc": "2.0",
+                "id": mcp_request.id,
+                "error": {"code": -32000, "message": str(exc)},
+            },
+        )
+    # Metrics (MCP_REQUESTS, MCP_REQUEST_DURATION) are recorded inside
+    # dispatch_tool() per REQ-001 §6.4 (metrics in flows, not route handlers).
+
+
+def _get_tool_list() -> list[dict]:
+    """Return the MCP tool list with schemas.
+
+    Core tools (get_context, store_message, search_messages, search_knowledge)
+    are listed first — these are the primary interface for agents.
+    Management tools (conv_*, mem_*, imperator_chat, metrics_get) follow.
+    """
+    # Build dynamic enum for build_type from config
+    try:
+        from app.config import load_te_config
+
+        load_te_config()  # Validate TE config is loadable
+    except (FileNotFoundError, RuntimeError, OSError, ValueError):
+        pass
+    try:
+        from app.config import load_config
+
+        ae_config = load_config()
+    except (FileNotFoundError, RuntimeError, OSError, ValueError):
+        ae_config = {}
+    build_type_names = list(ae_config.get("build_types", {}).keys()) or [
+        "passthrough",
+        "standard-tiered",
+        "knowledge-enriched",
+    ]
+
+    from app.budget import BUDGET_BUCKETS
+
+    bucket_desc = ", ".join(str(b) for b in BUDGET_BUCKETS)
+
+    return [
+        # ============================================================
+        # Core tools (D-02)
+        # ============================================================
+        {
+            "name": "get_context",
+            "description": "Retrieve assembled context for a conversation. Auto-creates conversation and context window if needed. Returns conversation_id for subsequent store_message calls.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["build_type", "budget"],
+                "properties": {
+                    "build_type": {
+                        "type": "string",
+                        "enum": build_type_names,
+                        "description": "Context assembly strategy",
+                    },
+                    "budget": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": f"Token budget (snapped to nearest bucket: {bucket_desc})",
+                    },
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Existing conversation ID. Omit to create a new conversation.",
+                    },
+                },
+            },
+        },
+        {
+            "name": "store_message",
+            "description": "Store a message in a conversation. Triggers async embedding, extraction, and context assembly.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["conversation_id", "role", "sender"],
+                "properties": {
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Conversation ID (from get_context response)",
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "system", "tool"],
+                    },
+                    "content": {"type": "string"},
+                    "sender": {"type": "string"},
+                    "recipient": {"type": "string"},
+                    "model_name": {"type": "string"},
+                    "tool_calls": {"type": "array", "items": {"type": "object"}},
+                    "tool_call_id": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "search_messages",
+            "description": "Hybrid search (vector + BM25 + reranking) across conversation messages.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Scope search to a specific conversation",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 10,
+                    },
+                    "sender": {"type": "string"},
+                    "role": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "system", "tool"],
+                    },
+                    "date_from": {"type": "string", "description": "ISO-8601"},
+                    "date_to": {"type": "string", "description": "ISO-8601"},
+                },
+            },
+        },
+        {
+            "name": "search_knowledge",
+            "description": "Search extracted facts and relationships from the knowledge graph.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query", "user_id"],
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "user_id": {"type": "string", "minLength": 1, "maxLength": 255},
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 10,
+                    },
+                },
+            },
+        },
+        # ============================================================
+        # Management tools
+        # ============================================================
+        {
+            "name": "conv_create_conversation",
+            "description": "Create a new conversation",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Caller-supplied ID for idempotent creation",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional conversation title",
+                    },
+                    "flow_id": {
+                        "type": "string",
+                        "description": "Optional flow identifier",
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "Optional user identifier",
+                    },
+                },
+            },
+        },
+        {
+            "name": "conv_delete_conversation",
+            "description": "Delete a conversation and all its messages, summaries, and context windows.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["conversation_id"],
+                "properties": {
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "ID of the conversation to delete",
+                    },
+                },
+            },
+        },
+        {
+            "name": "conv_list_conversations",
+            "description": "List conversations. Optional participant filter returns only conversations where the participant appears as sender or recipient on any message.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "participant": {
+                        "type": "string",
+                        "description": "Filter by participant — returns conversations where this value appears as sender or recipient on any message. Typically a MAD hostname or user identity.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum conversations to return (default 50, max 500)",
+                        "default": 50,
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Pagination offset (default 0)",
+                        "default": 0,
+                    },
+                },
+            },
+        },
+        {
+            "name": "conv_store_message",
+            "description": "Store a message in a conversation (triggers async embedding, assembly, extraction). At least one of context_window_id or conversation_id must be provided.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["role", "sender"],
+                "properties": {
+                    "context_window_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Context window ID (resolves conversation automatically). At least one of context_window_id or conversation_id is required.",
+                    },
+                    "conversation_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Direct conversation ID (skips context window lookup). At least one of context_window_id or conversation_id is required.",
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "system", "tool"],
+                    },
+                    "sender": {"type": "string"},
+                    "recipient": {"type": "string"},
+                    "content": {"type": "string"},
+                    "priority": {"type": "integer", "default": 0},
+                    "model_name": {"type": "string"},
+                    "tool_calls": {"type": "array", "items": {"type": "object"}},
+                    "tool_call_id": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "conv_retrieve_context",
+            "description": "Retrieve the assembled context window for a participant",
+            "inputSchema": {
+                "type": "object",
+                "required": ["context_window_id"],
+                "properties": {
+                    "context_window_id": {"type": "string", "format": "uuid"},
+                },
+            },
+        },
+        {
+            "name": "conv_create_context_window",
+            "description": "Create a context window instance with a build type and token budget",
+            "inputSchema": {
+                "type": "object",
+                "required": ["conversation_id", "participant_id", "build_type"],
+                "properties": {
+                    "conversation_id": {"type": "string", "format": "uuid"},
+                    "participant_id": {"type": "string"},
+                    "build_type": {"type": "string"},
+                    "max_tokens": {"type": "integer"},
+                },
+            },
+        },
+        {
+            "name": "conv_search",
+            "description": "Semantic and structured search across conversations",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 10},
+                    "offset": {"type": "integer", "default": 0},
+                    "date_from": {
+                        "type": "string",
+                        "description": "ISO-8601 date lower bound",
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "ISO-8601 date upper bound",
+                    },
+                    "flow_id": {
+                        "type": "string",
+                        "description": "Filter by flow identifier",
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "Filter by user identifier",
+                    },
+                    "sender": {
+                        "type": "string",
+                        "description": "Filter by sender (matches conversations containing messages from this sender)",
+                    },
+                },
+            },
+        },
+        {
+            "name": "conv_search_messages",
+            "description": "Hybrid search (vector + BM25 + reranking) across messages",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string"},
+                    "conversation_id": {"type": "string", "format": "uuid"},
+                    "sender": {"type": "string", "description": "Filter by sender"},
+                    "role": {
+                        "type": "string",
+                        "enum": ["user", "assistant", "system", "tool"],
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "description": "ISO-8601 date lower bound",
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "ISO-8601 date upper bound",
+                    },
+                    "limit": {"type": "integer", "default": 10},
+                },
+            },
+        },
+        {
+            "name": "conv_get_history",
+            "description": "Retrieve full chronological message sequence for a conversation",
+            "inputSchema": {
+                "type": "object",
+                "required": ["conversation_id"],
+                "properties": {
+                    "conversation_id": {"type": "string", "format": "uuid"},
+                    "limit": {"type": "integer"},
+                },
+            },
+        },
+        {
+            "name": "conv_search_context_windows",
+            "description": "Search and list context windows",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "context_window_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Look up a specific context window by ID",
+                    },
+                    "conversation_id": {"type": "string", "format": "uuid"},
+                    "participant_id": {"type": "string"},
+                    "build_type": {"type": "string"},
+                    "limit": {"type": "integer", "default": 10},
+                },
+            },
+        },
+        {
+            "name": "query_logs",
+            "description": "Query system logs. Filter by container, level, time range, keyword.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "container_name": {
+                        "type": "string",
+                        "description": "Filter by container name (substring match)",
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": ["DEBUG", "INFO", "WARN", "WARNING", "ERROR"],
+                        "description": "Filter by log level",
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "ISO-8601 timestamp lower bound",
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": "ISO-8601 timestamp upper bound",
+                    },
+                    "keyword": {
+                        "type": "string",
+                        "description": "Text search in message content",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max entries to return (default 50, max 500)",
+                        "default": 50,
+                    },
+                },
+            },
+        },
+        {
+            "name": "search_logs",
+            "description": "Semantic search over system logs using vector similarity. Requires log_embeddings to be configured.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language search query",
+                    },
+                    "container_name": {
+                        "type": "string",
+                        "description": "Filter by container name (substring match)",
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": ["DEBUG", "INFO", "WARN", "WARNING", "ERROR"],
+                        "description": "Filter by log level",
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": "ISO-8601 timestamp lower bound",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max entries to return (default 20, max 100)",
+                        "default": 20,
+                    },
+                },
+            },
+        },
+        {
+            "name": "mem_search",
+            "description": "Semantic and graph search across extracted knowledge",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query", "user_id"],
+                "properties": {
+                    "query": {"type": "string"},
+                    "user_id": {"type": "string"},
+                    "limit": {"type": "integer", "default": 10},
+                },
+            },
+        },
+        {
+            "name": "mem_get_context",
+            "description": "Retrieve relevant memories formatted for prompt injection",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query", "user_id"],
+                "properties": {
+                    "query": {"type": "string"},
+                    "user_id": {"type": "string"},
+                    "limit": {"type": "integer", "default": 5},
+                },
+            },
+        },
+        {
+            "name": "mem_add",
+            "description": "Directly add a memory to the knowledge graph",
+            "inputSchema": {
+                "type": "object",
+                "required": ["content", "user_id"],
+                "properties": {
+                    "content": {"type": "string"},
+                    "user_id": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "mem_list",
+            "description": "List all memories for a user",
+            "inputSchema": {
+                "type": "object",
+                "required": ["user_id"],
+                "properties": {
+                    "user_id": {"type": "string"},
+                    "limit": {"type": "integer", "default": 50},
+                },
+            },
+        },
+        {
+            "name": "mem_delete",
+            "description": "Delete a specific memory by ID",
+            "inputSchema": {
+                "type": "object",
+                "required": ["memory_id"],
+                "properties": {
+                    "memory_id": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "imperator_chat",
+            "description": "Conversational interface to the Imperator",
+            "inputSchema": {
+                "type": "object",
+                "required": ["message"],
+                "properties": {
+                    "message": {"type": "string"},
+                    "conversation_id": {"type": "string", "format": "uuid"},
+                },
+            },
+        },
+        {
+            "name": "metrics_get",
+            "description": "Retrieve Prometheus metrics",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+        {
+            "name": "install_stategraph",
+            "description": "Install or upgrade a StateGraph package at runtime without container restart (REQ-001 §10)",
+            "inputSchema": {
+                "type": "object",
+                "required": ["package_name"],
+                "properties": {
+                    "package_name": {
+                        "type": "string",
+                        "description": "Python package name (e.g., 'context-broker-te', 'context-broker-ae')",
+                    },
+                    "version": {
+                        "type": "string",
+                        "description": "Specific version to install (e.g., '0.2.0'). Omit for latest.",
+                    },
+                },
+            },
+        },
+    ]
+
+```
+
+## app/routes/metrics.py
+
+```python
+"""
+Prometheus metrics endpoint.
+
+Exposes metrics collected from StateGraph executions.
+Metrics are produced inside StateGraphs, not in route handlers.
+"""
+
+import logging
+
+from fastapi import APIRouter
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST
+
+from app.stategraph_registry import get_flow_builder
+
+_log = logging.getLogger("context_broker.routes.metrics")
+
+router = APIRouter()
+
+_metrics_flow = None
+
+
+def _get_metrics_flow():
+    global _metrics_flow
+    if _metrics_flow is None:
+        builder = get_flow_builder("metrics")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: metrics flow unavailable")
+        _metrics_flow = builder()
+    return _metrics_flow
+
+
+@router.get("/metrics")
+async def get_metrics() -> Response:
+    """Expose Prometheus metrics in exposition format.
+
+    Metrics are collected inside the StateGraph flow.
+    """
+    initial_state = {
+        "action": "collect",
+        "metrics_output": "",
+        "error": None,
+    }
+    result = await _get_metrics_flow().ainvoke(initial_state)
+
+    # G5-30: Check for flow errors and return 500 instead of masking with 200.
+    if result.get("error"):
+        _log.error("Metrics flow error: %s", result["error"])
+        return Response(
+            content=f"# ERROR: metrics collection failed: {result['error']}\n",
+            media_type="text/plain",
+            status_code=500,
+        )
+
+    metrics_data = result.get("metrics_output", "")
+    return Response(content=metrics_data, media_type=CONTENT_TYPE_LATEST)
+
+```
+
+## app/workers/__init__.py
+
+```python
+
+```
+
+## app/workers/db_worker.py
+
+```python
+"""
+Database-driven background worker for the Context Broker.
+
+Replaces Redis queues with direct database polling. The database IS
+the queue — messages with NULL embeddings need embedding, messages
+with memory_extracted=FALSE need extraction. No external queue system
+required.
+
+Three worker loops run concurrently:
+  - Embedding: polls for unembedded messages, processes in batches
+  - Extraction: polls for unextracted messages, sends to Mem0
+  - Assembly: triggered after embedding batches, checks for stale windows
+"""
+
+import asyncio
+import logging
+import time
+import uuid
+
+from app.config import async_load_config, get_tuning
+from app.database import get_pg_pool
+from app.stategraph_registry import get_flow_builder
+from app.metrics_registry import (
+    EMBEDDING_QUEUE_DEPTH,
+    EXTRACTION_QUEUE_DEPTH,
+    ASSEMBLY_QUEUE_DEPTH,
+    JOB_DURATION,
+    JOBS_COMPLETED,
+)
+
+_log = logging.getLogger("context_broker.workers.db_worker")
+
+# Lazy flow singletons
+_embed_flow = None
+_extraction_flow = None
+
+
+def _get_embed_flow():
+    global _embed_flow
+    if _embed_flow is None:
+        builder = get_flow_builder("embed_pipeline")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: embed_pipeline unavailable")
+        _embed_flow = builder()
+    return _embed_flow
+
+
+def _get_extraction_flow():
+    global _extraction_flow
+    if _extraction_flow is None:
+        builder = get_flow_builder("memory_extraction")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: memory_extraction unavailable")
+        _extraction_flow = builder()
+    return _extraction_flow
+
+
+# ── Embedding worker ─────────────────────────────────────────────────
+
+
+async def _embedding_worker(config: dict) -> None:
+    """Poll for unembedded messages and process in batches."""
+    _log.info("Embedding worker started (DB-driven)")
+
+    poll_interval = get_tuning(config, "worker_poll_interval_seconds", 2)
+    batch_size = get_tuning(config, "embedding_batch_size", 50)
+    consecutive_failures = 0
+
+    while True:
+        try:
+            config = await async_load_config()
+            pool = get_pg_pool()
+
+            # Count pending for metrics (match the fetch filter)
+            pending = await pool.fetchval(
+                "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NULL AND content IS NOT NULL"
+            )
+            EMBEDDING_QUEUE_DEPTH.set(pending)
+
+            if pending == 0:
+                await asyncio.sleep(poll_interval)
+                continue
+
+            # Fetch a batch of unembedded messages
+            rows = await pool.fetch(
+                """
+                SELECT id, conversation_id, content, sequence_number, role, sender, priority
+                FROM conversation_messages
+                WHERE embedding IS NULL AND content IS NOT NULL
+                ORDER BY priority DESC, created_at ASC
+                LIMIT $1
+                """,
+                batch_size,
+            )
+
+            if not rows:
+                await asyncio.sleep(poll_interval)
+                continue
+
+            _log.info("Embedding batch: %d messages", len(rows))
+            start = time.monotonic()
+
+            # Batch embed using the embeddings model
+            from app.config import get_embeddings_model
+
+            embeddings_model = get_embeddings_model(config)
+            texts = [r["content"] for r in rows]
+
+            try:
+                vectors = await embeddings_model.aembed_documents(texts)
+            except (OSError, ValueError, RuntimeError) as exc:
+                _log.error("Batch embedding failed: %s", exc)
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    await asyncio.sleep(5)
+                continue
+
+            # Store vectors
+            for row, vector in zip(rows, vectors):
+                vec_str = "[" + ",".join(str(v) for v in vector) + "]"
+                await pool.execute(
+                    "UPDATE conversation_messages SET embedding = $1::vector WHERE id = $2",
+                    vec_str,
+                    row["id"],
+                )
+
+            duration = time.monotonic() - start
+            _log.info(
+                "Embedding batch complete: %d messages in %dms",
+                len(rows),
+                int(duration * 1000),
+            )
+            JOB_DURATION.labels(job_type="embed_batch").observe(duration)
+            JOBS_COMPLETED.labels(job_type="embed_message", status="success").inc(
+                len(rows)
+            )
+            consecutive_failures = 0
+
+            # Assembly is handled by the separate assembly worker loop
+
+        except asyncio.CancelledError:
+            _log.info("Embedding worker cancelled")
+            raise
+        except Exception as exc:
+            _log.error("Embedding worker error: %s: %s", type(exc).__name__, exc)
+            consecutive_failures += 1
+            if consecutive_failures >= 3:
+                _log.warning(
+                    "Embedding worker backing off after %d failures",
+                    consecutive_failures,
+                )
+                await asyncio.sleep(5)
+
+
+# ── Extraction worker ────────────────────────────────────────────────
+
+
+async def _extraction_worker(config: dict) -> None:
+    """Poll for unextracted messages and send to Mem0."""
+    _log.info("Extraction worker started (DB-driven)")
+
+    poll_interval = get_tuning(config, "worker_poll_interval_seconds", 2)
+    consecutive_failures = 0
+    # Track per-conversation failure counts to avoid retry storms
+    _conv_failures: dict[str, int] = {}
+    _MAX_CONV_RETRIES = 3
+
+    while True:
+        try:
+            config = await async_load_config()
+            pool = get_pg_pool()
+
+            # Count pending for metrics
+            pending = await pool.fetchval(
+                "SELECT COUNT(*) FROM conversation_messages WHERE memory_extracted IS NOT TRUE"
+            )
+            EXTRACTION_QUEUE_DEPTH.set(pending)
+
+            if pending == 0:
+                await asyncio.sleep(poll_interval)
+                continue
+
+            # Find conversations with unextracted messages
+            conv_rows = await pool.fetch("""
+                SELECT DISTINCT conversation_id
+                FROM conversation_messages
+                WHERE memory_extracted IS NOT TRUE
+                LIMIT 5
+                """)
+
+            for conv_row in conv_rows:
+                conv_id = str(conv_row["conversation_id"])
+
+                # Skip conversations that have failed too many times.
+                # After max retries, mark messages as extracted to stop
+                # retrying indefinitely. The messages stay in the DB but
+                # won't be re-processed until manually reset.
+                if _conv_failures.get(conv_id, 0) >= _MAX_CONV_RETRIES:
+                    if _conv_failures.get(conv_id, 0) == _MAX_CONV_RETRIES:
+                        _log.warning(
+                            "Extraction permanently failed for conv=%s after %d attempts — "
+                            "marking messages as extracted to stop retries",
+                            conv_id,
+                            _MAX_CONV_RETRIES,
+                        )
+                        await pool.execute(
+                            "UPDATE conversation_messages SET memory_extracted = TRUE "
+                            "WHERE conversation_id = $1 AND memory_extracted IS NOT TRUE",
+                            conv_row["conversation_id"],
+                        )
+                        _conv_failures[conv_id] = (
+                            _MAX_CONV_RETRIES + 1
+                        )  # Don't log again
+                    continue
+
+                # Use Postgres advisory lock to prevent concurrent extraction
+                lock_id = hash(conv_id) & 0x7FFFFFFFFFFFFFFF  # Positive bigint
+                locked = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
+                if not locked:
+                    continue
+
+                try:
+                    start = time.monotonic()
+                    result = await _get_extraction_flow().ainvoke(
+                        {
+                            "conversation_id": conv_id,
+                            "config": config,
+                            "messages": [],
+                            "user_id": "",
+                            "extraction_text": "",
+                            "selected_message_ids": [],
+                            "fully_extracted_ids": [],
+                            "lock_key": "",
+                            "lock_token": None,
+                            "lock_acquired": True,  # We handle locking here
+                            "extracted_count": 0,
+                            "error": None,
+                        }
+                    )
+                    duration = time.monotonic() - start
+
+                    if result.get("error"):
+                        _conv_failures[conv_id] = _conv_failures.get(conv_id, 0) + 1
+                        _log.error(
+                            "Extraction failed for %s (attempt %d/%d): %s",
+                            conv_id,
+                            _conv_failures[conv_id],
+                            _MAX_CONV_RETRIES,
+                            result["error"],
+                        )
+                        JOBS_COMPLETED.labels(
+                            job_type="extract_memory", status="error"
+                        ).inc()
+                    else:
+                        _conv_failures.pop(conv_id, None)  # Reset on success
+                        _log.info(
+                            "Extraction complete: conv=%s extracted=%d duration_ms=%d",
+                            conv_id,
+                            result.get("extracted_count", 0),
+                            int(duration * 1000),
+                        )
+                        JOB_DURATION.labels(job_type="extract_memory").observe(duration)
+                        JOBS_COMPLETED.labels(
+                            job_type="extract_memory", status="success"
+                        ).inc()
+                finally:
+                    await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+
+            consecutive_failures = 0
+            await asyncio.sleep(poll_interval)
+
+        except asyncio.CancelledError:
+            _log.info("Extraction worker cancelled")
+            raise
+        except Exception as exc:
+            _log.error("Extraction worker error: %s: %s", type(exc).__name__, exc)
+            consecutive_failures += 1
+            if consecutive_failures >= 3:
+                await asyncio.sleep(5)
+
+
+# ── Assembly check ───────────────────────────────────────────────────
+
+
+async def _check_assembly_needed(pool, config: dict, conv_ids: list[str]) -> None:
+    """Check if any context windows need reassembly after new embeddings."""
+    from app.flows.build_type_registry import get_assembly_graph
+
+    trigger_pct = get_tuning(config, "trigger_threshold_percent", 0.1)
+
+    for conv_id in conv_ids:
+        windows = await pool.fetch(
+            """
+            SELECT id, build_type, max_token_budget, last_assembled_at
+            FROM context_windows
+            WHERE conversation_id = $1
+            """,
+            uuid.UUID(conv_id),
+        )
+
+        for window in windows:
+            window_id = str(window["id"])
+            max_budget = window["max_token_budget"]
+            threshold_tokens = int(max_budget * trigger_pct)
+
+            # Check if enough new tokens since last assembly
+            if window["last_assembled_at"] is not None:
+                tokens_since = await pool.fetchval(
+                    """
+                    SELECT COALESCE(SUM(token_count), 0)
+                    FROM conversation_messages
+                    WHERE conversation_id = $1 AND created_at > $2
+                    """,
+                    uuid.UUID(conv_id),
+                    window["last_assembled_at"],
+                )
+                if tokens_since < threshold_tokens:
+                    continue
+
+            _log.info("Triggering assembly for window=%s", window_id)
+            assembly_graph = get_assembly_graph(window["build_type"])
+            start = time.monotonic()
+
+            try:
+                await assembly_graph.ainvoke(
+                    {
+                        "context_window_id": window_id,
+                        "conversation_id": conv_id,
+                        "config": config,
+                    }
+                )
+
+                duration = time.monotonic() - start
+                _log.info(
+                    "Assembly complete: window=%s duration_ms=%d",
+                    window_id,
+                    int(duration * 1000),
+                )
+                JOBS_COMPLETED.labels(
+                    job_type="assemble_context", status="success"
+                ).inc()
+                JOB_DURATION.labels(job_type="assemble_context").observe(duration)
+
+            except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
+                _log.error("Assembly failed for window=%s: %s", window_id, exc)
+                JOBS_COMPLETED.labels(job_type="assemble_context", status="error").inc()
+
+
+# ── Main entry point ────────────────────────────────────────────────
+
+
+async def _assembly_worker(config: dict) -> None:
+    """Poll for context windows that need reassembly."""
+    _log.info("Assembly worker started (DB-driven)")
+
+    poll_interval = get_tuning(config, "worker_poll_interval_seconds", 2)
+
+    while True:
+        try:
+            config = await async_load_config()
+            pool = get_pg_pool()
+
+            # Find windows where new messages exist since last assembly
+            windows = await pool.fetch("""
+                SELECT cw.id, cw.conversation_id, cw.build_type,
+                       cw.max_token_budget, cw.last_assembled_at
+                FROM context_windows cw
+                WHERE EXISTS (
+                    SELECT 1 FROM conversation_messages cm
+                    WHERE cm.conversation_id = cw.conversation_id
+                    AND (cw.last_assembled_at IS NULL OR cm.created_at > cw.last_assembled_at)
+                )
+                LIMIT 5
+                """)
+
+            ASSEMBLY_QUEUE_DEPTH.set(len(windows))
+
+            if not windows:
+                await asyncio.sleep(
+                    poll_interval * 5
+                )  # Poll less frequently for assembly
+                continue
+
+            for window in windows:
+                conv_id = str(window["conversation_id"])
+                window_id = str(window["id"])
+                await _run_assembly(
+                    pool, config, window_id, conv_id, window["build_type"]
+                )
+
+            await asyncio.sleep(poll_interval)
+
+        except asyncio.CancelledError:
+            _log.info("Assembly worker cancelled")
+            raise
+        except Exception as exc:
+            _log.error("Assembly worker error: %s: %s", type(exc).__name__, exc)
+            await asyncio.sleep(5)
+
+
+async def _run_assembly(pool, config, window_id, conv_id, build_type):
+    """Run assembly for a single window."""
+    from app.flows.build_type_registry import get_assembly_graph
+
+    _log.info("Triggering assembly for window=%s", window_id)
+    start = time.monotonic()
+
+    try:
+        assembly_graph = get_assembly_graph(build_type)
+        await assembly_graph.ainvoke(
+            {
+                "context_window_id": window_id,
+                "conversation_id": conv_id,
+                "config": config,
+            }
+        )
+
+        duration = time.monotonic() - start
+        _log.info(
+            "Assembly complete: window=%s duration_ms=%d",
+            window_id,
+            int(duration * 1000),
+        )
+        JOBS_COMPLETED.labels(job_type="assemble_context", status="success").inc()
+        JOB_DURATION.labels(job_type="assemble_context").observe(duration)
+
+    except (RuntimeError, ValueError, KeyError, TypeError, OSError) as exc:
+        _log.error("Assembly failed for window=%s: %s", window_id, exc)
+        JOBS_COMPLETED.labels(job_type="assemble_context", status="error").inc()
+
+
+# ── Log embedding worker ─────────────────────────────────────────────
+
+
+async def _log_embedding_worker(config: dict) -> None:
+    """Poll for unembedded log entries and embed in batches.
+
+    Only runs if log_embeddings is configured. Uses a separate embedding
+    model from conversation embeddings (typically a small local model).
+    """
+    _log.info("Log embedding worker started (DB-driven)")
+
+    poll_interval = get_tuning(config, "log_embedding_poll_interval_seconds", 10)
+    batch_size = get_tuning(config, "log_embedding_batch_size", 100)
+
+    while True:
+        try:
+            config = await async_load_config()
+            log_emb_config = config.get("log_embeddings")
+            if not log_emb_config:
+                # Log vectorization not enabled — sleep and check again later
+                await asyncio.sleep(60)
+                continue
+
+            pool = get_pg_pool()
+
+            pending = await pool.fetchval(
+                "SELECT COUNT(*) FROM system_logs WHERE embedding IS NULL AND message IS NOT NULL"
+            )
+
+            if pending == 0:
+                await asyncio.sleep(poll_interval)
+                continue
+
+            rows = await pool.fetch(
+                """
+                SELECT ctid, message
+                FROM system_logs
+                WHERE embedding IS NULL AND message IS NOT NULL
+                ORDER BY log_timestamp DESC
+                LIMIT $1
+                """,
+                batch_size,
+            )
+
+            if not rows:
+                await asyncio.sleep(poll_interval)
+                continue
+
+            _log.info("Log embedding batch: %d entries", len(rows))
+            start = time.monotonic()
+
+            from app.config import get_embeddings_model
+
+            emb_model = get_embeddings_model(config, config_key="log_embeddings")
+            texts = [r["message"] for r in rows]
+
+            try:
+                vectors = await emb_model.aembed_documents(texts)
+            except (OSError, ValueError, RuntimeError) as exc:
+                _log.error("Log embedding batch failed: %s", exc)
+                await asyncio.sleep(poll_interval)
+                continue
+
+            for row, vector in zip(rows, vectors):
+                vec_str = "[" + ",".join(str(v) for v in vector) + "]"
+                await pool.execute(
+                    "UPDATE system_logs SET embedding = $1::vector WHERE ctid = $2",
+                    vec_str,
+                    row["ctid"],
+                )
+
+            duration = time.monotonic() - start
+            _log.info(
+                "Log embedding batch complete: %d entries in %dms",
+                len(rows),
+                int(duration * 1000),
+            )
+
+        except asyncio.CancelledError:
+            _log.info("Log embedding worker cancelled")
+            raise
+        except Exception as exc:
+            _log.error("Log embedding worker error: %s: %s", type(exc).__name__, exc)
+            await asyncio.sleep(poll_interval)
+
+
+async def start_background_worker(config: dict) -> None:
+    """Start all background worker loops concurrently."""
+    _log.info("Background worker starting (DB-driven, no Redis)")
+
+    from app.workers.scheduler import scheduler_worker
+
+    await asyncio.gather(
+        _embedding_worker(config),
+        _extraction_worker(config),
+        _assembly_worker(config),
+        _log_embedding_worker(config),
+        scheduler_worker(config),
+    )
+
+```
+
+## app/workers/scheduler.py
+
+```python
+"""Built-in scheduler — fires StateGraphs on cron/interval schedules.
+
+Polls the `schedules` table for enabled schedules and fires them
+when due. Execution results recorded in `schedule_history`.
+
+Schedule types:
+  - cron: standard cron expression (e.g., "*/10 * * * *" = every 10 minutes)
+  - interval: seconds between runs (e.g., "600" = every 10 minutes)
+"""
+
+import asyncio
+import logging
+import time
+import uuid
+from datetime import datetime, timezone
+
+from app.config import async_load_config, get_tuning
+from app.database import get_pg_pool
+
+_log = logging.getLogger("context_broker.workers.scheduler")
+
+
+def _cron_is_due(cron_expr: str, now: datetime) -> bool:
+    """Check if a cron expression matches the current minute.
+
+    Supports standard 5-field cron: minute hour day-of-month month day-of-week.
+    Supports * and */N syntax. Does not support ranges or lists.
+    """
+    parts = cron_expr.strip().split()
+    if len(parts) != 5:
+        return False
+
+    fields = [now.minute, now.hour, now.day, now.month, now.weekday()]
+    # cron weekday: 0=Sunday, Python weekday: 0=Monday
+    # Convert Python weekday to cron: (python_weekday + 1) % 7
+    fields[4] = (fields[4] + 1) % 7
+
+    for field_val, pattern in zip(fields, parts):
+        if pattern == "*":
+            continue
+        if pattern.startswith("*/"):
+            divisor = int(pattern[2:])
+            if field_val % divisor != 0:
+                return False
+        else:
+            if field_val != int(pattern):
+                return False
+    return True
+
+
+async def _fire_schedule(schedule_id: str, message: str, target: str, config: dict):
+    """Fire a schedule by dispatching the message to the target."""
+    pool = get_pg_pool()
+
+    # Record start
+    history_id = uuid.uuid4()
+    await pool.execute(
+        """
+        INSERT INTO schedule_history (id, schedule_id, status)
+        VALUES ($1, $2, 'running')
+        """,
+        history_id,
+        uuid.UUID(schedule_id),
+    )
+
+    try:
+        if target == "imperator":
+            from app.flows.tool_dispatch import dispatch_tool
+
+            result = await dispatch_tool(
+                "imperator_chat",
+                {"message": message},
+                config,
+                None,
+            )
+            summary = result.get("response", "")[:500]
+        else:
+            summary = f"Unknown target: {target}"
+
+        await pool.execute(
+            """
+            UPDATE schedule_history
+            SET completed_at = NOW(), status = 'completed', summary = $1
+            WHERE id = $2
+            """,
+            summary,
+            history_id,
+        )
+        _log.info("Schedule %s fired successfully", schedule_id)
+
+    except (ValueError, RuntimeError, OSError) as exc:
+        await pool.execute(
+            """
+            UPDATE schedule_history
+            SET completed_at = NOW(), status = 'error', error = $1
+            WHERE id = $2
+            """,
+            str(exc)[:1000],
+            history_id,
+        )
+        _log.error("Schedule %s failed: %s", schedule_id, exc)
+
+
+async def scheduler_worker(config: dict) -> None:
+    """Poll for due schedules and fire them."""
+    _log.info("Scheduler worker started")
+
+    # Track last fire time per schedule to avoid double-firing
+    last_fired: dict[str, float] = {}
+
+    while True:
+        try:
+            config = await async_load_config()
+            poll_interval = get_tuning(config, "scheduler_poll_interval_seconds", 60)
+            pool = get_pg_pool()
+
+            now = datetime.now(timezone.utc)
+
+            rows = await pool.fetch(
+                "SELECT id, name, schedule_type, schedule_expr FROM schedules WHERE enabled = TRUE"
+            )
+
+            for row in rows:
+                schedule_id = str(row["id"])
+                schedule_type = row["schedule_type"]
+                schedule_expr = row["schedule_expr"]
+
+                is_due = False
+                if schedule_type == "cron":
+                    is_due = _cron_is_due(schedule_expr, now)
+                    # Don't fire same cron schedule twice in the same minute
+                    if is_due and schedule_id in last_fired:
+                        elapsed = time.monotonic() - last_fired[schedule_id]
+                        if elapsed < 55:
+                            is_due = False
+                elif schedule_type == "interval":
+                    interval_secs = int(schedule_expr)
+                    if schedule_id not in last_fired:
+                        is_due = True
+                    else:
+                        elapsed = time.monotonic() - last_fired[schedule_id]
+                        is_due = elapsed >= interval_secs
+
+                if is_due:
+                    _log.info("Firing schedule: %s (%s)", row["name"], schedule_id)
+                    last_fired[schedule_id] = time.monotonic()
+
+                    # Get full schedule data for the message
+                    full_row = await pool.fetchrow(
+                        "SELECT message, target FROM schedules WHERE id = $1",
+                        row["id"],
+                    )
+                    if full_row:
+                        asyncio.create_task(
+                            _fire_schedule(
+                                schedule_id,
+                                full_row["message"],
+                                full_row["target"],
+                                config,
+                            )
+                        )
+
+            await asyncio.sleep(poll_interval)
+
+        except asyncio.CancelledError:
+            _log.info("Scheduler worker cancelled")
+            raise
+        except Exception as exc:
+            _log.error("Scheduler worker error: %s: %s", type(exc).__name__, exc)
+            await asyncio.sleep(30)
+
+```
+
+## packages/context-broker-ae/src/context_broker_ae/__init__.py
+
+```python
+"""Context Broker AE — infrastructure StateGraph package."""
+
+```
+
+## packages/context-broker-ae/src/context_broker_ae/context_assembly.py
+
+```python
+"""
+Context Assembly — backward-compatibility shim (ARCH-18).
+
+The assembly logic has moved to app.flows.build_types.standard_tiered.
+This module re-exports the original symbols so existing imports and
+tests continue to work.
+
+build_context_assembly() returns the standard-tiered assembly graph
+for backward compatibility.
+"""
+
+# Re-export from the new location
+from context_broker_ae.build_types.standard_tiered import (  # noqa: F401
+    StandardTieredAssemblyState as ContextAssemblyState,
+    acquire_assembly_lock,
+    calculate_tier_boundaries,
+    consolidate_archival_summary,
+    finalize_assembly,
+    load_messages,
+    load_window_config,
+    release_assembly_lock,
+    summarize_message_chunks,
+    build_standard_tiered_assembly as build_context_assembly,
+    _atomic_lock_release,
+)
+
+```
+
+## packages/context-broker-ae/src/context_broker_ae/conversation_ops_flow.py
 
 ```python
 """
@@ -2845,7 +6065,9 @@ async def create_conversation_node(state: CreateConversationState) -> dict:
         try:
             new_id = uuid.UUID(state["conversation_id"])
         except ValueError:
-            return {"error": f"Invalid conversation_id format: {state['conversation_id']}"}
+            return {
+                "error": f"Invalid conversation_id format: {state['conversation_id']}"
+            }
     else:
         new_id = uuid.uuid4()
 
@@ -2913,7 +6135,10 @@ async def resolve_token_budget_node(state: CreateContextWindowState) -> dict:
         caller_override=state.get("max_tokens_override"),
     )
 
-    return {"resolved_token_budget": token_budget, "build_type_config": build_type_config}
+    return {
+        "resolved_token_budget": token_budget,
+        "build_type_config": build_type_config,
+    }
 
 
 async def create_context_window_node(state: CreateContextWindowState) -> dict:
@@ -2961,7 +6186,9 @@ async def create_context_window_node(state: CreateContextWindowState) -> dict:
         )
         # R5-M21: Defensive None check — should not happen but prevents crash
         if existing is None:
-            return {"error": "Context window conflict: INSERT returned nothing and existing row not found"}
+            return {
+                "error": "Context window conflict: INSERT returned nothing and existing row not found"
+            }
         return {"context_window_id": str(existing["id"])}
 
     return {"context_window_id": str(row["id"])}
@@ -3031,11 +6258,12 @@ async def load_conversation_and_messages(state: GetHistoryState) -> dict:
     if limit:
         # G5-09: Use a subquery to get the most recent N messages (not oldest N),
         # then re-sort in chronological order for the caller.
+        # R7-M19: Added tool_calls and tool_call_id to SELECT
         rows = await pool.fetch(
             """
             SELECT * FROM (
                 SELECT id, role, sender, recipient, content, sequence_number,
-                       token_count, model_name, created_at
+                       token_count, model_name, tool_calls, tool_call_id, created_at
                 FROM conversation_messages
                 WHERE conversation_id = $1
                 ORDER BY sequence_number DESC
@@ -3047,10 +6275,11 @@ async def load_conversation_and_messages(state: GetHistoryState) -> dict:
             limit,
         )
     else:
+        # R7-M19: Added tool_calls and tool_call_id to SELECT
         rows = await pool.fetch(
             """
             SELECT id, role, sender, recipient, content, sequence_number,
-                   token_count, model_name, created_at
+                   token_count, model_name, tool_calls, tool_call_id, created_at
             FROM conversation_messages
             WHERE conversation_id = $1
             ORDER BY sequence_number ASC
@@ -3109,7 +6338,7 @@ async def search_context_windows_node(state: SearchContextWindowsState) -> dict:
         row = await pool.fetchrow(
             """
             SELECT id, conversation_id, participant_id, build_type,
-                   max_token_budget, last_assembled_at, created_at
+                   max_token_budget, last_assembled_at, last_accessed_at, created_at
             FROM context_windows
             WHERE id = $1
             """,
@@ -3122,6 +6351,9 @@ async def search_context_windows_node(state: SearchContextWindowsState) -> dict:
         r["conversation_id"] = str(r["conversation_id"])
         if r.get("last_assembled_at"):
             r["last_assembled_at"] = r["last_assembled_at"].isoformat()
+        # R7-m21: Include last_accessed_at
+        if r.get("last_accessed_at"):
+            r["last_accessed_at"] = r["last_accessed_at"].isoformat()
         if r.get("created_at"):
             r["created_at"] = r["created_at"].isoformat()
         return {"results": [r]}
@@ -3149,12 +6381,13 @@ async def search_context_windows_node(state: SearchContextWindowsState) -> dict:
     # (never from user input), so f-string interpolation is safe here.
     # The actual filter values are passed as bind parameters ($1, $2, etc.).
     where_clause = " AND ".join(conditions) if conditions else "1=1"
-    args.append(state["limit"])
+    # R7-m5: Cap the limit to prevent unbounded queries
+    args.append(min(state["limit"], 100))
 
     rows = await pool.fetch(
         f"""
         SELECT id, conversation_id, participant_id, build_type,
-               max_token_budget, last_assembled_at, created_at
+               max_token_budget, last_assembled_at, last_accessed_at, created_at
         FROM context_windows
         WHERE {where_clause}
         ORDER BY created_at DESC
@@ -3170,6 +6403,9 @@ async def search_context_windows_node(state: SearchContextWindowsState) -> dict:
         r["conversation_id"] = str(r["conversation_id"])
         if r.get("last_assembled_at"):
             r["last_assembled_at"] = r["last_assembled_at"].isoformat()
+        # R7-m21: Include last_accessed_at
+        if r.get("last_accessed_at"):
+            r["last_accessed_at"] = r["last_accessed_at"].isoformat()
         if r.get("created_at"):
             r["created_at"] = r["created_at"].isoformat()
         results.append(r)
@@ -3184,11 +6420,205 @@ def build_search_context_windows_flow() -> StateGraph:
     workflow.set_entry_point("search_context_windows_node")
     workflow.add_edge("search_context_windows_node", END)
     return workflow.compile()
+
+
+# ============================================================
+# Get Context Flow (D-02, D-03)
+# ============================================================
+# Core tool: get_context — auto-creates conversation/window as needed,
+# then retrieves assembled context.
+
+
+class GetContextState(TypedDict):
+    """State for the get_context core tool."""
+
+    build_type: str
+    budget: int  # raw requested budget
+    snapped_budget: int  # after bucket snapping
+    conversation_id: Optional[str]  # None = create new
+    config: dict
+
+    # Resolved by flow
+    context_window_id: Optional[str]
+    context_messages: Optional[list]
+    context_tiers: Optional[dict]
+    total_tokens_used: int
+    assembly_status: str
+    warnings: list[str]
+    error: Optional[str]
+
+
+async def ensure_conversation_node(state: GetContextState) -> dict:
+    """Create a conversation if none was provided."""
+    if state.get("conversation_id"):
+        return {}  # Already have one
+
+    pool = get_pg_pool()
+    conv_id = uuid.uuid4()
+    await pool.execute(
+        "INSERT INTO conversations (id) VALUES ($1)",
+        conv_id,
+    )
+    _log.info("get_context: auto-created conversation %s", conv_id)
+    return {"conversation_id": str(conv_id)}
+
+
+async def snap_budget_node(state: GetContextState) -> dict:
+    """Snap the requested budget to the nearest bucket."""
+    from app.budget import snap_budget
+
+    snapped = snap_budget(state["budget"])
+    if snapped != state["budget"]:
+        _log.info(
+            "get_context: budget %d snapped to bucket %d",
+            state["budget"],
+            snapped,
+        )
+    return {"snapped_budget": snapped}
+
+
+async def find_or_create_window_node(state: GetContextState) -> dict:
+    """Look up existing window by (conversation_id, build_type, snapped_budget).
+    Create one if it doesn't exist."""
+    if state.get("error"):
+        return {}
+
+    pool = get_pg_pool()
+    conv_id = uuid.UUID(state["conversation_id"])
+    build_type = state["build_type"]
+    snapped_budget = state["snapped_budget"]
+    config = state["config"]
+
+    # Validate build type exists in config
+    try:
+        get_build_type_config(config, build_type)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    # Look for existing window with matching (conversation, build_type, budget)
+    row = await pool.fetchrow(
+        """
+        SELECT id FROM context_windows
+        WHERE conversation_id = $1 AND build_type = $2 AND max_token_budget = $3
+        LIMIT 1
+        """,
+        conv_id,
+        build_type,
+        snapped_budget,
+    )
+
+    if row:
+        _log.info("get_context: reusing window %s", row["id"])
+        return {"context_window_id": str(row["id"])}
+
+    # Ensure conversation exists (PG-43: handle deleted conversation gracefully)
+    conv_exists = await pool.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = $1)", conv_id
+    )
+    if not conv_exists:
+        _log.warning("get_context: conversation %s not found — recreating", conv_id)
+        await pool.execute(
+            "INSERT INTO conversations (id, title, flow_id, user_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+            conv_id,
+            "Recovered conversation",
+            "auto",
+            "system",
+        )
+
+    # Create new window
+    window_id = uuid.uuid4()
+    await pool.execute(
+        """
+        INSERT INTO context_windows
+            (id, conversation_id, participant_id, build_type, max_token_budget)
+        VALUES ($1, $2, $3, $4, $5)
+        """,
+        window_id,
+        conv_id,
+        "auto",  # participant_id kept for schema compat, "auto" for core tool
+        build_type,
+        snapped_budget,
+    )
+    _log.info(
+        "get_context: created window %s (type=%s, budget=%d)",
+        window_id,
+        build_type,
+        snapped_budget,
+    )
+    return {"context_window_id": str(window_id)}
+
+
+async def retrieve_context_node(state: GetContextState) -> dict:
+    """Invoke the build-type-specific retrieval graph."""
+    if state.get("error"):
+        return {}
+
+    from app.flows.build_type_registry import get_retrieval_graph
+
+    retrieval_graph = get_retrieval_graph(state["build_type"])
+    result = await retrieval_graph.ainvoke(
+        {
+            "context_window_id": state["context_window_id"],
+            "config": state["config"],
+            "window": None,
+            "build_type_config": None,
+            "conversation_id": None,
+            "max_token_budget": 0,
+            "tier1_summary": None,
+            "tier2_summaries": [],
+            "recent_messages": [],
+            "semantic_messages": [],
+            "knowledge_graph_facts": [],
+            "assembly_status": "pending",
+            "context_messages": None,
+            "context_tiers": None,
+            "total_tokens_used": 0,
+            "warnings": [],
+            "error": None,
+        }
+    )
+
+    return {
+        "context_messages": result.get("context_messages"),
+        "context_tiers": result.get("context_tiers"),
+        "total_tokens_used": result.get("total_tokens_used", 0),
+        "assembly_status": result.get("assembly_status", "ready"),
+        "warnings": result.get("warnings", []),
+        "error": result.get("error"),
+    }
+
+
+def route_after_window(state: GetContextState) -> str:
+    """Route: if error, end. Otherwise retrieve context."""
+    if state.get("error"):
+        return END
+    return "retrieve_context_node"
+
+
+def build_get_context_flow() -> StateGraph:
+    """Build and compile the get_context core tool StateGraph."""
+    workflow = StateGraph(GetContextState)
+
+    workflow.add_node("ensure_conversation_node", ensure_conversation_node)
+    workflow.add_node("snap_budget_node", snap_budget_node)
+    workflow.add_node("find_or_create_window_node", find_or_create_window_node)
+    workflow.add_node("retrieve_context_node", retrieve_context_node)
+
+    workflow.set_entry_point("ensure_conversation_node")
+    workflow.add_edge("ensure_conversation_node", "snap_budget_node")
+    workflow.add_edge("snap_budget_node", "find_or_create_window_node")
+    workflow.add_conditional_edges(
+        "find_or_create_window_node",
+        route_after_window,
+        {"retrieve_context_node": "retrieve_context_node", END: END},
+    )
+    workflow.add_edge("retrieve_context_node", END)
+
+    return workflow.compile()
+
 ```
 
----
-
-`app/flows/embed_pipeline.py`
+## packages/context-broker-ae/src/context_broker_ae/embed_pipeline.py
 
 ```python
 """
@@ -3201,11 +6631,9 @@ jobs for all context windows attached to the conversation.
 Triggered by ARQ worker consuming from embedding_jobs queue.
 """
 
-import json
 import logging
 import time as _time_mod
 import uuid
-from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -3214,8 +6642,7 @@ from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 from app.config import get_embeddings_model, get_tuning, verbose_log
-from app.database import get_pg_pool, get_redis
-from app.metrics_registry import JOBS_ENQUEUED
+from app.database import get_pg_pool
 
 _log = logging.getLogger("context_broker.flows.embed_pipeline")
 
@@ -3239,7 +6666,12 @@ class EmbedPipelineState(TypedDict):
 
 async def fetch_message(state: EmbedPipelineState) -> dict:
     """Fetch the message row from PostgreSQL."""
-    verbose_log(state["config"], _log, "embed_pipeline.fetch_message ENTER msg=%s", state["message_id"])
+    verbose_log(
+        state["config"],
+        _log,
+        "embed_pipeline.fetch_message ENTER msg=%s",
+        state["message_id"],
+    )
     pool = get_pg_pool()
     row = await pool.fetchrow(
         "SELECT * FROM conversation_messages WHERE id = $1",
@@ -3258,7 +6690,12 @@ async def generate_embedding(state: EmbedPipelineState) -> dict:
     """
     _t0 = _time_mod.monotonic()
     config = state["config"]
-    verbose_log(config, _log, "embed_pipeline.generate_embedding ENTER msg=%s", state["message_id"])
+    verbose_log(
+        config,
+        _log,
+        "embed_pipeline.generate_embedding ENTER msg=%s",
+        state["message_id"],
+    )
     message = state["message"]
 
     # ARCH-01: Tool-call messages may have NULL content — skip embedding entirely.
@@ -3335,138 +6772,12 @@ async def store_embedding(state: EmbedPipelineState) -> dict:
 
 
 async def enqueue_context_assembly(state: EmbedPipelineState) -> dict:
-    """Enqueue context assembly jobs for all context windows on this conversation.
+    """No-op: assembly is handled by the DB-driven background worker.
 
-    Each context window gets its own assembly job. Uses Redis distributed
-    locks to prevent concurrent assembly of the same window.
-
-    F-08: Only queues assembly when new tokens since last assembly exceed the
-    trigger threshold (percentage of max_token_budget).
+    The worker checks for context windows needing reassembly after
+    each embedding batch. No explicit enqueue needed.
     """
-    pool = get_pg_pool()
-    redis = get_redis()
-    config = state["config"]
-
-    windows = await pool.fetch(
-        "SELECT id, build_type, max_token_budget, last_assembled_at FROM context_windows WHERE conversation_id = $1",
-        uuid.UUID(state["conversation_id"]),
-    )
-
-    # Get conversation token count for threshold check
-    conv = await pool.fetchrow(
-        "SELECT estimated_token_count FROM conversations WHERE id = $1",
-        uuid.UUID(state["conversation_id"]),
-    )
-    conv_tokens = conv["estimated_token_count"] if conv else 0
-
-    queued = []
-    now = datetime.now(timezone.utc).isoformat()
-
-    # G5-11: Batch the Redis EXISTS checks instead of N+1 queries per window.
-    # Use mget on lock keys to check all windows in a single round-trip.
-    window_ids = [str(w["id"]) for w in windows]
-    lock_keys = [f"assembly_in_progress:{wid}" for wid in window_ids]
-    lock_values = await redis.mget(*lock_keys) if lock_keys else []
-
-    # Build a set of windows that already have assembly in progress
-    locked_window_ids = {
-        wid for wid, val in zip(window_ids, lock_values) if val is not None
-    }
-
-    # G5-11: Batch the token-since-last-assembly queries for windows that
-    # have a last_assembled_at. Group by last_assembled_at to reduce queries.
-    # (Each distinct timestamp still needs its own query, but windows sharing
-    # the same timestamp are batched.)
-
-    # R5-M10: Batch-fetch token counts since last assembly for all windows
-    # instead of N+1 individual queries per window. One query fetches tokens
-    # added after each distinct last_assembled_at timestamp.
-    tokens_since_map: dict[str, int] = {}
-    windows_needing_token_check = [
-        w for w in windows
-        if str(w["id"]) not in locked_window_ids and w["last_assembled_at"] is not None
-    ]
-    if windows_needing_token_check:
-        # Batch query: for each window's last_assembled_at, get sum of tokens
-        # added after that timestamp. Uses a VALUES list to do it in one round-trip.
-        token_rows = await pool.fetch(
-            """
-            SELECT w.id AS window_id, COALESCE(SUM(m.token_count), 0) AS tokens_since
-            FROM (SELECT unnest($1::uuid[]) AS id, unnest($2::timestamptz[]) AS last_assembled_at) w
-            LEFT JOIN conversation_messages m
-              ON m.conversation_id = $3
-              AND m.created_at > w.last_assembled_at
-            GROUP BY w.id
-            """,
-            [w["id"] for w in windows_needing_token_check],
-            [w["last_assembled_at"] for w in windows_needing_token_check],
-            uuid.UUID(state["conversation_id"]),
-        )
-        for row in token_rows:
-            tokens_since_map[str(row["window_id"])] = row["tokens_since"]
-
-    for window in windows:
-        window_id = str(window["id"])
-
-        if window_id in locked_window_ids:
-            _log.debug(
-                "Skipping assembly queue: already in progress for window=%s",
-                window_id,
-            )
-            continue
-
-        # F-08: Check trigger threshold — only queue if enough new tokens.
-        # R6-M16: Known approximation — the threshold check counts all tokens since
-        # last assembly, which for shared conversations may include tokens from other
-        # participants' messages. Acceptable for triggering purposes (over-triggering
-        # is safe, under-triggering is not).
-        max_budget = window["max_token_budget"]
-        bt_config = config.get("build_types", {}).get(window["build_type"], {})
-        # CB-R3-03: The double-fallback (bt_config -> global tuning -> hardcoded 0.1)
-        # is intentional: build-type-specific threshold takes priority, then the
-        # global tuning knob, then a safe default. This avoids unnecessary assembly
-        # when no threshold is configured at any level.
-        trigger_pct = float(bt_config.get("trigger_threshold_percent", get_tuning(config, "trigger_threshold_percent", 0.1)))
-        threshold_tokens = int(max_budget * trigger_pct)
-
-        if window["last_assembled_at"] is not None:
-            # R5-M10: Use batch-fetched token count instead of per-window query
-            tokens_since = tokens_since_map.get(window_id, 0)
-            if tokens_since < threshold_tokens:
-                _log.debug(
-                    "Skipping assembly: tokens_since=%d < threshold=%d for window=%s",
-                    tokens_since,
-                    threshold_tokens,
-                    window_id,
-                )
-                continue
-
-        # G5-12: Use SET NX for atomic dedup instead of racy EXISTS-then-LPUSH.
-        # The dedup key expires after a short TTL to allow retries.
-        dedup_key = f"assembly_dedup:{window_id}"
-        dedup_acquired = await redis.set(dedup_key, "1", ex=60, nx=True)
-        if not dedup_acquired:
-            _log.debug(
-                "Skipping assembly queue: dedup key exists for window=%s",
-                window_id,
-            )
-            continue
-
-        job = json.dumps(
-            {
-                "job_type": "assemble_context",
-                "context_window_id": window_id,
-                "conversation_id": state["conversation_id"],
-                "build_type": window["build_type"],
-                "enqueued_at": now,
-            }
-        )
-        await redis.lpush("context_assembly_jobs", job)
-        queued.append(window_id)
-        JOBS_ENQUEUED.labels(job_type="assemble_context").inc()
-        _log.info("Queued context assembly for window=%s", window_id)
-
-    return {"assembly_jobs_queued": queued}
+    return {"assembly_jobs_queued": []}
 
 
 def route_after_fetch(state: EmbedPipelineState) -> str:
@@ -3516,17 +6827,16 @@ def build_embed_pipeline() -> StateGraph:
     workflow.add_edge("enqueue_context_assembly", END)
 
     return workflow.compile()
+
 ```
 
----
-
-`app/flows/health_flow.py`
+## packages/context-broker-ae/src/context_broker_ae/health_flow.py
 
 ```python
 """
 Health Check — LangGraph StateGraph flow.
 
-Checks connectivity to all backing services (PostgreSQL, Redis, Neo4j)
+Checks connectivity to backing services (PostgreSQL, Neo4j)
 and returns aggregated health status. Invoked by the /health route.
 """
 
@@ -3536,7 +6846,7 @@ from typing import Optional
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
-from app.database import check_postgres_health, check_redis_health, check_neo4j_health
+from app.database import check_postgres_health, check_neo4j_health
 
 _log = logging.getLogger("context_broker.flows.health")
 
@@ -3547,7 +6857,6 @@ class HealthCheckState(TypedDict):
     config: dict
 
     postgres_ok: bool
-    redis_ok: bool
     neo4j_ok: bool
     all_healthy: bool
     status_detail: Optional[dict]
@@ -3559,19 +6868,14 @@ async def check_dependencies(state: HealthCheckState) -> dict:
     config = state["config"]
 
     postgres_ok = await check_postgres_health()
-    redis_ok = await check_redis_health()
     neo4j_ok = await check_neo4j_health(config)
 
-    all_healthy = postgres_ok and redis_ok
+    all_healthy = postgres_ok
 
     if not all_healthy:
         status_label = "unhealthy"
         http_status = 503
     elif not neo4j_ok:
-        # R6-m5: Intentionally returns 200 (not 503) when Neo4j is down.
-        # Neo4j is optional — memory extraction degrades gracefully without it.
-        # Only Postgres and Redis are critical; Neo4j unavailability is "degraded"
-        # but the service remains functional for all core operations.
         status_label = "degraded"
         http_status = 200
     else:
@@ -3581,7 +6885,6 @@ async def check_dependencies(state: HealthCheckState) -> dict:
     status_detail = {
         "status": status_label,
         "database": "ok" if postgres_ok else "error",
-        "cache": "ok" if redis_ok else "error",
         "neo4j": "ok" if neo4j_ok else "degraded",
     }
 
@@ -3592,7 +6895,6 @@ async def check_dependencies(state: HealthCheckState) -> dict:
 
     return {
         "postgres_ok": postgres_ok,
-        "redis_ok": redis_ok,
         "neo4j_ok": neo4j_ok,
         "all_healthy": all_healthy,
         "status_detail": status_detail,
@@ -3607,569 +6909,10 @@ def build_health_check_flow() -> StateGraph:
     workflow.set_entry_point("check_dependencies")
     workflow.add_edge("check_dependencies", END)
     return workflow.compile()
+
 ```
 
----
-
-`app/flows/imperator_flow.py`
-
-```python
-"""
-Imperator — LangGraph ReAct-style conversational agent flow.
-
-The Imperator is the Context Broker's built-in conversational agent.
-It uses a proper LangGraph ReAct graph (agent_node -> tool_node loop)
-with no checkpointer — conversation history is loaded from PostgreSQL
-on each invocation and results are stored via the standard message
-pipeline (conv_store_message).
-
-Uses LangChain's ChatOpenAI.bind_tools() for tool binding.
-
-ARCH-05: ReAct loop is graph edges, not a while loop inside a node.
-ARCH-06: No MemorySaver — DB is the persistence layer.
-F-22:    Messages stored through conv_store_message pipeline.
-"""
-
-import copy
-import logging
-import re
-import uuid
-from typing import Annotated, Optional
-
-import asyncpg
-import httpx
-import openai
-import yaml
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
-from langchain_core.tools import tool
-from langgraph.graph import END, StateGraph
-from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
-from typing_extensions import TypedDict
-
-from app.config import get_chat_model, get_tuning
-from app.database import get_pg_pool
-from app.prompt_loader import async_load_prompt
-
-_log = logging.getLogger("context_broker.flows.imperator")
-
-
-# ── State ────────────────────────────────────────────────────────────────
-
-class ImperatorState(TypedDict):
-    """State for the Imperator ReAct agent.
-
-    ARCH-05: messages accumulates via add_messages reducer across
-    agent_node <-> tool_node cycles.  The graph runs fresh each
-    invocation — no checkpointer.
-    """
-
-    messages: Annotated[list[AnyMessage], add_messages]
-    context_window_id: Optional[str]
-    config: dict
-    response_text: Optional[str]
-    error: Optional[str]
-    iteration_count: int
-
-
-# ── Tool singletons ─────────────────────────────────────────────────────
-
-# Lazy-initialized flow singletons for Imperator tool functions.
-_conv_search_flow_singleton = None
-_mem_search_flow_singleton = None
-
-
-def _get_conv_search_flow():
-    global _conv_search_flow_singleton
-    if _conv_search_flow_singleton is None:
-        from app.flows.search_flow import build_conversation_search_flow
-        _conv_search_flow_singleton = build_conversation_search_flow()
-    return _conv_search_flow_singleton
-
-
-def _get_mem_search_flow():
-    global _mem_search_flow_singleton
-    if _mem_search_flow_singleton is None:
-        from app.flows.memory_search_flow import build_memory_search_flow
-        _mem_search_flow_singleton = build_memory_search_flow()
-    return _mem_search_flow_singleton
-
-
-@tool
-async def _conv_search_tool(query: str, limit: int = 5) -> str:
-    """Search conversation history for relevant messages and conversations.
-
-    Use this when the user asks about what was said, discussed, or decided
-    in past conversations.
-
-    Args:
-        query: The search query describing what to find.
-        limit: Maximum number of results to return (default 5).
-    """
-    from app.config import async_load_config
-
-    config = await async_load_config()
-    flow = _get_conv_search_flow()
-    # R5-m11: Include all ConversationSearchState fields explicitly
-    result = await flow.ainvoke(
-        {
-            "query": query,
-            "limit": limit,
-            "offset": 0,
-            "date_from": None,
-            "date_to": None,
-            "flow_id": None,
-            "user_id": None,
-            "sender": None,
-            "config": config,
-            "query_embedding": None,
-            "results": [],
-            "warning": None,
-            "error": None,
-        }
-    )
-    results = result.get("results", [])
-    if not results:
-        return "No conversations found matching that query."
-    lines = [f"Found {len(results)} conversation(s):"]
-    for conv in results:
-        lines.append(
-            f"- {conv.get('title', 'Untitled')} (id: {conv['id']}, "
-            f"messages: {conv.get('total_messages', 0)})"
-        )
-    return "\n".join(lines)
-
-
-@tool
-async def _mem_search_tool(query: str, user_id: str = "imperator", limit: int = 5) -> str:
-    """Search extracted knowledge and memories from the knowledge graph.
-
-    Use this when the user asks about facts, preferences, relationships,
-    or anything that has been learned and stored as structured knowledge.
-
-    Args:
-        query: The search query describing what knowledge to find.
-        user_id: The user whose memories to search (default: imperator).
-        limit: Maximum number of results to return (default 5).
-    """
-    from app.config import async_load_config
-
-    config = await async_load_config()
-    flow = _get_mem_search_flow()
-    result = await flow.ainvoke(
-        {
-            "query": query,
-            "user_id": user_id,
-            "limit": limit,
-            "config": config,
-            "memories": [],
-            "relations": [],
-            "degraded": False,
-            "error": None,
-        }
-    )
-    memories = result.get("memories", [])
-    if not memories:
-        return "No relevant memories found."
-    lines = [f"Found {len(memories)} relevant memory/memories:"]
-    for mem in memories:
-        fact = mem.get("memory") or mem.get("content") or str(mem)
-        lines.append(f"- {fact}")
-    return "\n".join(lines)
-
-
-# Module-level tool singletons (M-10)
-_imperator_tools: list = [_conv_search_tool, _mem_search_tool]
-
-
-def _redact_config(config: dict) -> dict:
-    """Return a deep copy of *config* with sensitive values redacted (G5-16).
-
-    Removes the top-level ``credentials`` section entirely and replaces any
-    value whose key matches common secret patterns (api_key, secret, token,
-    password) with ``"***REDACTED***"``.
-    """
-    redacted = copy.deepcopy(config)
-    redacted.pop("credentials", None)
-
-    # R6-m10: Use word boundaries to avoid false positives on keys like
-    # "max_token_budget" — only match when the sensitive word is a distinct
-    # component of the key name (e.g., "api_key", "db_password").
-    _secret_key_re = re.compile(r"(api_key|secret|_token|password)", re.IGNORECASE)
-
-    def _walk(obj: dict | list) -> None:
-        if isinstance(obj, dict):
-            for key in list(obj.keys()):
-                if _secret_key_re.search(key) and obj[key]:
-                    obj[key] = "***REDACTED***"
-                elif isinstance(obj[key], (dict, list)):
-                    _walk(obj[key])
-        elif isinstance(obj, list):
-            for item in obj:
-                if isinstance(item, (dict, list)):
-                    _walk(item)
-
-    _walk(redacted)
-    return redacted
-
-
-@tool
-async def _config_read_tool() -> str:
-    """Read the current config.yml contents (sensitive values are redacted).
-
-    Admin-only tool. Returns the configuration as YAML text with credentials
-    and API keys redacted for safety.
-    """
-    from app.config import CONFIG_PATH
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            raw = yaml.safe_load(f)
-        sanitized = _redact_config(raw)
-        return yaml.dump(sanitized, default_flow_style=False)
-    except (FileNotFoundError, OSError, yaml.YAMLError) as exc:
-        return f"Error reading config: {exc}"
-
-
-@tool
-async def _db_query_tool(sql: str) -> str:
-    """Execute a read-only SQL query against the Context Broker database.
-
-    Admin-only tool. The transaction is set to READ ONLY mode, so any
-    DML/DDL will be rejected by PostgreSQL regardless of query structure.
-    A 5-second statement timeout prevents expensive queries.
-
-    Args:
-        sql: A SQL query to execute (enforced read-only at the DB level).
-    """
-    import asyncpg
-
-    # R5-M15: The real security boundary is SET TRANSACTION READ ONLY +
-    # statement_timeout below. The SELECT prefix check was bypassable via
-    # CTEs (e.g., WITH x AS (DELETE ...) SELECT ...) so it has been removed.
-    # READ ONLY mode causes PostgreSQL to reject any DML/DDL regardless of
-    # how the SQL is structured.
-    try:
-        pool = get_pg_pool()
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute("SET TRANSACTION READ ONLY")
-                await conn.execute("SET statement_timeout = '5000'")  # 5 second max
-                rows = await conn.fetch(sql)
-        if not rows:
-            return "No results."
-        # Format as text table
-        columns = list(rows[0].keys())
-        lines = [" | ".join(columns)]
-        for row in rows[:50]:  # Limit to 50 rows
-            lines.append(" | ".join(str(row[c]) for c in columns))
-        return "\n".join(lines)
-    except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
-        return f"Query error: {exc}"
-
-
-# Admin tool singletons — gated by config
-_admin_tools: list = [_config_read_tool, _db_query_tool]
-
-
-# ── Message pipeline singleton ──────────────────────────────────────────
-
-_message_pipeline_singleton = None
-
-
-def _get_message_pipeline():
-    """Lazy-init the standard message pipeline flow."""
-    global _message_pipeline_singleton
-    if _message_pipeline_singleton is None:
-        from app.flows.message_pipeline import build_message_pipeline
-        _message_pipeline_singleton = build_message_pipeline()
-    return _message_pipeline_singleton
-
-
-# ── Helper: load DB history ─────────────────────────────────────────────
-
-async def _load_conversation_history(context_window_id: str, config: dict) -> str:
-    """Load recent conversation history from PostgreSQL for context.
-
-    ARCH-06: History comes from the DB, not a checkpointer.  Returns a
-    formatted string to embed in the system prompt.
-    """
-    history_limit = get_tuning(config, "imperator_history_limit", 20)
-    try:
-        pool = get_pg_pool()
-        # Look up conversation_id from context_windows
-        cw_row = await pool.fetchrow(
-            "SELECT conversation_id FROM context_windows WHERE id = $1",
-            uuid.UUID(context_window_id),
-        )
-        if cw_row is None:
-            _log.warning("Context window %s not found", context_window_id)
-            return ""
-
-        conversation_id = cw_row["conversation_id"]
-        rows = await pool.fetch(
-            """
-            SELECT role, content
-            FROM conversation_messages
-            WHERE conversation_id = $1
-            ORDER BY sequence_number DESC
-            LIMIT $2
-            """,
-            conversation_id,
-            history_limit,
-        )
-        if not rows:
-            return ""
-
-        history_lines = []
-        for row in reversed(rows):
-            row_content = row.get("content") or ""
-            history_lines.append(f"[{row['role']}]: {row_content}")
-        return (
-            "\n\n--- Recent conversation history (for context) ---\n"
-            + "\n".join(history_lines)
-            + "\n--- End of history ---\n"
-        )
-    except (RuntimeError, OSError, asyncpg.PostgresError) as exc:
-        _log.warning("Failed to load Imperator history: %s", exc)
-        return ""
-
-
-# ── Graph nodes ──────────────────────────────────────────────────────────
-
-async def agent_node(state: ImperatorState) -> dict:
-    """Call the LLM with bound tools and return the response.
-
-    ARCH-05: This node contains NO loop.  Flow control (tool-call vs
-    final answer) is handled by the conditional edge after this node.
-
-    On the first call (no system prompt in messages yet), loads DB
-    history and prepends the system prompt + history context.
-    """
-    config = state["config"]
-
-    # Determine active tools (admin tools gated by config)
-    imperator_config = config.get("imperator", {})
-    active_tools = list(_imperator_tools)
-    if imperator_config.get("admin_tools", False):
-        active_tools.extend(_admin_tools)
-
-    llm = get_chat_model(config)
-    llm_with_tools = llm.bind_tools(active_tools)
-
-    messages = list(state["messages"])
-
-    # First call: prepend system prompt with DB history context
-    has_system = any(isinstance(m, SystemMessage) for m in messages)
-    if not has_system:
-        try:
-            system_content = await async_load_prompt("imperator_identity")
-        except RuntimeError as exc:
-            _log.error("Failed to load imperator_identity prompt: %s", exc)
-            return {
-                "messages": [AIMessage(content="I encountered a configuration error.")],
-                "response_text": "I encountered a configuration error.",
-                "error": f"Prompt loading failed: {exc}",
-            }
-
-        context_window_id = state.get("context_window_id")
-        if context_window_id:
-            history_context = await _load_conversation_history(context_window_id, config)
-            if history_context:
-                system_content += history_context
-
-        messages = [SystemMessage(content=system_content)] + messages
-
-    # CB-R3-06: Truncate older messages if the list exceeds the limit.
-    # M9: When truncating, ensure we don't split a tool-call sequence by
-    # starting the kept portion on a ToolMessage. Scan backwards from the
-    # cut point until we find a non-ToolMessage boundary.
-    max_react_messages = get_tuning(config, "imperator_max_react_messages", 40)
-    if len(messages) > max_react_messages:
-        from langchain_core.messages import ToolMessage
-        # Start with the default cut index (keep last max_react_messages-1)
-        cut_index = len(messages) - (max_react_messages - 1)
-        # Walk backwards until the message at cut_index is not a ToolMessage
-        while cut_index < len(messages) and isinstance(messages[cut_index], ToolMessage):
-            cut_index += 1
-        messages = [messages[0]] + messages[cut_index:]
-
-    try:
-        response = await llm_with_tools.ainvoke(messages)
-    except (openai.APIError, httpx.HTTPError, ValueError, RuntimeError) as exc:
-        _log.error("Imperator LLM call failed: %s", exc, exc_info=True)
-        return {
-            "messages": [AIMessage(content="I encountered an error processing your request.")],
-            "response_text": "I encountered an error processing your request.",
-            "error": str(exc),
-        }
-
-    # Return the AI response — add_messages reducer will append it
-    return {"messages": [response], "iteration_count": state.get("iteration_count", 0) + 1}
-
-
-def should_continue(state: ImperatorState) -> str:
-    """Conditional edge: route to tool_node if tool calls, else store_and_end.
-
-    ARCH-05: Flow control is graph edges, not loops in nodes.
-    Enforces imperator_max_iterations to prevent unbounded ReAct loops.
-    """
-    if state.get("error"):
-        return "store_and_end"
-
-    messages = state["messages"]
-    if not messages:
-        return "store_and_end"
-
-    last_message = messages[-1]
-    if isinstance(last_message, AIMessage) and last_message.tool_calls:
-        # Check iteration limit to prevent unbounded loops
-        max_iterations = get_tuning(state.get("config", {}), "imperator_max_iterations", 5)
-        if state.get("iteration_count", 0) >= max_iterations:
-            _log.warning(
-                "Imperator hit max iterations (%d) — forcing end",
-                max_iterations,
-            )
-            return "store_and_end"
-        return "tool_node"
-
-    return "store_and_end"
-
-
-async def store_and_end(state: ImperatorState) -> dict:
-    """Store user message and assistant response via the standard message pipeline.
-
-    F-22: Uses conv_store_message (the standard pipeline), NOT direct SQL.
-    ARCH-06: The graph runs fresh each invocation — results are persisted
-    to the DB here so the next invocation can load them as history.
-    """
-    context_window_id = state.get("context_window_id")
-    if not context_window_id:
-        # No context window — extract response text but skip persistence
-        messages = state["messages"]
-        last_ai = next(
-            (m for m in reversed(messages) if isinstance(m, AIMessage)),
-            None,
-        )
-        return {"response_text": last_ai.content if last_ai else ""}
-
-    messages = state["messages"]
-
-    # Find the last user message and last AI message (the final answer)
-    user_content = None
-    for msg in messages:
-        if isinstance(msg, HumanMessage):
-            user_content = msg.content
-
-    last_ai = None
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and not msg.tool_calls:
-            last_ai = msg
-            break
-
-    response_text = last_ai.content if last_ai else ""
-
-    pipeline = _get_message_pipeline()
-
-    # Store user message
-    if user_content:
-        try:
-            await pipeline.ainvoke({
-                "context_window_id": context_window_id,
-                "role": "user",
-                "sender": "imperator_user",
-                "recipient": "imperator",
-                "content": user_content,
-                "model_name": None,
-                "tool_calls": None,
-                "tool_call_id": None,
-                "message_id": None,
-                "conversation_id": None,
-                "sequence_number": None,
-                "was_collapsed": False,
-                "queued_jobs": [],
-                "error": None,
-            })
-        except (RuntimeError, OSError) as exc:
-            _log.warning("Failed to store Imperator user message via pipeline: %s", exc)
-
-    # Store assistant response
-    if response_text:
-        try:
-            await pipeline.ainvoke({
-                "context_window_id": context_window_id,
-                "role": "assistant",
-                "sender": "imperator",
-                "recipient": "imperator_user",
-                "content": response_text,
-                "model_name": None,
-                "tool_calls": None,
-                "tool_call_id": None,
-                "message_id": None,
-                "conversation_id": None,
-                "sequence_number": None,
-                "was_collapsed": False,
-                "queued_jobs": [],
-                "error": None,
-            })
-        except (RuntimeError, OSError) as exc:
-            _log.warning("Failed to store Imperator assistant message via pipeline: %s", exc)
-
-    return {"response_text": response_text}
-
-
-# ── Build the graph ──────────────────────────────────────────────────────
-
-def build_imperator_flow(config: dict | None = None) -> StateGraph:
-    """Build and compile the Imperator StateGraph.
-
-    ARCH-05: Proper graph structure with agent_node <-> tool_node loop
-             via conditional edges.  No while loops inside nodes.
-    ARCH-06: No checkpointer.  The graph runs fresh each invocation.
-             History is loaded from PostgreSQL in agent_node.
-    F-22:    Results stored via conv_store_message in store_and_end.
-    """
-    # R6-M14: Build the ToolNode with only the tools that match the config.
-    # If admin_tools=false (or no config), the ToolNode only gets base tools,
-    # so even if the LLM hallucinated an admin tool call, ToolNode would reject it.
-    if config is None:
-        from app.config import load_config
-        config = load_config()
-    imperator_config = config.get("imperator", {})
-    active_tools = list(_imperator_tools)
-    if imperator_config.get("admin_tools", False):
-        active_tools.extend(_admin_tools)
-    tool_node_instance = ToolNode(active_tools)
-
-    workflow = StateGraph(ImperatorState)
-
-    workflow.add_node("agent_node", agent_node)
-    workflow.add_node("tool_node", tool_node_instance)
-    workflow.add_node("store_and_end", store_and_end)
-
-    workflow.set_entry_point("agent_node")
-
-    # ARCH-05: Conditional edge — tool_calls route to tool_node, else store
-    workflow.add_conditional_edges(
-        "agent_node",
-        should_continue,
-        {
-            "tool_node": "tool_node",
-            "store_and_end": "store_and_end",
-        },
-    )
-
-    # tool_node -> back to agent_node for the next reasoning step
-    workflow.add_edge("tool_node", "agent_node")
-
-    workflow.add_edge("store_and_end", END)
-
-    # ARCH-06: No checkpointer — compile without one
-    return workflow.compile()
-```
-
----
-
-`app/flows/memory_admin_flow.py`
+## packages/context-broker-ae/src/context_broker_ae/memory_admin_flow.py
 
 ```python
 """
@@ -4212,7 +6955,7 @@ async def add_memory(state: MemAddState) -> dict:
     config = state["config"]
 
     try:
-        from app.memory.mem0_client import get_mem0_client
+        from context_broker_ae.memory.mem0_client import get_mem0_client
 
         mem0 = await get_mem0_client(config)
         if mem0 is None:
@@ -4226,7 +6969,14 @@ async def add_memory(state: MemAddState) -> dict:
 
         return {"result": result, "degraded": False}
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         _log.warning("mem_add failed: %s", exc)
         return {"error": str(exc), "degraded": True}
@@ -4263,7 +7013,7 @@ async def list_memories(state: MemListState) -> dict:
     config = state["config"]
 
     try:
-        from app.memory.mem0_client import get_mem0_client
+        from context_broker_ae.memory.mem0_client import get_mem0_client
 
         mem0 = await get_mem0_client(config)
         if mem0 is None:
@@ -4284,7 +7034,14 @@ async def list_memories(state: MemListState) -> dict:
 
         return {"memories": memories, "degraded": False}
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         _log.warning("mem_list failed: %s", exc)
         return {"memories": [], "error": str(exc), "degraded": True}
@@ -4320,7 +7077,7 @@ async def delete_memory(state: MemDeleteState) -> dict:
     config = state["config"]
 
     try:
-        from app.memory.mem0_client import get_mem0_client
+        from context_broker_ae.memory.mem0_client import get_mem0_client
 
         mem0 = await get_mem0_client(config)
         if mem0 is None:
@@ -4334,7 +7091,14 @@ async def delete_memory(state: MemDeleteState) -> dict:
 
         return {"deleted": True, "degraded": False}
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         _log.warning("mem_delete failed: %s", exc)
         return {"deleted": False, "error": str(exc), "degraded": True}
@@ -4347,11 +7111,10 @@ def build_mem_delete_flow() -> StateGraph:
     workflow.set_entry_point("delete_memory")
     workflow.add_edge("delete_memory", END)
     return workflow.compile()
+
 ```
 
----
-
-`app/flows/memory_extraction.py`
+## packages/context-broker-ae/src/context_broker_ae/memory_extraction.py
 
 ```python
 """
@@ -4376,16 +7139,26 @@ from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 from app.config import get_tuning, verbose_log
-from app.database import get_pg_pool, get_redis
+from app.database import get_pg_pool
 
 _log = logging.getLogger("context_broker.flows.memory_extraction")
 
 # Secret redaction patterns — applied before Mem0 ingestion
 _SECRET_PATTERNS = [
-    (re.compile(r'(?i)(api[_-]?key|token|secret|password|credential)["\s:=]+["\']?[\w\-\.]{20,}'), '[REDACTED]'),
-    (re.compile(r'(?i)bearer\s+[\w\-\.]{20,}'), 'Bearer [REDACTED]'),
-    (re.compile(r'sk-[a-zA-Z0-9\-]{20,}'), '[REDACTED]'),
-    (re.compile(r'(?i)(aws|gcp|azure)[_-]?[\w]*[_-]?(key|secret|token)["\s:=]+["\']?[\w\-\.]{16,}'), '[REDACTED]'),
+    (
+        re.compile(
+            r'(?i)(api[_-]?key|token|secret|password|credential)["\s:=]+["\']?[\w\-\.]{20,}'
+        ),
+        "[REDACTED]",
+    ),
+    (re.compile(r"(?i)bearer\s+[\w\-\.]{20,}"), "Bearer [REDACTED]"),
+    (re.compile(r"sk-[a-zA-Z0-9\-]{20,}"), "[REDACTED]"),
+    (
+        re.compile(
+            r'(?i)(aws|gcp|azure)[_-]?[\w]*[_-]?(key|secret|token)["\s:=]+["\']?[\w\-\.]{16,}'
+        ),
+        "[REDACTED]",
+    ),
 ]
 
 
@@ -4426,21 +7199,29 @@ class MemoryExtractionState(TypedDict):
 
 
 async def acquire_extraction_lock(state: MemoryExtractionState) -> dict:
-    """Acquire a Redis lock to prevent concurrent extraction of the same conversation."""
-    verbose_log(state["config"], _log, "memory_extraction.acquire_lock ENTER conv=%s", state["conversation_id"])
-    lock_key = f"extraction_in_progress:{state['conversation_id']}"
-    lock_token = str(uuid.uuid4())
-    redis = get_redis()
+    """Acquire a Postgres advisory lock for extraction of this conversation."""
+    verbose_log(
+        state["config"],
+        _log,
+        "memory_extraction.acquire_lock ENTER conv=%s",
+        state["conversation_id"],
+    )
+    pool = get_pg_pool()
+    lock_id = hash(state["conversation_id"]) & 0x7FFFFFFFFFFFFFFF
+    acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
 
-    acquired = await redis.set(lock_key, lock_token, ex=get_tuning(state["config"], "extraction_lock_ttl_seconds", 180), nx=True)
     if not acquired:
         _log.info(
             "Memory extraction: lock not acquired for conv=%s — skipping",
             state["conversation_id"],
         )
-        return {"lock_key": lock_key, "lock_token": None, "lock_acquired": False}
+        return {"lock_key": str(lock_id), "lock_token": None, "lock_acquired": False}
 
-    return {"lock_key": lock_key, "lock_token": lock_token, "lock_acquired": True}
+    return {
+        "lock_key": str(lock_id),
+        "lock_token": "pg_advisory",
+        "lock_acquired": True,
+    }
 
 
 async def fetch_unextracted_messages(state: MemoryExtractionState) -> dict:
@@ -4463,8 +7244,8 @@ async def fetch_unextracted_messages(state: MemoryExtractionState) -> dict:
         return {"messages": [], "extracted_count": 0}
 
     # Get user_id from conversation (use participant_id from first context window)
-    pool2 = get_pg_pool()
-    window = await pool2.fetchrow(
+    # R7-m3: Removed duplicate get_pg_pool() call — reuse existing pool variable
+    window = await pool.fetchrow(
         "SELECT participant_id FROM context_windows WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT 1",
         uuid.UUID(state["conversation_id"]),
     )
@@ -4473,14 +7254,55 @@ async def fetch_unextracted_messages(state: MemoryExtractionState) -> dict:
     return {"messages": [dict(r) for r in rows], "user_id": user_id}
 
 
+# Patterns for stripping noise from extraction text
+_CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```", re.MULTILINE)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]{10,}`")
+_FILE_PATH_RE = re.compile(
+    r"(?:[A-Z]:\\|/(?:mnt|home|usr|storage|app|tmp)/)[\w/\\._-]{10,}"
+)
+_URL_RE = re.compile(r"https?://\S{20,}")
+_MARKDOWN_HEADER_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+_MARKDOWN_HR_RE = re.compile(r"^\*{3,}$|^-{3,}$|^_{3,}$", re.MULTILINE)
+_MARKDOWN_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
+_MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+
+
+def _clean_for_extraction(text: str) -> str:
+    """Strip code blocks, file paths, URLs, and markdown noise.
+
+    Preserves conversational content — the signal Mem0 needs for
+    knowledge extraction. Removes noise that confuses the LLM and
+    wastes tokens.
+    """
+    # Remove code blocks (triple backtick fenced)
+    text = _CODE_BLOCK_RE.sub("[code removed]", text)
+    # Remove long inline code spans
+    text = _INLINE_CODE_RE.sub("[code]", text)
+    # Remove file paths
+    text = _FILE_PATH_RE.sub("[path]", text)
+    # Remove long URLs
+    text = _URL_RE.sub("[url]", text)
+    # Simplify markdown headers to plain text
+    text = _MARKDOWN_HEADER_RE.sub("", text)
+    # Remove horizontal rules
+    text = _MARKDOWN_HR_RE.sub("", text)
+    # Simplify bold markers
+    text = _MARKDOWN_BOLD_RE.sub(r"\1", text)
+    # Collapse excessive newlines
+    text = _MULTI_NEWLINE_RE.sub("\n\n", text)
+    return text.strip()
+
+
 async def build_extraction_text(state: MemoryExtractionState) -> dict:
     """Build the text to send to Mem0 for extraction.
 
     Limits text size to avoid overwhelming the LLM.
     Selects messages newest-first up to the character budget.
+    Cleans content by stripping code blocks, file paths, and markdown
+    noise that wastes tokens and confuses structured JSON output.
     """
     messages = state["messages"]
-    max_chars = get_tuning(state["config"], "extraction_max_chars", 90000)
+    max_chars = get_tuning(state["config"], "extraction_max_chars", 10000)
 
     lines = []
     for msg in reversed(messages):
@@ -4488,9 +7310,11 @@ async def build_extraction_text(state: MemoryExtractionState) -> dict:
         msg_content = msg.get("content") or ""
         if not msg_content:
             continue
-        lines.append(
-            (str(msg["id"]), f"{msg['role']} ({msg['sender']}): {msg_content}")
-        )
+        # Clean the content before adding to extraction text
+        cleaned = _clean_for_extraction(msg_content)
+        if not cleaned or len(cleaned) < 10:
+            continue
+        lines.append((str(msg["id"]), f"{msg['role']} ({msg['sender']}): {cleaned}"))
 
     selected_ids = []
     fully_extracted_ids = []
@@ -4533,7 +7357,7 @@ async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
     config = state["config"]
 
     try:
-        from app.memory.mem0_client import get_mem0_client
+        from context_broker_ae.memory.mem0_client import get_mem0_client
 
         mem0 = await get_mem0_client(config)
         if mem0 is None:
@@ -4560,7 +7384,14 @@ async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
         )
         return {"error": None}
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         # Mem0 wraps Neo4j driver errors and other backend failures in
         # various exception types. We catch broadly here to ensure
@@ -4570,6 +7401,14 @@ async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
             state["conversation_id"],
             exc,
         )
+        # PG-49: Reset Mem0 client on error so next retry gets a fresh
+        # connection. Prevents poisoned transaction state from cascading.
+        try:
+            from context_broker_ae.memory.mem0_client import reset_mem0_client
+
+            reset_mem0_client()
+        except ImportError:
+            pass
         return {"error": str(exc)}
 
 
@@ -4602,42 +7441,16 @@ async def mark_messages_extracted(state: MemoryExtractionState) -> dict:
     return {"extracted_count": len(message_uuids)}
 
 
-async def _atomic_lock_release(redis_client, lock_key: str, lock_token: str) -> bool:
-    """Atomically release a Redis lock only if we still own it (CB-R3-02).
-
-    Uses a Lua script to perform check-and-delete in a single atomic operation,
-    preventing the race where another worker acquires the lock between our GET
-    and DELETE.
-
-    Returns True if the lock was released, False if it was already gone or
-    owned by another worker.
-    """
-    lua_script = """
-    if redis.call("GET", KEYS[1]) == ARGV[1] then
-        return redis.call("DEL", KEYS[1])
-    else
-        return 0
-    end
-    """
-    result = await redis_client.eval(lua_script, 1, lock_key, lock_token)
-    return result == 1
-
-
 async def release_extraction_lock(state: MemoryExtractionState) -> dict:
-    """Release the Redis extraction lock.
-
-    CB-R3-02: Uses atomic Lua script to prevent race between GET and DELETE.
-    """
+    """Release the Postgres advisory lock for extraction."""
     lock_key = state.get("lock_key", "")
-    lock_token = state.get("lock_token")
-    if lock_key and state.get("lock_acquired") and lock_token:
-        redis = get_redis()
-        released = await _atomic_lock_release(redis, lock_key, lock_token)
-        if not released:
-            _log.debug(
-                "Lock %s was not released (expired or taken by another worker)",
-                lock_key,
-            )
+    if lock_key and state.get("lock_acquired"):
+        try:
+            pool = get_pg_pool()
+            lock_id = int(lock_key)
+            await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+        except (ValueError, OSError) as exc:
+            _log.debug("Lock release failed: %s", exc)
     return {}
 
 
@@ -4719,11 +7532,10 @@ def build_memory_extraction() -> StateGraph:
     workflow.add_edge("release_extraction_lock", END)
 
     return workflow.compile()
+
 ```
 
----
-
-`app/flows/memory_scoring.py`
+## packages/context-broker-ae/src/context_broker_ae/memory_scoring.py
 
 ```python
 """
@@ -4742,11 +7554,11 @@ from datetime import datetime, timezone
 
 # Half-life in days by category
 DEFAULT_HALF_LIVES = {
-    "ephemeral": 3,      # Short-lived facts (moods, preferences, temp state)
-    "contextual": 14,    # Session/project context
-    "factual": 60,       # Learned facts about entities
-    "historical": 365,   # Historical events, permanent-ish
-    "default": 30,       # When category unknown
+    "ephemeral": 3,  # Short-lived facts (moods, preferences, temp state)
+    "contextual": 14,  # Session/project context
+    "factual": 60,  # Learned facts about entities
+    "historical": 365,  # Historical events, permanent-ish
+    "default": 30,  # When category unknown
 }
 
 
@@ -4776,6 +7588,11 @@ def score_memory(memory: dict, config: dict) -> float:
     # Exponential decay: score = 0.5 ^ (age / half_life)
     score = math.pow(0.5, age_days / half_life_days)
 
+    # R7-m24: Recency window and boost factor read from config tuning section
+    tuning = config.get("tuning", {})
+    recency_window_days = tuning.get("memory_recency_window_days", 7)
+    recency_boost_factor = tuning.get("memory_recency_boost_factor", 1.3)
+
     # Boost if recently accessed
     last_accessed = memory.get("last_accessed")
     if last_accessed:
@@ -4784,13 +7601,15 @@ def score_memory(memory: dict, config: dict) -> float:
         if last_accessed.tzinfo is None:
             last_accessed = last_accessed.replace(tzinfo=timezone.utc)
         access_age = max(0, (now - last_accessed).total_seconds() / 86400)
-        if access_age < 7:
-            score = min(1.0, score * 1.3)  # 30% boost for recently accessed
+        if access_age < recency_window_days:
+            score = min(1.0, score * recency_boost_factor)
 
     return score
 
 
-def filter_and_rank_memories(memories: list[dict], config: dict, min_score: float = 0.1) -> list[dict]:
+def filter_and_rank_memories(
+    memories: list[dict], config: dict, min_score: float = 0.1
+) -> list[dict]:
     """Score, filter, and rank memories by confidence.
 
     Memories below min_score are filtered out.
@@ -4806,11 +7625,10 @@ def filter_and_rank_memories(memories: list[dict], config: dict, min_score: floa
 
     scored.sort(key=lambda m: m.get("confidence_score", 0), reverse=True)
     return scored
+
 ```
 
----
-
-`app/flows/memory_search_flow.py`
+## packages/context-broker-ae/src/context_broker_ae/memory_search_flow.py
 
 ```python
 """
@@ -4826,7 +7644,7 @@ from typing import Optional
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
-from app.flows.memory_scoring import filter_and_rank_memories
+from context_broker_ae.memory_scoring import filter_and_rank_memories
 
 _log = logging.getLogger("context_broker.flows.memory_search")
 
@@ -4853,7 +7671,7 @@ async def search_memory_graph(state: MemorySearchState) -> dict:
     config = state["config"]
 
     try:
-        from app.memory.mem0_client import get_mem0_client
+        from context_broker_ae.memory.mem0_client import get_mem0_client
 
         mem0 = await get_mem0_client(config)
         if mem0 is None:
@@ -4890,7 +7708,14 @@ async def search_memory_graph(state: MemorySearchState) -> dict:
             "degraded": False,
         }
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:  # EX-CB-001: broad catch for Mem0
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:  # EX-CB-001: broad catch for Mem0
         _log.warning("Memory search failed (degraded mode): %s", exc)
         return {
             "memories": [],
@@ -4933,11 +7758,16 @@ async def retrieve_memory_context(state: MemoryContextState) -> dict:
     config = state["config"]
 
     try:
-        from app.memory.mem0_client import get_mem0_client
+        from context_broker_ae.memory.mem0_client import get_mem0_client
 
         mem0 = await get_mem0_client(config)
         if mem0 is None:
-            return {"memories": [], "context_text": "", "degraded": True, "error": "Mem0 client not available"}
+            return {
+                "memories": [],
+                "context_text": "",
+                "degraded": True,
+                "error": "Mem0 client not available",
+            }
 
         loop = asyncio.get_running_loop()
         results = await loop.run_in_executor(
@@ -4968,7 +7798,14 @@ async def retrieve_memory_context(state: MemoryContextState) -> dict:
 
         return {"memories": memories, "context_text": context_text, "degraded": False}
 
-    except (ConnectionError, RuntimeError, ValueError, ImportError, OSError, Exception) as exc:  # EX-CB-001: broad catch for Mem0
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:  # EX-CB-001: broad catch for Mem0
         _log.warning("Memory context retrieval failed (degraded mode): %s", exc)
         return {"memories": [], "context_text": "", "degraded": True, "error": str(exc)}
 
@@ -4980,11 +7817,10 @@ def build_memory_context_flow() -> StateGraph:
     workflow.set_entry_point("retrieve_memory_context")
     workflow.add_edge("retrieve_memory_context", END)
     return workflow.compile()
+
 ```
 
----
-
-`app/flows/message_pipeline.py`
+## packages/context-broker-ae/src/context_broker_ae/message_pipeline.py
 
 ```python
 """
@@ -5001,18 +7837,15 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
 from typing import Optional
 
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 import asyncpg
-import redis.exceptions
 
 from app.config import verbose_log_auto
-from app.database import get_pg_pool, get_redis
-from app.metrics_registry import JOBS_ENQUEUED
+from app.database import get_pg_pool
 
 _log = logging.getLogger("context_broker.flows.message_pipeline")
 
@@ -5032,12 +7865,12 @@ class MessagePipelineState(TypedDict):
     context_window_id: Optional[str]  # ARCH-04: replaces conversation_id
     conversation_id_input: Optional[str]  # Direct conversation_id bypass
     role: str
-    sender: str                     # ARCH-13: was sender_id
-    recipient: Optional[str]        # ARCH-13: was recipient_id
-    content: Optional[str]          # ARCH-01: now nullable
+    sender: str  # ARCH-13: was sender_id
+    recipient: Optional[str]  # ARCH-13: was recipient_id
+    content: Optional[str]  # ARCH-01: now nullable
     model_name: Optional[str]
-    tool_calls: Optional[list[dict]] # ARCH-01: tool calls as list of dicts (JSONB)
-    tool_call_id: Optional[str]     # ARCH-01: tool call ID for tool responses
+    tool_calls: Optional[list[dict]]  # ARCH-01: tool calls as list of dicts (JSONB)
+    tool_call_id: Optional[str]  # ARCH-01: tool call ID for tool responses
 
     # Outputs set by nodes
     message_id: Optional[str]
@@ -5056,7 +7889,13 @@ async def store_message(state: MessagePipelineState) -> dict:
     consecutive identical messages from the same sender.
     """
     _t0 = time.monotonic()
-    verbose_log_auto(_log, "store_message ENTER context_window=%s conversation_id_input=%s sender=%s", state.get("context_window_id"), state.get("conversation_id_input"), state["sender"])
+    verbose_log_auto(
+        _log,
+        "store_message ENTER context_window=%s conversation_id_input=%s sender=%s",
+        state.get("context_window_id"),
+        state.get("conversation_id_input"),
+        state["sender"],
+    )
     pool = get_pg_pool()
 
     # Resolve conversation_id from whichever identifier was provided
@@ -5076,7 +7915,9 @@ async def store_message(state: MessagePipelineState) -> dict:
         # Direct conversation_id — skip context window lookup
         conversation_id = conv_id_input
     else:
-        return {"error": "At least one of context_window_id or conversation_id must be provided"}
+        return {
+            "error": "At least one of context_window_id or conversation_id must be provided"
+        }
 
     conv_uuid = uuid.UUID(conversation_id)
 
@@ -5102,6 +7943,12 @@ async def store_message(state: MessagePipelineState) -> dict:
             recipient = "user"
         elif state["role"] == "user":
             recipient = "assistant"
+        elif state["role"] == "system":
+            recipient = "all"
+        elif state["role"] == "tool":
+            recipient = "assistant"
+        else:
+            recipient = "all"
 
     # Retry once on UniqueViolationError (edge case with advisory lock)
     row = None  # CB-R3-04: Initialize before retry loop for safety
@@ -5180,7 +8027,11 @@ async def store_message(state: MessagePipelineState) -> dict:
                         priority,
                         effective_token_count,
                         state.get("model_name"),
-                        json.dumps(state["tool_calls"]) if state.get("tool_calls") else None,
+                        (
+                            json.dumps(state["tool_calls"])
+                            if state.get("tool_calls")
+                            else None
+                        ),
                         state.get("tool_call_id"),
                     )
 
@@ -5209,9 +8060,17 @@ async def store_message(state: MessagePipelineState) -> dict:
                 "Sequence number conflict persisted after retry for conv=%s",
                 conversation_id,
             )
-            return {"error": f"Failed to assign sequence number for conversation {conversation_id}"}
+            return {
+                "error": f"Failed to assign sequence number for conversation {conversation_id}"
+            }
 
-    verbose_log_auto(_log, "store_message EXIT conv=%s msg=%s duration_ms=%d", conversation_id, str(row["id"]), int((time.monotonic() - _t0) * 1000))
+    verbose_log_auto(
+        _log,
+        "store_message EXIT conv=%s msg=%s duration_ms=%d",
+        conversation_id,
+        str(row["id"]),
+        int((time.monotonic() - _t0) * 1000),
+    )
     return {
         "message_id": str(row["id"]),
         "conversation_id": conversation_id,
@@ -5220,95 +8079,31 @@ async def store_message(state: MessagePipelineState) -> dict:
     }
 
 
-async def enqueue_background_jobs(state: MessagePipelineState) -> dict:
-    """Enqueue embedding and memory extraction jobs in Redis for ARQ workers."""
-    if state.get("error"):
-        return {"queued_jobs": []}
-
-    conversation_id = state.get("conversation_id")
-    redis_client = get_redis()
-    queued = []
-    now = datetime.now(timezone.utc).isoformat()
-
-    # Enqueue embedding job
-    embed_job = json.dumps(
-        {
-            "job_type": "embed_message",
-            "message_id": state["message_id"],
-            "conversation_id": conversation_id,
-            "enqueued_at": now,
-        }
-    )
-    try:
-        # No dedup needed: the embed pipeline's UPDATE is idempotent
-        # (re-embedding overwrites the same row).
-        await redis_client.lpush("embedding_jobs", embed_job)
-        queued.append("embed_message")
-        JOBS_ENQUEUED.labels(job_type="embed_message").inc()
-    except (redis.exceptions.RedisError, ConnectionError) as exc:
-        # M-17: The message is already safely stored in Postgres before this
-        # point. If Redis is down, embedding/extraction won't happen for this
-        # message until re-triggered. Known gap: a periodic sweep checking for
-        # messages where embedding IS NULL AND created_at < NOW() - INTERVAL
-        # '5 minutes' can detect and re-enqueue these orphaned messages.
-        # The queue depth metrics (M-03) can also surface this condition.
-        _log.warning("Failed to enqueue embedding job (message safe in Postgres): %s", exc)
-
-    # F-01: Enqueue memory extraction job via sorted set with priority as score
-    extract_job = json.dumps(
-        {
-            "job_type": "extract_memory",
-            "conversation_id": conversation_id,
-            "enqueued_at": now,
-        }
-    )
-    try:
-        dedup_key = f"job_dedup:extract:{conversation_id}"
-        is_new = await redis_client.set(dedup_key, "1", ex=300, nx=True)
-        if is_new:
-            # ARCH-14: Use role-based priority as score (lower = higher priority)
-            score = _ROLE_PRIORITY.get(state.get("role", "assistant"), 2)
-            await redis_client.zadd("memory_extraction_jobs", {extract_job: score})
-            queued.append("extract_memory")
-            JOBS_ENQUEUED.labels(job_type="extract_memory").inc()
-    except (redis.exceptions.RedisError, ConnectionError) as exc:
-        # M-17: Same as above — message is safe in Postgres. Memory extraction
-        # can be retried via the periodic dead-letter sweep.
-        _log.warning("Failed to enqueue memory extraction job (message safe in Postgres): %s", exc)
-
-    return {"queued_jobs": queued}
-
-
 def route_after_store(state: MessagePipelineState) -> str:
-    """Route: if error or collapsed, skip to END. Otherwise enqueue jobs."""
-    if state.get("error") or state.get("was_collapsed"):
-        return END
-    return "enqueue_background_jobs"
+    """Route: always END. Background processing is DB-driven — workers
+    poll for unembedded/unextracted messages automatically."""
+    return END
 
 
 def build_message_pipeline() -> StateGraph:
-    """Build and compile the message ingestion StateGraph."""
+    """Build and compile the message ingestion StateGraph.
+
+    Stores the message to Postgres and returns. Background processing
+    (embedding, extraction, assembly) is handled by the DB-driven worker
+    which polls for messages with NULL embeddings / unextracted flags.
+    No queue enqueue step needed.
+    """
     workflow = StateGraph(MessagePipelineState)
 
     workflow.add_node("store_message", store_message)
-    workflow.add_node("enqueue_background_jobs", enqueue_background_jobs)
-
     workflow.set_entry_point("store_message")
-
-    workflow.add_conditional_edges(
-        "store_message",
-        route_after_store,
-        {"enqueue_background_jobs": "enqueue_background_jobs", END: END},
-    )
-
-    workflow.add_edge("enqueue_background_jobs", END)
+    workflow.add_edge("store_message", END)
 
     return workflow.compile()
+
 ```
 
----
-
-`app/flows/metrics_flow.py`
+## packages/context-broker-ae/src/context_broker_ae/metrics_flow.py
 
 ```python
 """
@@ -5357,11 +8152,110 @@ def build_metrics_flow() -> StateGraph:
     workflow.set_entry_point("collect_metrics")
     workflow.add_edge("collect_metrics", END)
     return workflow.compile()
+
 ```
 
----
+## packages/context-broker-ae/src/context_broker_ae/register.py
 
-`app/flows/retrieval_flow.py`
+```python
+"""
+Context Broker AE — Package registration entry point.
+
+Called by the bootstrap kernel's stategraph_registry.scan() when this
+package is discovered via entry_points(group="context-broker.ae").
+
+Returns an AERegistration dict with build type registrations and
+flow builders that the kernel processes to populate its registries.
+"""
+
+
+def register() -> dict:
+    """Register the Context Broker AE's infrastructure StateGraphs.
+
+    Returns a dict with:
+    - build_types: dict of (assembly_builder, retrieval_builder) pairs
+    - flows: dict of flow_name -> builder callable
+    """
+    # Build types
+    from context_broker_ae.build_types.passthrough import (
+        build_passthrough_assembly,
+        build_passthrough_retrieval,
+    )
+    from context_broker_ae.build_types.standard_tiered import (
+        build_standard_tiered_assembly,
+        build_standard_tiered_retrieval,
+    )
+    from context_broker_ae.build_types.knowledge_enriched import (
+        build_knowledge_enriched_retrieval,
+    )
+
+    # Flow builders
+    from context_broker_ae.message_pipeline import build_message_pipeline
+    from context_broker_ae.embed_pipeline import build_embed_pipeline
+    from context_broker_ae.memory_extraction import build_memory_extraction
+    from context_broker_ae.search_flow import (
+        build_conversation_search_flow,
+        build_message_search_flow,
+    )
+    from context_broker_ae.conversation_ops_flow import (
+        build_create_conversation_flow,
+        build_create_context_window_flow,
+        build_get_context_flow,
+        build_get_history_flow,
+        build_search_context_windows_flow,
+    )
+    from context_broker_ae.memory_search_flow import (
+        build_memory_search_flow,
+        build_memory_context_flow,
+    )
+    from context_broker_ae.memory_admin_flow import (
+        build_mem_add_flow,
+        build_mem_delete_flow,
+        build_mem_list_flow,
+    )
+    from context_broker_ae.health_flow import build_health_check_flow
+    from context_broker_ae.metrics_flow import build_metrics_flow
+
+    return {
+        "build_types": {
+            "passthrough": (
+                build_passthrough_assembly,
+                build_passthrough_retrieval,
+            ),
+            "standard-tiered": (
+                build_standard_tiered_assembly,
+                build_standard_tiered_retrieval,
+            ),
+            "knowledge-enriched": (
+                # Reuses standard-tiered assembly; only retrieval differs
+                build_standard_tiered_assembly,
+                build_knowledge_enriched_retrieval,
+            ),
+        },
+        "flows": {
+            "message_pipeline": build_message_pipeline,
+            "embed_pipeline": build_embed_pipeline,
+            "memory_extraction": build_memory_extraction,
+            "conversation_search": build_conversation_search_flow,
+            "message_search": build_message_search_flow,
+            "create_conversation": build_create_conversation_flow,
+            "create_context_window": build_create_context_window_flow,
+            "get_context": build_get_context_flow,
+            "get_history": build_get_history_flow,
+            "search_context_windows": build_search_context_windows_flow,
+            "memory_search": build_memory_search_flow,
+            "memory_context": build_memory_context_flow,
+            "mem_add": build_mem_add_flow,
+            "mem_delete": build_mem_delete_flow,
+            "mem_list": build_mem_list_flow,
+            "health_check": build_health_check_flow,
+            "metrics": build_metrics_flow,
+        },
+    }
+
+```
+
+## packages/context-broker-ae/src/context_broker_ae/retrieval_flow.py
 
 ```python
 """
@@ -5380,7 +8274,7 @@ handled all build types including semantic/KG).
 """
 
 # Re-export from the knowledge-enriched build type (superset of all features)
-from app.flows.build_types.knowledge_enriched import (  # noqa: F401
+from context_broker_ae.build_types.knowledge_enriched import (  # noqa: F401
     KnowledgeEnrichedRetrievalState as RetrievalState,
     ke_load_window as load_window,
     ke_wait_for_assembly as wait_for_assembly,
@@ -5392,11 +8286,10 @@ from app.flows.build_types.knowledge_enriched import (  # noqa: F401
     build_knowledge_enriched_retrieval as build_retrieval_flow,
     _estimate_tokens,
 )
+
 ```
 
----
-
-`app/flows/search_flow.py`
+## packages/context-broker-ae/src/context_broker_ae/search_flow.py
 
 ```python
 """
@@ -5406,11 +8299,10 @@ Implements hybrid search (vector + BM25 + reranking) via Reciprocal Rank Fusion.
 Handles conv_search and conv_search_messages tools.
 """
 
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 import openai
@@ -5420,33 +8312,50 @@ from typing_extensions import TypedDict
 from app.config import get_embeddings_model, get_tuning
 from app.database import get_pg_pool
 
-# M-05: Cache CrossEncoder model instances to avoid reloading per request
-_reranker_cache: dict[str, Any] = {}
-_reranker_lock = asyncio.Lock()
-
-
-async def _get_reranker(model_name: str):
-    """Return a cached CrossEncoder instance.
-
-    M-10: The initial model load is synchronous and CPU-bound (downloads +
-    initializes weights). Run it in the default executor to avoid blocking
-    the async event loop. Subsequent calls return the cached instance.
-
-    G5-24: An asyncio.Lock prevents concurrent cold-start callers from
-    loading the same model multiple times.
-    """
-    async with _reranker_lock:
-        if model_name not in _reranker_cache:
-            loop = asyncio.get_running_loop()
-
-            def _load():
-                from sentence_transformers import CrossEncoder
-                return CrossEncoder(model_name)
-
-            _reranker_cache[model_name] = await loop.run_in_executor(None, _load)
-    return _reranker_cache[model_name]
-
 _log = logging.getLogger("context_broker.flows.search")
+
+
+async def _rerank_via_api(
+    query: str, candidates: list[dict], config: dict
+) -> list[dict]:
+    """Rerank candidates by calling a /rerank endpoint.
+
+    Works with Infinity (local), Together, Cohere, Jina, Voyage, or any
+    provider exposing the /rerank standard. The base_url should include
+    any path prefix the provider requires (e.g., https://api.together.xyz/v1
+    for Together, http://context-broker-infinity:7997 for Infinity).
+    """
+    reranker_config = config.get("reranker", {})
+    base_url = reranker_config.get("base_url", "").rstrip("/")
+    model = reranker_config.get("model", "")
+    top_n = reranker_config.get("top_n", 10)
+
+    documents = [c.get("content") or "" for c in candidates]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{base_url}/rerank",
+            json={
+                "model": model,
+                "query": query,
+                "documents": documents,
+                "top_n": top_n,
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    # Normalize response — different providers use different keys
+    results = data.get("results") or data.get("choices") or data.get("data") or []
+
+    for item in results:
+        idx = item.get("index", 0)
+        score = item.get("relevance_score", 0)
+        if idx < len(candidates):
+            candidates[idx]["rerank_score"] = score
+
+    reranked = sorted(candidates, key=lambda x: x.get("rerank_score", 0), reverse=True)
+    return reranked[:top_n]
 
 
 # ============================================================
@@ -5485,8 +8394,13 @@ async def embed_conversation_query(state: ConversationSearchState) -> dict:
         embedding = await embeddings_model.aembed_query(state["query"])
         return {"query_embedding": embedding}
     except (openai.APIError, httpx.HTTPError, ValueError) as exc:
-        _log.warning("Conversation search: embedding failed, falling back to text: %s", exc)
-        return {"query_embedding": None, "warning": "embedding unavailable, results are text-only"}
+        _log.warning(
+            "Conversation search: embedding failed, falling back to text: %s", exc
+        )
+        return {
+            "query_embedding": None,
+            "warning": "embedding unavailable, results are text-only",
+        }
 
 
 async def search_conversations_db(state: ConversationSearchState) -> dict:
@@ -5520,7 +8434,9 @@ async def search_conversations_db(state: ConversationSearchState) -> dict:
     except ValueError as exc:
         return {"error": f"Invalid date format: {exc}", "results": []}
 
-    def _build_conv_filters(start_idx: int, table_prefix: str = "") -> tuple[str, list, int]:
+    def _build_conv_filters(
+        start_idx: int, table_prefix: str = ""
+    ) -> tuple[str, list, int]:
         """Build dynamic WHERE clause fragments for conversation filters.
 
         CB-R3-07: Build filter list and args together, compute indices at the end.
@@ -5539,7 +8455,9 @@ async def search_conversations_db(state: ConversationSearchState) -> dict:
             # R6-M18: sender lives on messages table, not conversations, so a
             # correlated EXISTS subquery is required. For performance, the
             # idx_messages_conversation_sender index covers this query.
-            filters.append(f"EXISTS (SELECT 1 FROM conversation_messages sm WHERE sm.conversation_id = {prefix}id AND sm.sender = ${{}})")
+            filters.append(
+                f"EXISTS (SELECT 1 FROM conversation_messages sm WHERE sm.conversation_id = {prefix}id AND sm.sender = ${{}})"
+            )
             args.append(filter_sender)
         if parsed_date_from:
             filters.append(f"{prefix}created_at >= ${{}}::timestamptz")
@@ -5657,7 +8575,10 @@ async def embed_message_query(state: MessageSearchState) -> dict:
         return {"query_embedding": embedding}
     except (openai.APIError, httpx.HTTPError, ValueError) as exc:
         _log.warning("Message search: embedding failed, falling back to BM25: %s", exc)
-        return {"query_embedding": None, "warning": "embedding unavailable, results are text-only"}
+        return {
+            "query_embedding": None,
+            "warning": "embedding unavailable, results are text-only",
+        }
 
 
 async def hybrid_search_messages(state: MessageSearchState) -> dict:
@@ -5829,7 +8750,10 @@ async def hybrid_search_messages(state: MessageSearchState) -> dict:
                     # Clamp to 0 to guard against clock skew inflating scores
                     age_days = max(0, (now - created).total_seconds() / 86400)
                     # Linear penalty: 0 for new messages, up to recency_max_penalty for old
-                    penalty = min(recency_max_penalty, (age_days / recency_decay_days) * recency_max_penalty)
+                    penalty = min(
+                        recency_max_penalty,
+                        (age_days / recency_decay_days) * recency_max_penalty,
+                    )
                     c["score"] = c.get("score", 0) * (1.0 - penalty)
                 except (ValueError, TypeError):
                     pass
@@ -5840,10 +8764,10 @@ async def hybrid_search_messages(state: MessageSearchState) -> dict:
 
 
 async def rerank_results(state: MessageSearchState) -> dict:
-    """Apply cross-encoder reranking to the hybrid search candidates.
+    """Apply reranking to the hybrid search candidates.
 
-    Uses the configured reranker. Falls back to RRF scores if reranker
-    is unavailable (graceful degradation).
+    Uses the configured reranker provider. Falls back to RRF scores if
+    reranker is unavailable (graceful degradation).
     """
     candidates = state["candidates"]
     query = state["query"]
@@ -5856,33 +8780,16 @@ async def rerank_results(state: MessageSearchState) -> dict:
     if reranker_provider == "none" or not candidates:
         return {"reranked_results": candidates[:limit]}
 
-    if reranker_provider == "cross-encoder":
+    if reranker_provider == "api":
         try:
-            model_name = reranker_config.get("model", "BAAI/bge-reranker-v2-m3")
-            reranker = await _get_reranker(model_name)
-
-            pairs = [(query, c.get("content") or "") for c in candidates]
-
-            loop = asyncio.get_running_loop()
-            scores = await loop.run_in_executor(
-                None, lambda: reranker.predict(pairs)
-            )
-
-            for i, candidate in enumerate(candidates):
-                candidate["rerank_score"] = float(scores[i])
-
-            reranked = sorted(candidates, key=lambda x: x.get("rerank_score", 0), reverse=True)
+            reranked = await _rerank_via_api(query, candidates, config)
             return {"reranked_results": reranked[:limit]}
-
-        except (OSError, RuntimeError, ValueError, ImportError) as exc:
-            # R6-M19: ImportError catches model-loading failures (missing
-            # sentence_transformers or incompatible versions)
-            _log.warning(
-                "Cross-encoder reranking failed (degraded mode): %s", exc
-            )
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            _log.warning("API reranking failed (degraded mode): %s", exc)
             return {"reranked_results": candidates[:limit]}
 
     # Unknown provider — return top candidates by RRF score
+    _log.warning("Unknown reranker provider %r, skipping reranking", reranker_provider)
     return {"reranked_results": candidates[:limit]}
 
 
@@ -5905,1190 +8812,2274 @@ def build_message_search_flow() -> StateGraph:
     workflow.add_edge("rerank_results", END)
 
     return workflow.compile()
+
 ```
 
----
+## packages/context-broker-ae/src/context_broker_ae/build_types/__init__.py
 
-`app/flows/tool_dispatch.py`
+```python
+"""Build type implementations for the Context Broker AE."""
+
+```
+
+## packages/context-broker-ae/src/context_broker_ae/build_types/knowledge_enriched.py
 
 ```python
 """
-Tool dispatch — routes MCP tool calls to compiled StateGraph flows.
+Knowledge-enriched build type (ARCH-18).
 
-All tool logic lives in StateGraph flows. This module is the thin
-routing layer that maps tool names to their flows.
-"""
+Extends standard-tiered with semantic retrieval and knowledge graph nodes.
+Full retrieval pipeline: episodic tiers + semantic vector search + KG traversal.
 
-import logging
-from typing import Any
+Assembly is identical to standard-tiered (reuses the same graph builder).
+Retrieval adds inject_semantic_retrieval and inject_knowledge_graph nodes.
 
-# ARCH-18: Import build_types package to trigger registration of all build types
-import app.flows.build_types  # noqa: F401
-from app.flows.build_type_registry import get_retrieval_graph
-from app.flows.conversation_ops_flow import (
-    build_create_conversation_flow,
-    build_create_context_window_flow,
-    build_get_history_flow,
-    build_search_context_windows_flow,
-)
-from app.flows.imperator_flow import build_imperator_flow
-from app.flows.memory_admin_flow import (
-    build_mem_add_flow,
-    build_mem_delete_flow,
-    build_mem_list_flow,
-)
-from app.flows.memory_search_flow import (
-    build_memory_context_flow,
-    build_memory_search_flow,
-)
-from app.flows.message_pipeline import build_message_pipeline
-from app.flows.metrics_flow import build_metrics_flow
-from app.flows.search_flow import (
-    build_conversation_search_flow,
-    build_message_search_flow,
-)
-from app.models import (
-    ImperatorChatInput,
-    CreateContextWindowInput,
-    CreateConversationInput,
-    GetHistoryInput,
-    MemAddInput,
-    MemDeleteInput,
-    MemGetContextInput,
-    MemListInput,
-    MemSearchInput,
-    MetricsGetInput,
-    RetrieveContextInput,
-    SearchContextWindowsInput,
-    SearchConversationsInput,
-    SearchMessagesInput,
-    StoreMessageInput,
-)
-
-_log = logging.getLogger("context_broker.flows.tool_dispatch")
-
-# Lazy-initialized flow singletons — compiled on first use to avoid
-# import-time side effects and allow graceful startup ordering.
-_create_conversation_flow = None
-_store_message_flow = None
-_create_context_window_flow = None
-_search_conversations_flow = None
-_search_messages_flow = None
-_get_history_flow = None
-_search_context_windows_flow = None
-_mem_search_flow = None
-_mem_context_flow = None
-_mem_add_flow = None
-_mem_list_flow = None
-_mem_delete_flow = None
-_metrics_flow = None
-_imperator_flow = None
-
-
-def _get_create_conversation_flow():
-    global _create_conversation_flow
-    if _create_conversation_flow is None:
-        _create_conversation_flow = build_create_conversation_flow()
-    return _create_conversation_flow
-
-
-def _get_store_message_flow():
-    global _store_message_flow
-    if _store_message_flow is None:
-        _store_message_flow = build_message_pipeline()
-    return _store_message_flow
-
-
-
-def _get_create_context_window_flow():
-    global _create_context_window_flow
-    if _create_context_window_flow is None:
-        _create_context_window_flow = build_create_context_window_flow()
-    return _create_context_window_flow
-
-
-def _get_search_conversations_flow():
-    global _search_conversations_flow
-    if _search_conversations_flow is None:
-        _search_conversations_flow = build_conversation_search_flow()
-    return _search_conversations_flow
-
-
-def _get_search_messages_flow():
-    global _search_messages_flow
-    if _search_messages_flow is None:
-        _search_messages_flow = build_message_search_flow()
-    return _search_messages_flow
-
-
-def _get_get_history_flow():
-    global _get_history_flow
-    if _get_history_flow is None:
-        _get_history_flow = build_get_history_flow()
-    return _get_history_flow
-
-
-def _get_search_context_windows_flow():
-    global _search_context_windows_flow
-    if _search_context_windows_flow is None:
-        _search_context_windows_flow = build_search_context_windows_flow()
-    return _search_context_windows_flow
-
-
-def _get_mem_search_flow():
-    global _mem_search_flow
-    if _mem_search_flow is None:
-        _mem_search_flow = build_memory_search_flow()
-    return _mem_search_flow
-
-
-def _get_mem_context_flow():
-    global _mem_context_flow
-    if _mem_context_flow is None:
-        _mem_context_flow = build_memory_context_flow()
-    return _mem_context_flow
-
-
-def _get_mem_add_flow():
-    global _mem_add_flow
-    if _mem_add_flow is None:
-        _mem_add_flow = build_mem_add_flow()
-    return _mem_add_flow
-
-
-def _get_mem_list_flow():
-    global _mem_list_flow
-    if _mem_list_flow is None:
-        _mem_list_flow = build_mem_list_flow()
-    return _mem_list_flow
-
-
-def _get_mem_delete_flow():
-    global _mem_delete_flow
-    if _mem_delete_flow is None:
-        _mem_delete_flow = build_mem_delete_flow()
-    return _mem_delete_flow
-
-
-def _get_metrics_flow():
-    global _metrics_flow
-    if _metrics_flow is None:
-        _metrics_flow = build_metrics_flow()
-    return _metrics_flow
-
-
-def _get_imperator_flow():
-    global _imperator_flow
-    if _imperator_flow is None:
-        _imperator_flow = build_imperator_flow()
-    return _imperator_flow
-
-
-async def dispatch_tool(
-    tool_name: str,
-    arguments: dict[str, Any],
-    config: dict[str, Any],
-    app_state: Any,
-) -> dict[str, Any]:
-    """Route a tool call to its StateGraph flow.
-
-    Validates inputs using Pydantic models before invoking flows.
-    Raises ValueError for unknown tools or validation errors.
-    """
-    _log.info("Dispatching tool: %s", tool_name)
-
-    if tool_name == "conv_create_conversation":
-        validated = CreateConversationInput(**arguments)
-        result = await _get_create_conversation_flow().ainvoke(
-            {
-                "conversation_id": str(validated.conversation_id) if validated.conversation_id else None,
-                "title": validated.title,
-                "flow_id": validated.flow_id,
-                "user_id": validated.user_id,
-                "error": None,
-            }
-        )
-        if result.get("error"):
-            raise ValueError(result["error"])
-        return {"conversation_id": result["conversation_id"]}
-
-    elif tool_name == "conv_store_message":
-        validated = StoreMessageInput(**arguments)
-        result = await _get_store_message_flow().ainvoke(
-            {
-                "context_window_id": str(validated.context_window_id) if validated.context_window_id else None,
-                "conversation_id_input": str(validated.conversation_id) if validated.conversation_id else None,
-                "role": validated.role,
-                "sender": validated.sender,
-                "recipient": validated.recipient,
-                "content": validated.content,
-                "model_name": validated.model_name,
-                "tool_calls": validated.tool_calls,
-                "tool_call_id": validated.tool_call_id,
-                "message_id": None,
-                "sequence_number": None,
-                "was_collapsed": False,
-                "queued_jobs": [],
-                "error": None,
-            }
-        )
-        if result.get("error"):
-            raise ValueError(result["error"])
-        return {
-            "message_id": result.get("message_id"),
-            "sequence_number": result.get("sequence_number"),
-            "was_collapsed": result.get("was_collapsed", False),
-            "queued_jobs": result.get("queued_jobs", []),
-        }
-
-    elif tool_name == "conv_retrieve_context":
-        validated = RetrieveContextInput(**arguments)
-        # ARCH-18: Look up the build type from the context window, then
-        # dispatch to the correct retrieval graph from the registry.
-        import uuid as _uuid
-        from app.database import get_pg_pool as _get_pg_pool
-
-        _pool = _get_pg_pool()
-        _window_row = await _pool.fetchrow(
-            "SELECT build_type FROM context_windows WHERE id = $1",
-            _uuid.UUID(str(validated.context_window_id)),
-        )
-        if _window_row is None:
-            raise ValueError(f"Context window {validated.context_window_id} not found")
-
-        _build_type = _window_row["build_type"]
-        retrieval_graph = get_retrieval_graph(_build_type)
-
-        result = await retrieval_graph.ainvoke(
-            {
-                "context_window_id": str(validated.context_window_id),
-                "config": config,
-                "window": None,
-                "build_type_config": None,
-                "conversation_id": None,
-                "max_token_budget": 0,
-                "tier1_summary": None,
-                "tier2_summaries": [],
-                "recent_messages": [],
-                "semantic_messages": [],
-                "knowledge_graph_facts": [],
-                "assembly_status": "pending",
-                "context_messages": None,
-                "context_tiers": None,
-                "total_tokens_used": 0,
-                "warnings": [],
-                "error": None,
-            }
-        )
-        if result.get("error"):
-            raise ValueError(result["error"])
-        response: dict[str, Any] = {
-            "context": result.get("context_messages"),
-            "tiers": result.get("context_tiers"),
-            "total_tokens": result.get("total_tokens_used", 0),
-            "assembly_status": result.get("assembly_status", "ready"),
-        }
-        # m4: Surface retrieval warnings (e.g., assembly timeout) to the caller
-        if result.get("warnings"):
-            response["warnings"] = result["warnings"]
-        return response
-
-    elif tool_name == "conv_create_context_window":
-        validated = CreateContextWindowInput(**arguments)
-        result = await _get_create_context_window_flow().ainvoke(
-            {
-                "conversation_id": str(validated.conversation_id),
-                "participant_id": validated.participant_id,
-                "build_type": validated.build_type,
-                "max_tokens_override": validated.max_tokens,
-                "config": config,
-                "context_window_id": None,
-                "resolved_token_budget": 0,
-                "error": None,
-            }
-        )
-        if result.get("error"):
-            raise ValueError(result["error"])
-        return {
-            "context_window_id": result.get("context_window_id"),
-            "resolved_token_budget": result.get("resolved_token_budget"),
-        }
-
-    elif tool_name == "conv_search":
-        validated = SearchConversationsInput(**arguments)
-        result = await _get_search_conversations_flow().ainvoke(
-            {
-                "query": validated.query,
-                "limit": validated.limit,
-                "offset": validated.offset,
-                "date_from": validated.date_from,
-                "date_to": validated.date_to,
-                "flow_id": validated.flow_id,
-                "user_id": validated.user_id,
-                "sender": validated.sender,
-                "config": config,
-                "query_embedding": None,
-                "results": [],
-                "warning": None,
-                "error": None,
-            }
-        )
-        if result.get("error"):
-            raise ValueError(result["error"])
-        response: dict[str, Any] = {"conversations": result.get("results", [])}
-        if result.get("warning"):
-            response["warning"] = result["warning"]
-        return response
-
-    elif tool_name == "conv_search_messages":
-        validated = SearchMessagesInput(**arguments)
-        result = await _get_search_messages_flow().ainvoke(
-            {
-                "query": validated.query,
-                "conversation_id": str(validated.conversation_id) if validated.conversation_id else None,
-                "sender": validated.sender,
-                "role": validated.role,
-                "date_from": validated.date_from,
-                "date_to": validated.date_to,
-                "limit": validated.limit,
-                "config": config,
-                "query_embedding": None,
-                "candidates": [],
-                "reranked_results": [],
-                "warning": None,
-                "error": None,
-            }
-        )
-        if result.get("error"):
-            raise ValueError(result["error"])
-        response = {"messages": result.get("reranked_results", [])}
-        if result.get("warning"):
-            response["warning"] = result["warning"]
-        return response
-
-    elif tool_name == "conv_get_history":
-        validated = GetHistoryInput(**arguments)
-        result = await _get_get_history_flow().ainvoke(
-            {
-                "conversation_id": str(validated.conversation_id),
-                "limit": validated.limit,
-                "conversation": None,
-                "messages": [],
-                "error": None,
-            }
-        )
-        if result.get("error"):
-            raise ValueError(result["error"])
-        return {
-            "conversation": result.get("conversation"),
-            "messages": result.get("messages", []),
-        }
-
-    elif tool_name == "conv_search_context_windows":
-        validated = SearchContextWindowsInput(**arguments)
-        result = await _get_search_context_windows_flow().ainvoke(
-            {
-                "context_window_id": str(validated.context_window_id) if validated.context_window_id else None,
-                "conversation_id": str(validated.conversation_id) if validated.conversation_id else None,
-                "participant_id": validated.participant_id,
-                "build_type": validated.build_type,
-                "limit": validated.limit,
-                "results": [],
-                "error": None,
-            }
-        )
-        if result.get("error"):
-            raise ValueError(result["error"])
-        return {"context_windows": result.get("results", [])}
-
-    elif tool_name == "mem_search":
-        validated = MemSearchInput(**arguments)
-        result = await _get_mem_search_flow().ainvoke(
-            {
-                "query": validated.query,
-                "user_id": validated.user_id,
-                "limit": validated.limit,
-                "config": config,
-                "memories": [],
-                "relations": [],
-                "degraded": False,
-                "error": None,
-            }
-        )
-        if result.get("error") and not result.get("degraded"):
-            raise ValueError(result["error"])
-        return {
-            "memories": result.get("memories", []),
-            "relations": result.get("relations", []),
-            "degraded": result.get("degraded", False),
-        }
-
-    elif tool_name == "mem_get_context":
-        validated = MemGetContextInput(**arguments)
-        result = await _get_mem_context_flow().ainvoke(
-            {
-                "query": validated.query,
-                "user_id": validated.user_id,
-                "limit": validated.limit,
-                "config": config,
-                "memories": [],
-                "context_text": "",
-                "degraded": False,
-                "error": None,
-            }
-        )
-        if result.get("error") and not result.get("degraded"):
-            raise ValueError(result["error"])
-        return {
-            "context": result.get("context_text", ""),
-            "memories": result.get("memories", []),
-        }
-
-    elif tool_name == "imperator_chat":
-        validated = ImperatorChatInput(**arguments)
-        from langchain_core.messages import HumanMessage
-
-        thread_id = str(validated.context_window_id) if validated.context_window_id else "imperator-default"
-
-        result = await _get_imperator_flow().ainvoke(
-            {
-                "messages": [HumanMessage(content=validated.message)],
-                "context_window_id": str(validated.context_window_id) if validated.context_window_id else None,
-                "config": config,
-                "response_text": None,
-                "error": None,
-                "iteration_count": 0,
-            },
-            config={"configurable": {"thread_id": thread_id}},
-        )
-        if result.get("error"):
-            raise ValueError(result["error"])
-        return {
-            "response": result.get("response_text", ""),
-        }
-
-    elif tool_name == "mem_add":
-        # M-18: Routed through StateGraph flow instead of direct Mem0 call
-        validated = MemAddInput(**arguments)
-        result = await _get_mem_add_flow().ainvoke(
-            {
-                "content": validated.content,
-                "user_id": validated.user_id,
-                "config": config,
-                "result": None,
-                "degraded": False,
-                "error": None,
-            }
-        )
-        if result.get("error") and not result.get("degraded"):
-            raise ValueError(result["error"])
-        return {"status": "added", "result": result.get("result")}
-
-    elif tool_name == "mem_list":
-        # M-18: Routed through StateGraph flow instead of direct Mem0 call
-        validated = MemListInput(**arguments)
-        result = await _get_mem_list_flow().ainvoke(
-            {
-                "user_id": validated.user_id,
-                "limit": validated.limit,
-                "config": config,
-                "memories": [],
-                "degraded": False,
-                "error": None,
-            }
-        )
-        if result.get("error") and not result.get("degraded"):
-            raise ValueError(result["error"])
-        return {"memories": result.get("memories", [])}
-
-    elif tool_name == "mem_delete":
-        # M-18: Routed through StateGraph flow instead of direct Mem0 call
-        validated = MemDeleteInput(**arguments)
-        result = await _get_mem_delete_flow().ainvoke(
-            {
-                "memory_id": validated.memory_id,
-                "config": config,
-                "deleted": False,
-                "degraded": False,
-                "error": None,
-            }
-        )
-        if result.get("error") and not result.get("degraded"):
-            raise ValueError(result["error"])
-        return {"status": "deleted", "memory_id": validated.memory_id}
-
-    elif tool_name == "metrics_get":
-        MetricsGetInput(**arguments)
-        result = await _get_metrics_flow().ainvoke(
-            {
-                "action": "collect",
-                "metrics_output": "",
-                "error": None,
-            }
-        )
-        if result.get("error"):
-            raise ValueError(result["error"])
-        return {"metrics": result.get("metrics_output", "")}
-
-    else:
-        raise ValueError(f"Unknown tool: {tool_name}")
-```
-
----
-
-`app/imperator/state_manager.py`
-
-```python
-"""
-Imperator persistent state manager.
-
-Manages the Imperator's conversation_id and context_window_id across restarts.
-Reads/writes /data/imperator_state.json.
-
-On first boot: creates a new conversation and context window, writes both IDs.
-On subsequent boots: reads the IDs and verifies both exist in the DB.
-If either is missing: recreates the missing resource.
-"""
-
-import json
-import logging
-import uuid
-from pathlib import Path
-from typing import Optional
-
-from app.config import get_build_type_config
-from app.database import get_pg_pool
-from app.token_budget import resolve_token_budget
-
-_log = logging.getLogger("context_broker.imperator.state_manager")
-
-IMPERATOR_STATE_FILE = Path("/data/imperator_state.json")
-
-
-class ImperatorStateManager:
-    """Manages the Imperator's persistent conversation and context window state."""
-
-    def __init__(self, config: dict) -> None:
-        self._config = config
-        self._conversation_id: Optional[uuid.UUID] = None
-        self._context_window_id: Optional[uuid.UUID] = None
-
-    async def initialize(self) -> None:
-        """Initialize the Imperator's conversation and context window state.
-
-        Reads the state file if it exists and verifies both the conversation
-        and context window. Creates missing resources as needed.
-        """
-        saved_conv_id, saved_cw_id = self._read_state_file()
-
-        conv_exists = (
-            await self._conversation_exists(saved_conv_id)
-            if saved_conv_id is not None
-            else False
-        )
-        cw_exists = (
-            await self._context_window_exists(saved_cw_id)
-            if saved_cw_id is not None
-            else False
-        )
-
-        if conv_exists and cw_exists:
-            self._conversation_id = saved_conv_id
-            self._context_window_id = saved_cw_id
-            _log.info(
-                "Imperator: resuming conversation %s, context window %s",
-                self._conversation_id,
-                self._context_window_id,
-            )
-            return
-
-        # Conversation exists but window doesn't — recreate window
-        if conv_exists and not cw_exists:
-            self._conversation_id = saved_conv_id
-            if saved_cw_id is not None:
-                _log.warning(
-                    "Imperator: context window %s no longer exists, creating new",
-                    saved_cw_id,
-                )
-            self._context_window_id = await self._create_imperator_context_window(
-                self._conversation_id
-            )
-            self._write_state_file(self._conversation_id, self._context_window_id)
-            _log.info(
-                "Imperator: created new context window %s for existing conversation %s",
-                self._context_window_id,
-                self._conversation_id,
-            )
-            return
-
-        # Window exists but conversation doesn't (shouldn't happen due to FK,
-        # but handle defensively) — or neither exists. Create both.
-        if saved_conv_id is not None and not conv_exists:
-            _log.warning(
-                "Imperator: conversation %s no longer exists, creating new",
-                saved_conv_id,
-            )
-
-        self._conversation_id = await self._create_imperator_conversation()
-        self._context_window_id = await self._create_imperator_context_window(
-            self._conversation_id
-        )
-        self._write_state_file(self._conversation_id, self._context_window_id)
-        _log.info(
-            "Imperator: created new conversation %s and context window %s",
-            self._conversation_id,
-            self._context_window_id,
-        )
-
-    async def get_conversation_id(self) -> Optional[uuid.UUID]:
-        """Return the Imperator's current conversation ID."""
-        return self._conversation_id
-
-    async def get_context_window_id(self) -> Optional[uuid.UUID]:
-        """Return the Imperator's current context window ID."""
-        return self._context_window_id
-
-    def _read_state_file(
-        self,
-    ) -> tuple[Optional[uuid.UUID], Optional[uuid.UUID]]:
-        """Read the conversation and context window IDs from the state file.
-
-        Returns (conversation_id, context_window_id). Either or both may be
-        None if the file doesn't exist or values are missing/invalid.
-        """
-        if not IMPERATOR_STATE_FILE.exists():
-            return None, None
-
-        try:
-            with open(IMPERATOR_STATE_FILE, encoding="utf-8") as f:
-                data = json.load(f)
-
-            conv_id = None
-            cw_id = None
-
-            conv_str = data.get("conversation_id")
-            if conv_str:
-                conv_id = uuid.UUID(conv_str)
-
-            cw_str = data.get("context_window_id")
-            if cw_str:
-                cw_id = uuid.UUID(cw_str)
-
-            return conv_id, cw_id
-        except (json.JSONDecodeError, ValueError, OSError) as exc:
-            _log.warning("Failed to read imperator state file: %s", exc)
-
-        return None, None
-
-    def _write_state_file(
-        self, conversation_id: uuid.UUID, context_window_id: uuid.UUID
-    ) -> None:
-        """Write the conversation and context window IDs to the state file."""
-        try:
-            IMPERATOR_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(IMPERATOR_STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "conversation_id": str(conversation_id),
-                        "context_window_id": str(context_window_id),
-                    },
-                    f,
-                )
-        except OSError as exc:
-            _log.error("Failed to write imperator state file: %s", exc)
-
-    async def _conversation_exists(self, conversation_id: uuid.UUID) -> bool:
-        """Check if a conversation exists in PostgreSQL.
-
-        Raises on DB errors so that callers (e.g. initialize) fail fast
-        rather than silently treating a DB outage as 'conversation missing'
-        (REQ-001 §7.4).
-        """
-        pool = get_pg_pool()
-        row = await pool.fetchrow(
-            "SELECT id FROM conversations WHERE id = $1", conversation_id
-        )
-        return row is not None
-
-    async def _context_window_exists(self, context_window_id: uuid.UUID) -> bool:
-        """Check if a context window exists in PostgreSQL.
-
-        Raises on DB errors for the same reason as _conversation_exists.
-        """
-        pool = get_pg_pool()
-        row = await pool.fetchrow(
-            "SELECT id FROM context_windows WHERE id = $1", context_window_id
-        )
-        return row is not None
-
-    async def _create_imperator_conversation(self) -> uuid.UUID:
-        """Create a new conversation for the Imperator.
-
-        G5-17: This uses direct SQL instead of the conversation flow
-        (build_conversation_flow) because the state_manager runs during
-        application startup — before flows are compiled and before the
-        full application context is available. Importing and compiling
-        the conversation flow here would create a circular dependency
-        and violate the startup ordering guarantees. Direct SQL is
-        acceptable for this single bootstrap operation.
-        """
-        pool = get_pg_pool()
-        new_id = uuid.uuid4()
-        await pool.execute(
-            "INSERT INTO conversations (id, title) VALUES ($1, $2)",
-            new_id,
-            "Imperator — System Conversation",
-        )
-        return new_id
-
-    async def _create_imperator_context_window(
-        self, conversation_id: uuid.UUID
-    ) -> uuid.UUID:
-        """Create a new context window for the Imperator.
-
-        Uses the build_type from config["imperator"]["build_type"] and resolves
-        the token budget using the standard resolve_token_budget function.
-
-        G5-17: Direct SQL for the same startup-ordering reasons as
-        _create_imperator_conversation.
-        """
-        imperator_config = self._config.get("imperator", {})
-        build_type_name = imperator_config.get("build_type", "standard-tiered")
-        participant_id = imperator_config.get("participant_id", "imperator")
-
-        build_type_config = get_build_type_config(self._config, build_type_name)
-
-        # Resolve token budget using the imperator's max_context_tokens if set,
-        # falling back to the build type's own setting.
-        imperator_max_tokens = imperator_config.get("max_context_tokens")
-        caller_override = (
-            imperator_max_tokens
-            if isinstance(imperator_max_tokens, int)
-            else None
-        )
-        token_budget = await resolve_token_budget(
-            config=self._config,
-            build_type_config=build_type_config,
-            caller_override=caller_override,
-        )
-
-        pool = get_pg_pool()
-
-        # G5-08: Idempotent creation via ON CONFLICT on the unique constraint
-        # (conversation_id, participant_id, build_type).
-        row = await pool.fetchrow(
-            """
-            INSERT INTO context_windows
-                (conversation_id, participant_id, build_type, max_token_budget)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (conversation_id, participant_id, build_type) DO NOTHING
-            RETURNING id
-            """,
-            conversation_id,
-            participant_id,
-            build_type_name,
-            token_budget,
-        )
-
-        if row is None:
-            # Already exists — look up the existing window
-            existing = await pool.fetchrow(
-                """
-                SELECT id FROM context_windows
-                WHERE conversation_id = $1 AND participant_id = $2 AND build_type = $3
-                """,
-                conversation_id,
-                participant_id,
-                build_type_name,
-            )
-            return existing["id"]
-
-        return row["id"]
-```
-
----
-
-`app/logging_setup.py`
-
-```python
-"""
-Structured JSON logging for the Context Broker.
-
-All logs go to stdout in JSON format (one object per line).
-Log level is configurable via config.yml.
-"""
-
-import json
-import logging
-import sys
-from datetime import datetime, timezone
-
-
-class JsonFormatter(logging.Formatter):
-    """Format log records as single-line JSON objects."""
-
-    def format(self, record: logging.LogRecord) -> str:
-        entry: dict = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "level": record.levelname,
-            "message": record.getMessage(),
-            "logger": record.name,
-        }
-
-        # Include context fields if present
-        for field in ("request_id", "tool_name", "conversation_id", "window_id"):
-            value = getattr(record, field, None)
-            if value is not None:
-                entry[field] = value
-
-        if record.exc_info and record.exc_info[0] is not None:
-            entry["exception"] = self.formatException(record.exc_info)
-
-        return json.dumps(entry)
-
-
-class HealthCheckFilter(logging.Filter):
-    """Suppress noisy health check request logs."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
-        return "/health" not in message and "GET /health" not in message
-
-
-def setup_logging() -> None:
-    """Configure application logging with JSON formatter.
-
-    Sets up the root logger and suppresses noisy third-party loggers.
-    """
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter())
-    handler.addFilter(HealthCheckFilter())
-
-    # Configure root logger (R5-m3: guard against duplicate handlers on reload)
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-    if not root_logger.handlers:
-        root_logger.addHandler(handler)
-
-    # Suppress noisy third-party loggers
-    for noisy_logger in ("uvicorn.access", "httpx", "httpcore"):
-        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
-
-    logging.getLogger("context_broker").setLevel(logging.INFO)
-
-
-def update_log_level(level: str) -> None:
-    """Update the log level after config is loaded.
-
-    Called from the application lifespan after config.yml is read.
-    Accepts standard level names: DEBUG, INFO, WARNING, ERROR, CRITICAL.
-    """
-    numeric_level = getattr(logging, level.upper(), None)
-    if not isinstance(numeric_level, int):
-        logging.getLogger("context_broker").warning(
-            "Invalid log level '%s' in config — keeping INFO", level
-        )
-        return
-
-    logging.getLogger().setLevel(numeric_level)
-    logging.getLogger("context_broker").setLevel(numeric_level)
-```
-
----
-
-`app/main.py`
-
-```python
-"""
-Context Broker — ASGI application entry point.
-
-FastAPI application that wires together all routes, middleware,
-and lifecycle events. This file is transport only — all logic
-lives in StateGraph flows.
+F-06: Reads its own LLM config from config["build_types"]["knowledge-enriched"]["llm"],
+falling back to the global config["llm"] if not set.
 """
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+import operator
+import time
+import uuid
+from typing import Annotated, Optional
 
 import asyncpg
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
+import httpx
+import openai
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
 
-from app.config import load_config, get_tuning
-from app.database import init_postgres, init_redis, close_all_connections
-from app.logging_setup import setup_logging, update_log_level
-from app.migrations import run_migrations
-from app.routes import chat, health, mcp, metrics
-from app.workers.arq_worker import start_background_worker
-from app.imperator.state_manager import ImperatorStateManager
-
-setup_logging()
-_log = logging.getLogger("context_broker.main")
-
-
-async def _postgres_retry_loop(application: FastAPI, config: dict) -> None:
-    """Background task that retries PostgreSQL connection if it failed at startup."""
-    while True:
-        # R6-M15: Reload config each iteration so hot-reloaded corrections take effect
-        config = load_config()
-        retry_interval = get_tuning(config, "postgres_retry_interval_seconds", 10)
-        await asyncio.sleep(retry_interval)
-        if getattr(application.state, "postgres_available", False):
-            # Postgres came back — also retry Imperator init if it was skipped
-            if not getattr(application.state, "imperator_initialized", False):
-                try:
-                    imperator_manager = getattr(application.state, "imperator_manager", None)
-                    if imperator_manager is not None:
-                        await imperator_manager.initialize()
-                        application.state.imperator_initialized = True
-                        _log.info("Imperator initialization succeeded on Postgres retry")
-                except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
-                    _log.warning("Imperator initialization retry failed: %s", exc)
-            return
-        try:
-            _log.info("Retrying PostgreSQL connection...")
-            await init_postgres(config)
-            await run_migrations()
-            application.state.postgres_available = True
-            _log.info("PostgreSQL connection established on retry")
-
-            # Retry Imperator init now that Postgres is available
-            if not getattr(application.state, "imperator_initialized", False):
-                try:
-                    imperator_manager = getattr(application.state, "imperator_manager", None)
-                    if imperator_manager is not None:
-                        await imperator_manager.initialize()
-                        application.state.imperator_initialized = True
-                        _log.info("Imperator initialization succeeded on Postgres retry")
-                except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
-                    _log.warning("Imperator initialization retry failed (will retry next loop): %s", exc)
-                    # Don't return — keep retrying Imperator on next loop iteration
-                    continue
-
-            return
-        except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
-            _log.warning("PostgreSQL retry failed: %s", exc)
-
-
-async def _redis_retry_loop(application: FastAPI, config: dict) -> None:
-    """Background task that retries Redis connection and starts the worker once available."""
-    while True:
-        # R6-M15: Reload config each iteration so hot-reloaded corrections take effect
-        config = load_config()
-        retry_interval = get_tuning(config, "redis_retry_interval_seconds", 10)
-        await asyncio.sleep(retry_interval)
-        if getattr(application.state, "redis_available", False):
-            return
-        try:
-            from app.database import get_redis
-            # R5-M23: Recreate the Redis client if it doesn't exist or
-            # if the previous init_redis() failed (client is None)
-            try:
-                redis_client = get_redis()
-            except (RuntimeError, AttributeError):
-                _log.info("Redis client not available, reinitializing...")
-                await init_redis(config)
-                redis_client = get_redis()
-            await redis_client.ping()
-            application.state.redis_available = True
-            _log.info("Redis connection verified on retry — starting background worker")
-            application.state.worker_task = asyncio.create_task(
-                start_background_worker(config)
-            )
-            return
-        except (ConnectionError, OSError, RuntimeError) as exc:
-            _log.warning("Redis retry failed: %s", exc)
-
-
-@asynccontextmanager
-async def lifespan(application: FastAPI):
-    """Manage application lifecycle: startup and shutdown."""
-    _log.info("Context Broker starting up")
-
-    config = load_config()
-
-    # Apply configured log level now that config is available
-    configured_level = config.get("log_level", "INFO")
-    update_log_level(configured_level)
-
-    # Initialize database connections — Postgres failure is non-fatal
-    pg_retry_task = None
-    try:
-        await init_postgres(config)
-        await run_migrations()
-        application.state.postgres_available = True
-    except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
-        _log.warning(
-            "PostgreSQL unavailable at startup — starting in degraded mode: %s", exc
-        )
-        application.state.postgres_available = False
-        pg_retry_task = asyncio.create_task(_postgres_retry_loop(application, config))
-
-    await init_redis(config)
-
-    # Verify Redis is actually usable before starting the worker (G5-32)
-    redis_retry_task = None
-    worker_task = None
-    try:
-        from app.database import get_redis
-        redis_client = get_redis()
-        await redis_client.ping()
-        application.state.redis_available = True
-        worker_task = asyncio.create_task(start_background_worker(config))
-    except (ConnectionError, OSError, RuntimeError) as exc:
-        _log.warning(
-            "Redis unavailable at startup — worker deferred until Redis connects: %s", exc
-        )
-        application.state.redis_available = False
-        redis_retry_task = asyncio.create_task(
-            _redis_retry_loop(application, config)
-        )
-
-    # Initialize Imperator persistent state
-    imperator_manager = ImperatorStateManager(config)
-    application.state.imperator_manager = imperator_manager
-    application.state.startup_config = config
-
-    try:
-        await imperator_manager.initialize()
-        application.state.imperator_initialized = True
-    except (OSError, RuntimeError, asyncpg.PostgresError) as exc:
-        _log.warning(
-            "Imperator initialization failed (Postgres may be unavailable) — "
-            "will retry when Postgres connects: %s", exc
-        )
-        application.state.imperator_initialized = False
-        # Ensure retry loop is running if not already started
-        if pg_retry_task is None:
-            pg_retry_task = asyncio.create_task(_postgres_retry_loop(application, config))
-
-    _log.info("Context Broker startup complete")
-
-    yield
-
-    # Shutdown
-    _log.info("Context Broker shutting down")
-
-    # Worker may have been started later by the Redis retry loop
-    active_worker = worker_task or getattr(application.state, "worker_task", None)
-    tasks_to_cancel = [
-        t for t in [active_worker, pg_retry_task, redis_retry_task] if t is not None
-    ]
-    for t in tasks_to_cancel:
-        t.cancel()
-    for t in tasks_to_cancel:
-        try:
-            await t
-        except asyncio.CancelledError:
-            pass
-    await close_all_connections()
-    _log.info("Context Broker shutdown complete")
-
-
-app = FastAPI(
-    title="Context Broker",
-    description="Context engineering and conversational memory service",
-    version="1.0.0",
-    lifespan=lifespan,
+from app.config import (
+    get_build_type_config,
+    get_embeddings_model,
+    get_tuning,
+    verbose_log,
 )
+from context_broker_ae.memory_scoring import filter_and_rank_memories
+from app.database import get_pg_pool
 
-# Register routers
-app.include_router(health.router)
-app.include_router(metrics.router)
-app.include_router(mcp.router)
-app.include_router(chat.router)
+# Registration handled by register.py — no module-scope side effects
+from context_broker_ae.build_types.standard_tiered import (
+    _estimate_tokens,
+)
+from context_broker_ae.build_types.tier_scaling import scale_tier_percentages
+
+_log = logging.getLogger("context_broker.flows.build_types.knowledge_enriched")
 
 
-@app.middleware("http")
-async def check_postgres_middleware(request: Request, call_next):
-    """Return 503 for routes that need Postgres when it is unavailable.
+# ============================================================
+# Retrieval (extends standard-tiered with semantic + KG)
+# ============================================================
 
-    Health and metrics endpoints are exempt so monitoring stays functional.
+
+class KnowledgeEnrichedRetrievalState(TypedDict):
+    """State for the knowledge-enriched retrieval flow."""
+
+    # Inputs
+    context_window_id: str
+    config: dict
+
+    # Intermediate
+    window: Optional[dict]
+    build_type_config: Optional[dict]
+    conversation_id: Optional[str]
+    max_token_budget: int
+    tier1_summary: Optional[str]
+    tier2_summaries: list[str]
+    recent_messages: list[dict]
+    semantic_messages: list[dict]
+    knowledge_graph_facts: list[str]
+    assembly_status: str
+
+    # Output
+    context_messages: Optional[list[dict]]
+    context_tiers: Optional[dict]
+    total_tokens_used: int
+    warnings: Annotated[list[str], operator.add]  # R5-m5: accumulate, don't overwrite
+    error: Optional[str]
+
+
+async def ke_load_window(state: KnowledgeEnrichedRetrievalState) -> dict:
+    """Load the context window and its build type configuration."""
+    # R5-M11: Validate UUID at retrieval entry point to fail gracefully
+    try:
+        uuid.UUID(state["context_window_id"])
+    except (ValueError, AttributeError):
+        _log.error(
+            "Invalid UUID in retrieval input: context_window_id=%s",
+            state.get("context_window_id"),
+        )
+        return {"error": "Invalid UUID in retrieval input", "assembly_status": "error"}
+
+    verbose_log(
+        state["config"],
+        _log,
+        "knowledge_enriched.retrieval.load_window ENTER window=%s",
+        state["context_window_id"],
+    )
+    pool = get_pg_pool()
+
+    window = await pool.fetchrow(
+        "SELECT * FROM context_windows WHERE id = $1",
+        uuid.UUID(state["context_window_id"]),
+    )
+    if window is None:
+        return {
+            "error": f"Context window {state['context_window_id']} not found",
+            "assembly_status": "error",
+        }
+
+    # Update last_accessed_at on every retrieval
+    await pool.execute(
+        "UPDATE context_windows SET last_accessed_at = NOW() WHERE id = $1",
+        uuid.UUID(state["context_window_id"]),
+    )
+
+    window_dict = dict(window)
+
+    try:
+        build_type_config = get_build_type_config(
+            state["config"], window_dict["build_type"]
+        )
+    except ValueError as exc:
+        return {"error": str(exc), "assembly_status": "error"}
+
+    # D-05/D-10: Apply effective utilization
+    from app.budget import EFFECTIVE_UTILIZATION_DEFAULT
+
+    raw_budget = window_dict["max_token_budget"]
+    utilization = build_type_config.get(
+        "effective_utilization", EFFECTIVE_UTILIZATION_DEFAULT
+    )
+    effective_budget = int(raw_budget * utilization)
+
+    return {
+        "window": window_dict,
+        "build_type_config": build_type_config,
+        "conversation_id": str(window_dict["conversation_id"]),
+        "max_token_budget": effective_budget,
+    }
+
+
+async def ke_wait_for_assembly(state: KnowledgeEnrichedRetrievalState) -> dict:
+    """Block if context assembly is in progress, with timeout.
+
+    R6-M9: If Redis is unavailable, proceed without waiting rather than crashing.
     """
-    exempt_paths = {"/health", "/metrics"}
-    if request.url.path not in exempt_paths:
-        if not getattr(request.app.state, "postgres_available", False):
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "error": "service_unavailable",
-                    "message": "PostgreSQL is not available. The service is starting in degraded mode.",
-                },
-            )
-    return await call_next(request)
+    pool = get_pg_pool()
+    lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
 
+    timeout = get_tuning(state["config"], "assembly_wait_timeout_seconds", 50)
+    poll_interval = get_tuning(state["config"], "assembly_poll_interval_seconds", 2)
 
-@app.exception_handler(StarletteHTTPException)
-async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    """Return structured JSON for HTTP exceptions instead of Starlette's default."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        # Try to acquire lock — if we can, assembly is NOT in progress
+        acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
+        if acquired:
+            # Release immediately — we just wanted to check
+            await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+            in_progress = False
+        else:
+            in_progress = True
+        if not in_progress:
+            return {"assembly_status": "ready"}
+
+        elapsed = timeout - (deadline - time.monotonic())
+        _log.info(
+            "Retrieval: waiting for assembly on window=%s (%.0fs/%ds)",
+            state["context_window_id"],
+            elapsed,
+            timeout,
+        )
+        await asyncio.sleep(poll_interval)
+
     _log.warning(
-        "HTTP exception: %s %s — %s (status %d)",
-        request.method,
-        request.url.path,
-        exc.detail,
-        exc.status_code,
+        "Retrieval: assembly timeout for window=%s after %ds",
+        state["context_window_id"],
+        timeout,
     )
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": "http_error",
-            "message": exc.detail if isinstance(exc.detail, str) else str(exc.detail),
+    return {
+        "assembly_status": "timeout",
+        "warnings": [
+            "Context assembly was still in progress at retrieval time; "
+            "context may be stale."
+        ],
+    }
+
+
+async def ke_load_summaries(state: KnowledgeEnrichedRetrievalState) -> dict:
+    """Load active tier 1 and tier 2 summaries."""
+    pool = get_pg_pool()
+
+    summaries = await pool.fetch(
+        """
+        SELECT tier, summary_text, summarizes_from_seq
+        FROM conversation_summaries
+        WHERE context_window_id = $1
+          AND is_active = TRUE
+        ORDER BY tier ASC, summarizes_from_seq ASC
+        """,
+        uuid.UUID(state["context_window_id"]),
+    )
+
+    tier1 = None
+    tier2_list = []
+    for s in summaries:
+        if s["tier"] == 1:
+            tier1 = s["summary_text"]
+        elif s["tier"] == 2:
+            tier2_list.append(s["summary_text"])
+
+    return {"tier1_summary": tier1, "tier2_summaries": tier2_list}
+
+
+async def ke_load_recent_messages(state: KnowledgeEnrichedRetrievalState) -> dict:
+    """Load tier 3 recent verbatim messages within the remaining token budget.
+
+    F-05: Applies dynamic tier scaling based on conversation length.
+    """
+    pool = get_pg_pool()
+    build_type_config = state["build_type_config"]
+    max_budget = state["max_token_budget"]
+
+    # Count total messages for F-05 tier scaling
+    total_msg_count = await pool.fetchval(
+        "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = $1",
+        uuid.UUID(state["conversation_id"]),
+    )
+    scaled_config = scale_tier_percentages(build_type_config, total_msg_count or 0)
+
+    tier3_pct = scaled_config.get("tier3_pct", 0.50)
+    tier3_budget = int(max_budget * tier3_pct)
+
+    # Calculate tokens already used by summaries
+    summary_tokens = 0
+    if state.get("tier1_summary"):
+        summary_tokens += len(state["tier1_summary"]) // 4
+    for s in state.get("tier2_summaries", []):
+        summary_tokens += len(s) // 4
+
+    remaining_budget = max(0, min(tier3_budget, max_budget - summary_tokens))
+
+    # M-06: Avoid loading messages already covered by summaries
+    highest_summarized_seq = await pool.fetchval(
+        """
+        SELECT COALESCE(MAX(summarizes_to_seq), 0)
+        FROM conversation_summaries
+        WHERE context_window_id = $1
+          AND tier = 2
+          AND is_active = TRUE
+        """,
+        uuid.UUID(state["context_window_id"]),
+    )
+
+    max_messages = get_tuning(state["config"], "max_messages_to_load", 1000)
+
+    all_messages = await pool.fetch(
+        """
+        SELECT id, role, sender, content, sequence_number, token_count,
+               tool_calls, tool_call_id, created_at
+        FROM conversation_messages
+        WHERE conversation_id = $1
+          AND sequence_number > $2
+        ORDER BY sequence_number DESC
+        LIMIT $3
+        """,
+        uuid.UUID(state["conversation_id"]),
+        highest_summarized_seq,
+        max_messages,
+    )
+
+    recent = []
+    tokens_used = 0
+
+    for msg in all_messages:
+        msg_tokens = msg["token_count"] or max(1, len(msg.get("content") or "") // 4)
+        if tokens_used + msg_tokens <= remaining_budget:
+            recent.insert(0, dict(msg))
+            tokens_used += msg_tokens
+        else:
+            break
+
+    return {
+        "recent_messages": recent,
+        "total_tokens_used": summary_tokens + tokens_used,
+    }
+
+
+async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -> dict:
+    """Retrieve semantically similar messages via pgvector.
+
+    G5-22a: Semantic retrieval may surface messages already compressed into
+    summaries. This is a known and accepted trade-off.
+    """
+    build_type_config = state["build_type_config"]
+    semantic_pct = build_type_config.get("semantic_retrieval_pct", 0)
+
+    if not semantic_pct or semantic_pct <= 0:
+        return {"semantic_messages": []}
+
+    if not state.get("recent_messages"):
+        return {"semantic_messages": []}
+
+    config = state["config"]
+
+    # Build query from recent messages
+    query_trunc = get_tuning(config, "query_truncation_chars", 200)
+    recent_text = " ".join(
+        (m.get("content") or "")[:query_trunc] for m in state["recent_messages"][-3:]
+    )
+
+    try:
+        embeddings_model = get_embeddings_model(config)
+        query_embedding = await embeddings_model.aembed_query(recent_text)
+    except (openai.APIError, httpx.HTTPError, ValueError) as exc:
+        _log.warning("Semantic retrieval: embedding failed: %s", exc)
+        return {"semantic_messages": []}
+
+    tier3_min_seq = (
+        state["recent_messages"][0]["sequence_number"]
+        if state["recent_messages"]
+        else None
+    )
+
+    if tier3_min_seq is None:
+        return {"semantic_messages": []}
+
+    semantic_budget = int(state["max_token_budget"] * semantic_pct)
+    tokens_per_msg = max(1, get_tuning(config, "tokens_per_message_estimate", 150))
+    semantic_limit = max(5, semantic_budget // tokens_per_msg)
+
+    pool = get_pg_pool()
+    vec_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
+
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT id, role, sender, content, sequence_number, token_count,
+                   tool_calls, tool_call_id
+            FROM conversation_messages
+            WHERE conversation_id = $1
+              AND sequence_number < $2
+              AND embedding IS NOT NULL
+            ORDER BY embedding <=> $3::vector
+            LIMIT $4
+            """,
+            uuid.UUID(state["conversation_id"]),
+            tier3_min_seq,
+            vec_str,
+            semantic_limit,
+        )
+        semantic_messages = [dict(r) for r in rows]
+        _log.info(
+            "Semantic retrieval: found %d relevant messages for window=%s",
+            len(semantic_messages),
+            state["context_window_id"],
+        )
+        return {"semantic_messages": semantic_messages}
+    except (asyncpg.PostgresError, OSError) as exc:
+        _log.warning("Semantic retrieval query failed: %s", exc)
+        return {"semantic_messages": []}
+
+
+async def ke_inject_knowledge_graph(state: KnowledgeEnrichedRetrievalState) -> dict:
+    """Retrieve knowledge graph facts via Mem0."""
+    build_type_config = state["build_type_config"]
+    kg_pct = build_type_config.get("knowledge_graph_pct", 0)
+
+    if not kg_pct or kg_pct <= 0:
+        return {"knowledge_graph_facts": []}
+
+    if not state.get("recent_messages"):
+        return {"knowledge_graph_facts": []}
+
+    config = state["config"]
+
+    recent_text = " ".join(
+        (m.get("content") or "")[:500] for m in state["recent_messages"][-5:]
+    )
+
+    try:
+        from context_broker_ae.memory.mem0_client import get_mem0_client
+
+        mem0 = await get_mem0_client(config)
+        if mem0 is None:
+            return {"knowledge_graph_facts": []}
+
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(
+            None,
+            lambda: mem0.search(
+                recent_text,
+                user_id=state["window"].get("participant_id", "default"),
+                limit=10,
+            ),
+        )
+
+        facts = []
+        if isinstance(results, dict):
+            memories = results.get("results", [])
+        else:
+            memories = results or []
+
+        # M-22: Apply half-life decay scoring and filter stale memories
+        memories = filter_and_rank_memories(memories, config)
+
+        for mem in memories:
+            fact_text = mem.get("memory") or mem.get("content") or str(mem)
+            if fact_text:
+                facts.append(fact_text)
+
+        _log.info(
+            "Knowledge graph: retrieved %d facts for window=%s",
+            len(facts),
+            state["context_window_id"],
+        )
+        return {"knowledge_graph_facts": facts}
+
+    except (
+        ConnectionError,
+        RuntimeError,
+        ValueError,
+        ImportError,
+        OSError,
+        Exception,
+    ) as exc:  # EX-CB-001: broad catch for Mem0
+        _log.warning("Knowledge graph retrieval failed (degraded mode): %s", exc)
+        return {"knowledge_graph_facts": []}
+
+
+async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
+    """Assemble the final context messages array from all tiers including semantic + KG.
+
+    ARCH-03: Produces a structured messages array matching the OpenAI format.
+    """
+    max_budget = state.get("max_token_budget", 0)
+    cumulative_tokens = 0
+    messages: list[dict] = []
+
+    # Tier 1: Archival summary
+    if state.get("tier1_summary"):
+        content = f"[Archival context]\n{state['tier1_summary']}"
+        cumulative_tokens += _estimate_tokens(content)
+        messages.append({"role": "system", "content": content})
+
+    # Tier 2: Chunk summaries
+    if state.get("tier2_summaries"):
+        content = "[Recent summaries]\n" + "\n\n".join(state["tier2_summaries"])
+        cumulative_tokens += _estimate_tokens(content)
+        messages.append({"role": "system", "content": content})
+
+    # Semantic retrieval — budget-aware (M-07)
+    # R7-M10: Track which semantic messages survive truncation for context_tiers
+    truncated_semantic_messages: list[dict] = []
+    if state.get("semantic_messages"):
+        remaining = (
+            max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        )
+        semantic_lines = []
+        semantic_tokens = 0
+        for m in state["semantic_messages"]:
+            line = f"[{m['role']}] {m['sender']}: {m.get('content') or ''}"
+            line_tokens = _estimate_tokens(line)
+            if semantic_tokens + line_tokens > remaining:
+                break
+            semantic_lines.append(line)
+            truncated_semantic_messages.append(m)
+            semantic_tokens += line_tokens
+        if semantic_lines:
+            content = "[Semantically relevant context]\n" + "\n".join(semantic_lines)
+            cumulative_tokens += _estimate_tokens(content)
+            messages.append({"role": "system", "content": content})
+
+    # Knowledge graph facts — budget-aware (M-07)
+    if state.get("knowledge_graph_facts"):
+        remaining = (
+            max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        )
+        fact_lines = []
+        fact_tokens = 0
+        for f in state["knowledge_graph_facts"]:
+            line = f"- {f}"
+            line_tokens = _estimate_tokens(line)
+            if fact_tokens + line_tokens > remaining:
+                break
+            fact_lines.append(line)
+            fact_tokens += line_tokens
+        if fact_lines:
+            content = "[Knowledge graph]\n" + "\n".join(fact_lines)
+            cumulative_tokens += _estimate_tokens(content)
+            messages.append({"role": "system", "content": content})
+
+    # Tier 3: Recent verbatim messages (M-08: newest first truncation)
+    truncated_recent_messages: list[dict] = []
+    if state.get("recent_messages"):
+        remaining = (
+            max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        )
+        msg_tokens = 0
+        for m in reversed(state["recent_messages"]):
+            msg_content = m.get("content", "")
+            msg_token_count = _estimate_tokens(msg_content)
+            if msg_tokens + msg_token_count > remaining:
+                break
+            truncated_recent_messages.insert(0, m)
+            msg_tokens += msg_token_count
+        for m in truncated_recent_messages:
+            msg = {"role": m["role"], "content": m["content"]}
+            if m.get("tool_calls"):
+                msg["tool_calls"] = m["tool_calls"]
+            if m.get("tool_call_id"):
+                msg["tool_call_id"] = m["tool_call_id"]
+            if m.get("sender"):
+                msg["name"] = m["sender"]
+            messages.append(msg)
+            cumulative_tokens += _estimate_tokens(m.get("content", ""))
+
+    # R7-M10: Build context_tiers using truncated lists — semantic_messages should
+    # only include the messages that actually made it into the context output.
+    context_tiers = {
+        "archival_summary": state.get("tier1_summary"),
+        "chunk_summaries": state.get("tier2_summaries", []),
+        "semantic_messages": [
+            {
+                "id": str(m["id"]),
+                "role": m["role"],
+                "sender": m["sender"],
+                "content": m["content"],
+                "sequence_number": m["sequence_number"],
+            }
+            for m in truncated_semantic_messages
+        ],
+        "knowledge_graph_facts": state.get("knowledge_graph_facts", []),
+        "recent_messages": [
+            {
+                "id": str(m["id"]),
+                "role": m["role"],
+                "sender": m["sender"],
+                "content": m["content"],
+                "sequence_number": m["sequence_number"],
+            }
+            for m in truncated_recent_messages
+        ],
+    }
+
+    return {
+        "context_messages": messages,
+        "context_tiers": context_tiers,
+    }
+
+
+def ke_route_after_load_window(state: KnowledgeEnrichedRetrievalState) -> str:
+    if state.get("error"):
+        return END
+    return "ke_wait_for_assembly"
+
+
+def ke_route_after_wait(state: KnowledgeEnrichedRetrievalState) -> str:
+    return "ke_load_summaries"
+
+
+def ke_route_after_load_messages(state: KnowledgeEnrichedRetrievalState) -> str:
+    """Route: check if build type needs semantic/KG retrieval."""
+    build_type_config = state.get("build_type_config", {})
+    needs_semantic = build_type_config.get("semantic_retrieval_pct", 0) > 0
+    needs_kg = build_type_config.get("knowledge_graph_pct", 0) > 0
+
+    if needs_semantic:
+        return "ke_inject_semantic_retrieval"
+    if needs_kg:
+        return "ke_inject_knowledge_graph"
+    return "ke_assemble_context"
+
+
+def ke_route_after_semantic(state: KnowledgeEnrichedRetrievalState) -> str:
+    build_type_config = state.get("build_type_config", {})
+    needs_kg = build_type_config.get("knowledge_graph_pct", 0) > 0
+    if needs_kg:
+        return "ke_inject_knowledge_graph"
+    return "ke_assemble_context"
+
+
+def build_knowledge_enriched_retrieval():
+    """Build and compile the knowledge-enriched retrieval StateGraph."""
+    workflow = StateGraph(KnowledgeEnrichedRetrievalState)
+
+    workflow.add_node("ke_load_window", ke_load_window)
+    workflow.add_node("ke_wait_for_assembly", ke_wait_for_assembly)
+    workflow.add_node("ke_load_summaries", ke_load_summaries)
+    workflow.add_node("ke_load_recent_messages", ke_load_recent_messages)
+    workflow.add_node("ke_inject_semantic_retrieval", ke_inject_semantic_retrieval)
+    workflow.add_node("ke_inject_knowledge_graph", ke_inject_knowledge_graph)
+    workflow.add_node("ke_assemble_context", ke_assemble_context)
+
+    workflow.set_entry_point("ke_load_window")
+
+    workflow.add_conditional_edges(
+        "ke_load_window",
+        ke_route_after_load_window,
+        {"ke_wait_for_assembly": "ke_wait_for_assembly", END: END},
+    )
+    workflow.add_conditional_edges(
+        "ke_wait_for_assembly",
+        ke_route_after_wait,
+        {"ke_load_summaries": "ke_load_summaries"},
+    )
+    workflow.add_edge("ke_load_summaries", "ke_load_recent_messages")
+
+    workflow.add_conditional_edges(
+        "ke_load_recent_messages",
+        ke_route_after_load_messages,
+        {
+            "ke_inject_semantic_retrieval": "ke_inject_semantic_retrieval",
+            "ke_inject_knowledge_graph": "ke_inject_knowledge_graph",
+            "ke_assemble_context": "ke_assemble_context",
         },
     )
 
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Return structured JSON for request validation failures."""
-    _log.warning(
-        "Validation error: %s %s — %s",
-        request.method,
-        request.url.path,
-        exc.errors(),
-    )
-    return JSONResponse(
-        status_code=422,
-        content={
-            "error": "validation_error",
-            "message": "Request validation failed.",
-            "details": exc.errors(),
+    workflow.add_conditional_edges(
+        "ke_inject_semantic_retrieval",
+        ke_route_after_semantic,
+        {
+            "ke_inject_knowledge_graph": "ke_inject_knowledge_graph",
+            "ke_assemble_context": "ke_assemble_context",
         },
     )
 
+    workflow.add_edge("ke_inject_knowledge_graph", "ke_assemble_context")
+    workflow.add_edge("ke_assemble_context", END)
 
-# Last-resort handler for known exception families that could bubble out of
-# our application code. Covers runtime failures, OS/network errors, DB errors,
-# and stdlib value errors. This is NOT a blanket Exception catch — each type
-# is explicitly listed. (CB-R3-01 / G5-22)
-@app.exception_handler(RuntimeError)
-@app.exception_handler(ValueError)
-@app.exception_handler(OSError)
-@app.exception_handler(ConnectionError)
-async def known_exception_handler(request: Request, exc):
-    """Return structured error for known unhandled exception families."""
-    _log.error(
-        "Unhandled %s: %s %s — %s",
-        type(exc).__name__,
-        request.method,
-        request.url.path,
-        exc,
-        exc_info=True,
-    )
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "internal_server_error",
-            "message": "An unexpected error occurred. Check server logs for details.",
-        },
-    )
+    return workflow.compile()
+
+
+# ============================================================
+# Assembly — reuse standard-tiered (same logic, just build type label differs)
+# ============================================================
+
+# The assembly process is identical for knowledge-enriched: chunk summarization
+# and archival consolidation work the same way. The difference is only in retrieval
+# (additional semantic + KG nodes). We reuse the standard-tiered assembly builder.
+# The build_type label in the assembly state is set by the caller (arq_worker),
+# so metrics are correctly attributed.
+
+# Registration handled by context_broker_ae.register — no module-scope side effects.
+
 ```
 
----
+## packages/context-broker-ae/src/context_broker_ae/build_types/passthrough.py
 
-`app/memory/mem0_client.py`
+```python
+"""
+Passthrough build type (ARCH-18).
+
+Minimal build type that demonstrates the contract:
+- Assembly: no-op, just updates last_assembled_at.
+- Retrieval: loads recent messages as-is and returns them.
+
+No LLM calls, no summarization, no tier logic.
+"""
+
+import logging
+import operator
+import time
+import uuid
+from typing import Annotated, Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+from app.config import get_tuning, verbose_log
+from app.database import get_pg_pool
+
+# Registration handled by register.py — no module-scope side effects
+from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
+
+_log = logging.getLogger("context_broker.flows.build_types.passthrough")
+
+
+# ============================================================
+# Assembly
+# ============================================================
+
+
+class PassthroughAssemblyState(TypedDict):
+    """State for passthrough assembly — minimal."""
+
+    context_window_id: str
+    conversation_id: str
+    config: dict
+
+    # Lock management
+    lock_key: str
+    lock_token: Optional[str]
+    lock_acquired: bool
+    assembly_start_time: Optional[float]
+
+    # Output
+    error: Optional[str]
+
+
+async def pt_acquire_lock(state: PassthroughAssemblyState) -> dict:
+    """Acquire Redis assembly lock."""
+    # R5-M11: Validate UUID at assembly entry point to fail gracefully
+    try:
+        uuid.UUID(state["context_window_id"])
+        uuid.UUID(state["conversation_id"])
+    except (ValueError, AttributeError):
+        _log.error(
+            "Invalid UUID in assembly input: context_window_id=%s, conversation_id=%s",
+            state.get("context_window_id"),
+            state.get("conversation_id"),
+        )
+        return {"error": "Invalid UUID in assembly input", "lock_acquired": False}
+
+    verbose_log(
+        state["config"],
+        _log,
+        "passthrough.acquire_lock ENTER window=%s",
+        state["context_window_id"],
+    )
+    pool = get_pg_pool()
+    lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+    acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
+
+    if not acquired:
+        _log.info(
+            "Passthrough assembly: lock not acquired for window=%s — skipping",
+            state["context_window_id"],
+        )
+        return {"lock_key": str(lock_id), "lock_token": None, "lock_acquired": False}
+
+    return {
+        "lock_key": str(lock_id),
+        "lock_token": "pg_advisory",
+        "lock_acquired": True,
+        "assembly_start_time": time.monotonic(),
+    }
+
+
+async def pt_finalize(state: PassthroughAssemblyState) -> dict:
+    """No-op assembly: just update last_assembled_at.
+
+    R6-M13: Wrapped in try/except so errors route to pt_release_lock
+    instead of raising and leaking the lock.
+    """
+    try:
+        pool = get_pg_pool()
+        await pool.execute(
+            "UPDATE context_windows SET last_assembled_at = NOW() WHERE id = $1",
+            uuid.UUID(state["context_window_id"]),
+        )
+
+        start_time = state.get("assembly_start_time")
+        if start_time is not None:
+            duration = time.monotonic() - start_time
+            CONTEXT_ASSEMBLY_DURATION.labels(build_type="passthrough").observe(duration)
+
+        _log.info(
+            "Passthrough assembly complete for window=%s", state["context_window_id"]
+        )
+        return {}
+    except (RuntimeError, OSError, ValueError, ConnectionError) as exc:
+        _log.error(
+            "Passthrough finalize failed for window=%s: %s",
+            state["context_window_id"],
+            exc,
+        )
+        return {"error": f"Passthrough finalize failed: {exc}"}
+
+
+async def pt_release_lock(state: PassthroughAssemblyState) -> dict:
+    """Release Redis assembly lock.
+
+    R7-M6: Wrapped in try/except — log warning on failure instead of crashing.
+    """
+    lock_key = state.get("lock_key", "")
+    if lock_key and state.get("lock_acquired"):
+        try:
+            pool = get_pg_pool()
+            lock_id = int(lock_key)
+            await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+        except (ValueError, OSError) as exc:
+            _log.warning(
+                "Failed to release assembly lock for window=%s: %s",
+                state.get("context_window_id"),
+                exc,
+            )
+    return {}
+
+
+def pt_route_after_lock(state: PassthroughAssemblyState) -> str:
+    if not state.get("lock_acquired"):
+        return END
+    return "pt_finalize"
+
+
+def pt_route_after_finalize(state: PassthroughAssemblyState) -> str:
+    """R6-M13: Route to lock release regardless of error state."""
+    return "pt_release_lock"
+
+
+def build_passthrough_assembly():
+    """Build and compile the passthrough assembly StateGraph."""
+    workflow = StateGraph(PassthroughAssemblyState)
+
+    workflow.add_node("pt_acquire_lock", pt_acquire_lock)
+    workflow.add_node("pt_finalize", pt_finalize)
+    workflow.add_node("pt_release_lock", pt_release_lock)
+
+    workflow.set_entry_point("pt_acquire_lock")
+    workflow.add_conditional_edges(
+        "pt_acquire_lock",
+        pt_route_after_lock,
+        {"pt_finalize": "pt_finalize", END: END},
+    )
+    # R6-M13: Use conditional edge from pt_finalize so that errors
+    # route to pt_release_lock instead of leaking the lock.
+    workflow.add_conditional_edges(
+        "pt_finalize",
+        pt_route_after_finalize,
+        {"pt_release_lock": "pt_release_lock"},
+    )
+    workflow.add_edge("pt_release_lock", END)
+
+    return workflow.compile()
+
+
+# ============================================================
+# Retrieval
+# ============================================================
+
+
+class PassthroughRetrievalState(TypedDict):
+    """State for passthrough retrieval."""
+
+    context_window_id: str
+    config: dict
+
+    # Intermediate
+    window: Optional[dict]
+    conversation_id: Optional[str]
+    max_token_budget: int
+
+    # Output
+    context_messages: Optional[list[dict]]
+    context_tiers: Optional[dict]
+    total_tokens_used: int
+    warnings: Annotated[list[str], operator.add]  # R5-m5: accumulate, don't overwrite
+    error: Optional[str]
+
+
+async def pt_load_window(state: PassthroughRetrievalState) -> dict:
+    """Load the context window."""
+    # R5-M11: Validate UUID at retrieval entry point to fail gracefully
+    try:
+        uuid.UUID(state["context_window_id"])
+    except (ValueError, AttributeError):
+        _log.error(
+            "Invalid UUID in retrieval input: context_window_id=%s",
+            state.get("context_window_id"),
+        )
+        return {"error": "Invalid UUID in retrieval input"}
+
+    verbose_log(
+        state["config"],
+        _log,
+        "passthrough.retrieval.load_window ENTER window=%s",
+        state["context_window_id"],
+    )
+    pool = get_pg_pool()
+
+    window = await pool.fetchrow(
+        "SELECT * FROM context_windows WHERE id = $1",
+        uuid.UUID(state["context_window_id"]),
+    )
+    if window is None:
+        return {"error": f"Context window {state['context_window_id']} not found"}
+
+    # R7-m20: Update last_accessed_at on every retrieval
+    await pool.execute(
+        "UPDATE context_windows SET last_accessed_at = NOW() WHERE id = $1",
+        uuid.UUID(state["context_window_id"]),
+    )
+
+    window_dict = dict(window)
+
+    # D-05/D-10: Apply effective utilization
+    from app.budget import EFFECTIVE_UTILIZATION_DEFAULT
+
+    raw_budget = window_dict["max_token_budget"]
+    utilization = EFFECTIVE_UTILIZATION_DEFAULT
+    effective_budget = int(raw_budget * utilization)
+
+    return {
+        "window": window_dict,
+        "conversation_id": str(window_dict["conversation_id"]),
+        "max_token_budget": effective_budget,
+    }
+
+
+async def pt_load_recent(state: PassthroughRetrievalState) -> dict:
+    """Load recent messages as-is, up to the token budget."""
+    pool = get_pg_pool()
+    max_budget = state["max_token_budget"]
+    max_messages = get_tuning(state["config"], "max_messages_to_load", 1000)
+
+    rows = await pool.fetch(
+        """
+        SELECT id, role, sender, content, sequence_number, token_count,
+               tool_calls, tool_call_id, created_at
+        FROM conversation_messages
+        WHERE conversation_id = $1
+        ORDER BY sequence_number DESC
+        LIMIT $2
+        """,
+        uuid.UUID(state["conversation_id"]),
+        max_messages,
+    )
+
+    messages = []
+    tokens_used = 0
+    for row in rows:
+        msg = dict(row)
+        msg_tokens = msg.get("token_count") or max(
+            1, len(msg.get("content", "") or "") // 4
+        )
+        if tokens_used + msg_tokens > max_budget:
+            break
+        messages.insert(0, msg)
+        tokens_used += msg_tokens
+
+    # Build output messages array
+    context_messages = []
+    recent_for_tiers = []
+    for m in messages:
+        out = {"role": m["role"], "content": m.get("content", "")}
+        if m.get("tool_calls"):
+            out["tool_calls"] = m["tool_calls"]
+        if m.get("tool_call_id"):
+            out["tool_call_id"] = m["tool_call_id"]
+        if m.get("sender"):
+            out["name"] = m["sender"]
+        context_messages.append(out)
+        recent_for_tiers.append(
+            {
+                "id": str(m["id"]),
+                "role": m["role"],
+                "sender": m.get("sender", ""),
+                "content": m.get("content", ""),
+                "sequence_number": m["sequence_number"],
+            }
+        )
+
+    context_tiers = {
+        "archival_summary": None,
+        "chunk_summaries": [],
+        "semantic_messages": [],
+        "knowledge_graph_facts": [],
+        "recent_messages": recent_for_tiers,
+    }
+
+    return {
+        "context_messages": context_messages,
+        "context_tiers": context_tiers,
+        "total_tokens_used": tokens_used,
+    }
+
+
+def pt_ret_route_after_load(state: PassthroughRetrievalState) -> str:
+    if state.get("error"):
+        return END
+    return "pt_load_recent"
+
+
+def build_passthrough_retrieval():
+    """Build and compile the passthrough retrieval StateGraph."""
+    workflow = StateGraph(PassthroughRetrievalState)
+
+    workflow.add_node("pt_load_window", pt_load_window)
+    workflow.add_node("pt_load_recent", pt_load_recent)
+
+    workflow.set_entry_point("pt_load_window")
+    workflow.add_conditional_edges(
+        "pt_load_window",
+        pt_ret_route_after_load,
+        {"pt_load_recent": "pt_load_recent", END: END},
+    )
+    workflow.add_edge("pt_load_recent", END)
+
+    return workflow.compile()
+
+
+# Registration handled by context_broker_ae.register — no module-scope side effects.
+
+```
+
+## packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py
+
+```python
+"""
+Standard-tiered build type (ARCH-18).
+
+Three-tier progressive compression context assembly:
+  Tier 1: Archival summary (oldest, most compressed)
+  Tier 2: Chunk summaries (middle layer)
+  Tier 3: Recent verbatim messages (newest, full fidelity)
+
+Moved from the monolithic context_assembly.py and retrieval_flow.py.
+All original logic, error handling, and lock management preserved.
+
+F-06: Reads its own LLM config from config["build_types"]["standard-tiered"]["llm"],
+falling back to the global config["llm"] if not set.
+"""
+
+import asyncio
+import logging
+import operator
+import time
+import uuid
+from typing import Annotated, Optional
+
+import asyncpg
+import httpx
+import openai
+from langchain_core.messages import HumanMessage, SystemMessage
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+from app.config import get_build_type_config, get_chat_model, get_tuning, verbose_log
+from app.database import get_pg_pool
+
+# Registration handled by register.py — no module-scope side effects
+from context_broker_ae.build_types.tier_scaling import scale_tier_percentages
+from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
+from app.prompt_loader import async_load_prompt
+
+_log = logging.getLogger("context_broker.flows.build_types.standard_tiered")
+
+
+def _resolve_llm_config(config: dict, build_type_config: dict) -> dict:
+    """Resolve effective LLM config: build-type-specific overrides global (F-06).
+
+    Returns a config dict suitable for passing to get_chat_model().
+    """
+    bt_llm = build_type_config.get("llm")
+    if bt_llm:
+        # Build a config dict that get_chat_model expects (top-level "llm" key)
+        return {**config, "llm": bt_llm}
+    return config
+
+
+# ============================================================
+# Assembly
+# ============================================================
+
+
+class StandardTieredAssemblyState(TypedDict):
+    """State for the standard-tiered assembly pipeline."""
+
+    # Inputs
+    context_window_id: str
+    conversation_id: str
+    config: dict
+
+    # Intermediate
+    window: Optional[dict]
+    build_type_config: Optional[dict]
+    max_token_budget: int
+    all_messages: list[dict]
+    tier3_messages: list[dict]
+    older_messages: list[dict]
+    chunks: list[list[dict]]
+    tier2_summaries: list[str]
+    tier1_summary: Optional[str]
+    lock_key: str
+    lock_token: Optional[str]
+    lock_acquired: bool
+    had_errors: bool
+    assembly_start_time: Optional[float]
+
+    # Output
+    error: Optional[str]
+
+
+async def acquire_assembly_lock(state: StandardTieredAssemblyState) -> dict:
+    """Acquire a Redis distributed lock for this context window."""
+    # R5-M11: Validate UUID at assembly entry point to fail gracefully
+    try:
+        uuid.UUID(state["context_window_id"])
+        uuid.UUID(state["conversation_id"])
+    except (ValueError, AttributeError):
+        _log.error(
+            "Invalid UUID in assembly input: context_window_id=%s, conversation_id=%s",
+            state.get("context_window_id"),
+            state.get("conversation_id"),
+        )
+        return {"error": "Invalid UUID in assembly input", "lock_acquired": False}
+
+    verbose_log(
+        state["config"],
+        _log,
+        "standard_tiered.acquire_lock ENTER window=%s",
+        state["context_window_id"],
+    )
+    lock_key = f"assembly_in_progress:{state['context_window_id']}"
+    lock_token = str(uuid.uuid4())
+
+    # R7-M5: Wrap Redis calls in try/except — return error state if unavailable
+    try:
+        pool = get_pg_pool()  # Advisory lock (Redis removed)
+        lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+        acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
+    except (RuntimeError, OSError, ConnectionError) as exc:
+        _log.error(
+            "Redis unavailable during lock acquisition for window=%s: %s",
+            state["context_window_id"],
+            exc,
+        )
+        return {
+            "lock_key": lock_key,
+            "lock_token": None,
+            "lock_acquired": False,
+            "error": f"Redis unavailable: {exc}",
+        }
+
+    if not acquired:
+        _log.info(
+            "Context assembly: lock not acquired for window=%s — skipping",
+            state["context_window_id"],
+        )
+        return {"lock_key": lock_key, "lock_token": None, "lock_acquired": False}
+
+    return {
+        "lock_key": lock_key,
+        "lock_token": lock_token,
+        "lock_acquired": True,
+        "assembly_start_time": time.monotonic(),
+    }
+
+
+async def load_window_config(state: StandardTieredAssemblyState) -> dict:
+    """Load the context window and resolve its build type configuration."""
+    pool = get_pg_pool()
+
+    window = await pool.fetchrow(
+        "SELECT * FROM context_windows WHERE id = $1",
+        uuid.UUID(state["context_window_id"]),
+    )
+    if window is None:
+        return {"error": f"Context window {state['context_window_id']} not found"}
+
+    window_dict = dict(window)
+
+    try:
+        build_type_config = get_build_type_config(
+            state["config"], window_dict["build_type"]
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    # D-05/D-10: Apply effective utilization — models degrade past ~85% fill.
+    # The build type owns the threshold; raw budget comes from the window.
+    from app.budget import EFFECTIVE_UTILIZATION_DEFAULT
+
+    raw_budget = window_dict["max_token_budget"]
+    utilization = build_type_config.get(
+        "effective_utilization", EFFECTIVE_UTILIZATION_DEFAULT
+    )
+    effective_budget = int(raw_budget * utilization)
+
+    return {
+        "window": window_dict,
+        "build_type_config": build_type_config,
+        "max_token_budget": effective_budget,
+    }
+
+
+async def load_messages(state: StandardTieredAssemblyState) -> dict:
+    """Load messages for the conversation in chronological order.
+
+    R2-F11: Adaptive message load limit based on tier3 budget.
+    D-09: On first assembly (no existing summaries), look back further
+    using the initial_lookback_multiplier to provide enough raw material
+    for initial summarization.
+    """
+    pool = get_pg_pool()
+    build_type_config = state.get("build_type_config") or {}
+    max_budget = state.get("max_token_budget", 8192)
+    tier3_pct = build_type_config.get("tier3_pct", 0.72)
+    tier3_budget = int(max_budget * tier3_pct)
+    tokens_per_message = get_tuning(state["config"], "tokens_per_message_estimate", 150)
+    adaptive_limit = max(50, tier3_budget // tokens_per_message)
+
+    # D-09: On initial assembly, look back further to build first summaries.
+    # Check if any summaries exist for this window — if not, use multiplier.
+    window_id = state.get("context_window_id") or (
+        state["window"]["id"] if state.get("window") else None
+    )
+    if window_id:
+        existing_summaries = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_summaries WHERE context_window_id = $1",
+            uuid.UUID(str(window_id)),
+        )
+        if existing_summaries == 0:
+            lookback_multiplier = build_type_config.get(
+                "initial_lookback_multiplier", 3
+            )
+            lookback_tokens = int(max_budget * lookback_multiplier)
+            adaptive_limit = max(adaptive_limit, lookback_tokens // tokens_per_message)
+
+    rows = await pool.fetch(
+        """
+        SELECT id, role, sender, content, sequence_number, token_count, created_at
+        FROM conversation_messages
+        WHERE conversation_id = $1
+        ORDER BY sequence_number DESC
+        LIMIT $2
+        """,
+        uuid.UUID(state["conversation_id"]),
+        adaptive_limit,
+    )
+
+    rows = list(reversed(rows))
+    messages = [dict(r) for r in rows]
+    _log.info(
+        "Context assembly: loaded %d messages for window=%s",
+        len(messages),
+        state["context_window_id"],
+    )
+    return {"all_messages": messages}
+
+
+async def calculate_tier_boundaries(state: StandardTieredAssemblyState) -> dict:
+    """Calculate which messages belong to each tier.
+
+    F-05: Applies dynamic tier scaling based on conversation length.
+    """
+    messages = state["all_messages"]
+    if not messages:
+        return {"tier3_messages": [], "older_messages": [], "chunks": []}
+
+    build_type_config = state["build_type_config"]
+    max_budget = state["max_token_budget"]
+
+    # F-05: Dynamic tier scaling
+    scaled_config = scale_tier_percentages(build_type_config, len(messages))
+
+    tier3_pct = scaled_config.get("tier3_pct", 0.72)
+    tier3_budget = int(max_budget * tier3_pct)
+
+    # Walk backwards to fill tier 3 budget
+    tier3_messages = []
+    tier3_tokens_used = 0
+    tier3_start_seq = messages[-1]["sequence_number"] + 1
+
+    for msg in reversed(messages):
+        msg_tokens = msg.get("token_count") or max(
+            1, len(msg.get("content") or "") // 4
+        )
+        if tier3_tokens_used + msg_tokens <= tier3_budget:
+            tier3_messages.insert(0, msg)
+            tier3_tokens_used += msg_tokens
+            tier3_start_seq = msg["sequence_number"]
+        else:
+            break
+
+    # Messages before tier 3 boundary need summarization
+    older_messages = [m for m in messages if m["sequence_number"] < tier3_start_seq]
+
+    # Incremental: find what's already covered by existing tier 2 summaries
+    pool = get_pg_pool()
+    existing_t2 = await pool.fetch(
+        """
+        SELECT summarizes_to_seq
+        FROM conversation_summaries
+        WHERE context_window_id = $1
+          AND tier = 2
+          AND is_active = TRUE
+        ORDER BY summarizes_to_seq DESC
+        LIMIT 1
+        """,
+        uuid.UUID(state["context_window_id"]),
+    )
+
+    max_summarized_seq = 0
+    if existing_t2:
+        max_summarized_seq = existing_t2[0]["summarizes_to_seq"]
+
+    # Only process messages not yet summarized
+    unsummarized = [
+        m for m in older_messages if m["sequence_number"] > max_summarized_seq
+    ]
+
+    # Chunk unsummarized messages into groups
+    chunk_size = get_tuning(state["config"], "chunk_size", 20)
+    chunks = [
+        unsummarized[i : i + chunk_size]
+        for i in range(0, len(unsummarized), chunk_size)
+    ]
+
+    if max_summarized_seq > 0:
+        _log.info(
+            "Incremental assembly: %d new messages to summarize (already covered through seq %d)",
+            len(unsummarized),
+            max_summarized_seq,
+        )
+
+    return {
+        "tier3_messages": tier3_messages,
+        "older_messages": older_messages,
+        "chunks": chunks,
+    }
+
+
+async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
+    """LLM-summarize each new chunk of older messages."""
+    chunks = state["chunks"]
+    if not chunks:
+        return {"tier2_summaries": []}
+
+    config = state["config"]
+    build_type_config = state.get("build_type_config") or {}
+
+    # F-06: Use build-type-specific LLM config if available, else summarization role
+    effective_config = _resolve_llm_config(config, build_type_config)
+    llm_config = effective_config.get(
+        "llm", config.get("inference", {}).get("summarization", {})
+    )
+    llm = get_chat_model(effective_config, role="summarization")
+
+    pool = get_pg_pool()
+
+    # M-23: Load prompt once before the concurrent calls
+    try:
+        chunk_prompt = await async_load_prompt("chunk_summarization")
+    except RuntimeError as exc:
+        _log.error("Failed to load chunk_summarization prompt: %s", exc)
+        return {"tier2_summaries": [], "error": f"Prompt loading failed: {exc}"}
+
+    # Advisory lock (Redis removed — no TTL renewal needed)
+    pool = get_pg_pool()
+
+    async def _summarize_chunk(chunk: list[dict]) -> tuple[list[dict], str | None]:
+        # Advisory locks: no TTL renewal needed
+        chunk_text = "\n".join(
+            f"[{m['role']} | {m['sender']}] {m.get('content') or ''}" for m in chunk
+        )
+        messages = [
+            SystemMessage(content=chunk_prompt),
+            HumanMessage(content=chunk_text),
+        ]
+        try:
+            response = await llm.ainvoke(messages)
+            return (chunk, response.content)
+        except (openai.APIError, httpx.HTTPError, ValueError) as exc:
+            _log.error(
+                "Chunk summarization failed for window=%s: %s",
+                state["context_window_id"],
+                exc,
+            )
+            return (chunk, None)
+
+    # m16: Limit concurrent LLM calls
+    max_concurrent = get_tuning(config, "max_concurrent_chunk_summaries", 5)
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def _bounded_summarize(chunk: list[dict]) -> tuple[list[dict], str | None]:
+        async with semaphore:
+            return await _summarize_chunk(chunk)
+
+    llm_results = await asyncio.gather(*[_bounded_summarize(chunk) for chunk in chunks])
+
+    # M-09: Track whether any chunk failed
+    had_errors = any(summary_text is None for _, summary_text in llm_results)
+
+    # R7-M11: Budget guard — stop inserting summaries if cumulative tier1+tier2
+    # tokens would exceed their allocation within the max token budget.
+    max_budget = state.get("max_token_budget", 0)
+    scaled_config = scale_tier_percentages(
+        build_type_config, len(state.get("all_messages", []))
+    )
+    tier1_pct = scaled_config.get("tier1_pct", 0.08)
+    tier2_pct = scaled_config.get("tier2_pct", 0.20)
+    summary_budget = int(max_budget * (tier1_pct + tier2_pct))
+    cumulative_summary_tokens = 0
+
+    # Insert summaries sequentially to preserve ordering
+    new_summaries = []
+    for chunk, summary_text in llm_results:
+        if summary_text is None:
+            continue
+
+        # R7-M11: Check cumulative token budget before inserting
+        summary_token_count = max(1, len(summary_text) // 4)
+        if (
+            summary_budget > 0
+            and cumulative_summary_tokens + summary_token_count > summary_budget
+        ):
+            _log.info(
+                "Budget guard: stopping tier 2 summarization at %d tokens (budget=%d) for window=%s",
+                cumulative_summary_tokens,
+                summary_budget,
+                state["context_window_id"],
+            )
+            break
+
+        chunk_tokens = sum(
+            m.get("token_count") or max(1, len(m.get("content") or "") // 4)
+            for m in chunk
+        )
+
+        # Idempotency: skip if summary already exists for this range
+        existing = await pool.fetchval(
+            """
+            SELECT id FROM conversation_summaries
+            WHERE context_window_id = $1
+              AND tier = 2
+              AND summarizes_from_seq = $2
+              AND summarizes_to_seq = $3
+              AND is_active = TRUE
+            """,
+            uuid.UUID(state["context_window_id"]),
+            chunk[0]["sequence_number"],
+            chunk[-1]["sequence_number"],
+        )
+        if existing:
+            _log.info(
+                "Skipping duplicate summary for seq %d-%d",
+                chunk[0]["sequence_number"],
+                chunk[-1]["sequence_number"],
+            )
+            continue
+
+        # R5-M14: Catch UniqueViolationError in case a concurrent assembler
+        # already inserted a summary for this range between our pre-check
+        # and this INSERT.
+        try:
+            await pool.execute(
+                """
+                INSERT INTO conversation_summaries
+                    (conversation_id, context_window_id, summary_text, tier,
+                     summarizes_from_seq, summarizes_to_seq, message_count,
+                     original_token_count, summary_token_count, summarized_by_model)
+                VALUES ($1, $2, $3, 2, $4, $5, $6, $7, $8, $9)
+                """,
+                uuid.UUID(state["conversation_id"]),
+                uuid.UUID(state["context_window_id"]),
+                summary_text,
+                chunk[0]["sequence_number"],
+                chunk[-1]["sequence_number"],
+                len(chunk),
+                chunk_tokens,
+                len(summary_text) // 4,
+                llm_config.get("model", "unknown"),
+            )
+        except asyncpg.UniqueViolationError:
+            _log.info(
+                "Concurrent summary insert for seq %d-%d — skipping (other assembler won)",
+                chunk[0]["sequence_number"],
+                chunk[-1]["sequence_number"],
+            )
+            continue
+        new_summaries.append(summary_text)
+        cumulative_summary_tokens += summary_token_count
+
+    _log.info(
+        "Context assembly: wrote %d tier 2 summaries for window=%s",
+        len(new_summaries),
+        state["context_window_id"],
+    )
+    result: dict = {"tier2_summaries": new_summaries}
+    if had_errors:
+        result["had_errors"] = True
+    return result
+
+
+async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> dict:
+    """Consolidate oldest tier 2 summaries into a tier 1 archival summary."""
+    pool = get_pg_pool()
+
+    active_t2 = await pool.fetch(
+        """
+        SELECT id, summary_text, summarizes_from_seq, summarizes_to_seq, message_count
+        FROM conversation_summaries
+        WHERE context_window_id = $1
+          AND tier = 2
+          AND is_active = TRUE
+        ORDER BY summarizes_from_seq ASC
+        """,
+        uuid.UUID(state["context_window_id"]),
+    )
+
+    if len(active_t2) <= get_tuning(state["config"], "consolidation_threshold", 3):
+        return {"tier1_summary": None}
+
+    keep_recent = get_tuning(state["config"], "consolidation_keep_recent", 2)
+
+    # R6-M11: Guard against empty consolidation list when keep_recent >= len(active_t2)
+    if len(active_t2) <= keep_recent:
+        return {"tier1_summary": None}
+
+    to_consolidate = list(active_t2)[:-keep_recent]
+
+    # M-16: Include existing tier 1 summary in consolidation
+    existing_t1 = await pool.fetchrow(
+        """
+        SELECT summary_text
+        FROM conversation_summaries
+        WHERE context_window_id = $1
+          AND tier = 1
+          AND is_active = TRUE
+        ORDER BY summarizes_to_seq DESC
+        LIMIT 1
+        """,
+        uuid.UUID(state["context_window_id"]),
+    )
+
+    consolidation_parts = []
+    if existing_t1 and existing_t1["summary_text"]:
+        consolidation_parts.append(
+            f"[Existing archival summary]\n{existing_t1['summary_text']}"
+        )
+    consolidation_parts.extend(r["summary_text"] for r in to_consolidate)
+    consolidation_text = "\n\n".join(consolidation_parts)
+
+    config = state["config"]
+    build_type_config = state.get("build_type_config") or {}
+
+    # F-06: Use build-type-specific LLM config if available
+    effective_config = _resolve_llm_config(config, build_type_config)
+    llm_config = effective_config.get("llm", {})
+
+    # M-23: Catch prompt-loading failures
+    try:
+        archival_prompt = await async_load_prompt("archival_consolidation")
+    except RuntimeError as exc:
+        _log.error("Failed to load archival_consolidation prompt: %s", exc)
+        return {"tier1_summary": None, "error": f"Prompt loading failed: {exc}"}
+
+    llm = get_chat_model(effective_config, role="summarization")
+
+    messages = [
+        SystemMessage(content=archival_prompt),
+        HumanMessage(content=consolidation_text),
+    ]
+
+    # R7-M12: Renew lock TTL before the LLM call (same pattern as _summarize_chunk)
+    lock_key = state.get("lock_key", "")
+    lock_token = state.get("lock_token")
+    if lock_key and lock_token:
+        try:
+            pass  # Advisory locks: no TTL renewal needed
+        except (RuntimeError, OSError, ConnectionError) as exc:
+            _log.warning("Failed to renew lock TTL for archival consolidation: %s", exc)
+
+    try:
+        response = await llm.ainvoke(messages)
+        archival_text = response.content
+
+        if archival_text:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    # Deactivate existing tier 1
+                    await conn.execute(
+                        """
+                        UPDATE conversation_summaries
+                        SET is_active = FALSE
+                        WHERE context_window_id = $1 AND tier = 1 AND is_active = TRUE
+                        """,
+                        uuid.UUID(state["context_window_id"]),
+                    )
+
+                    # Deactivate consolidated tier 2 chunks
+                    consolidated_ids = [r["id"] for r in to_consolidate]
+                    await conn.execute(
+                        """
+                        UPDATE conversation_summaries
+                        SET is_active = FALSE
+                        WHERE id = ANY($1::uuid[])
+                        """,
+                        consolidated_ids,
+                    )
+
+                    # Insert new tier 1 archival summary
+                    await conn.execute(
+                        """
+                        INSERT INTO conversation_summaries
+                            (conversation_id, context_window_id, summary_text, tier,
+                             summarizes_from_seq, summarizes_to_seq, message_count,
+                             summarized_by_model)
+                        VALUES ($1, $2, $3, 1, $4, $5, $6, $7)
+                        """,
+                        uuid.UUID(state["conversation_id"]),
+                        uuid.UUID(state["context_window_id"]),
+                        archival_text,
+                        to_consolidate[0]["summarizes_from_seq"],
+                        to_consolidate[-1]["summarizes_to_seq"],
+                        sum(r.get("message_count") or 0 for r in to_consolidate),
+                        llm_config.get("model", "unknown"),
+                    )
+
+            _log.info(
+                "Context assembly: consolidated %d tier 2 summaries into tier 1 for window=%s",
+                len(to_consolidate),
+                state["context_window_id"],
+            )
+            return {"tier1_summary": archival_text}
+
+    except (openai.APIError, httpx.HTTPError, ValueError) as exc:
+        _log.error(
+            "Archival consolidation failed for window=%s: %s",
+            state["context_window_id"],
+            exc,
+        )
+        return {"tier1_summary": None, "had_errors": True}
+
+    return {"tier1_summary": None}
+
+
+async def finalize_assembly(state: StandardTieredAssemblyState) -> dict:
+    """Update last_assembled_at and observe duration metric.
+
+    M-09: Skip last_assembled_at update if there were partial failures.
+    """
+    if state.get("had_errors"):
+        _log.warning(
+            "Context assembly had errors for window=%s — skipping last_assembled_at update",
+            state["context_window_id"],
+        )
+    else:
+        pool = get_pg_pool()
+        await pool.execute(
+            "UPDATE context_windows SET last_assembled_at = NOW() WHERE id = $1",
+            uuid.UUID(state["context_window_id"]),
+        )
+
+    start_time = state.get("assembly_start_time")
+    if start_time is not None:
+        duration = time.monotonic() - start_time
+        CONTEXT_ASSEMBLY_DURATION.labels(build_type="standard-tiered").observe(duration)
+
+    _log.info(
+        "Context assembly %s for window=%s",
+        "complete (with errors)" if state.get("had_errors") else "complete",
+        state["context_window_id"],
+    )
+    return {}
+
+
+async def release_assembly_lock(state: StandardTieredAssemblyState) -> dict:
+    """Release the Postgres advisory lock for assembly."""
+    lock_key = state.get("lock_key", "")
+    if lock_key and state.get("lock_acquired"):
+        try:
+            pool = get_pg_pool()
+            lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+            await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+        except (ValueError, OSError) as exc:
+            _log.debug("Lock release failed: %s", exc)
+    return {}
+
+
+def route_after_lock(state: StandardTieredAssemblyState) -> str:
+    if not state.get("lock_acquired"):
+        return END
+    return "load_window_config"
+
+
+def route_after_load_config(state: StandardTieredAssemblyState) -> str:
+    if state.get("error"):
+        return "release_assembly_lock"
+    return "load_messages"
+
+
+def route_after_load_messages(state: StandardTieredAssemblyState) -> str:
+    if state.get("error"):
+        return "release_assembly_lock"
+    if not state.get("all_messages"):
+        return "finalize_assembly"
+    return "calculate_tier_boundaries"
+
+
+def route_after_calculate_tiers(state: StandardTieredAssemblyState) -> str:
+    if state.get("error"):
+        return "release_assembly_lock"
+    if not state.get("chunks"):
+        return "consolidate_archival_summary"
+    return "summarize_message_chunks"
+
+
+def route_after_summarize(state: StandardTieredAssemblyState) -> str:
+    if state.get("error"):
+        return "release_assembly_lock"
+    return "consolidate_archival_summary"
+
+
+def build_standard_tiered_assembly():
+    """Build and compile the standard-tiered assembly StateGraph."""
+    workflow = StateGraph(StandardTieredAssemblyState)
+
+    workflow.add_node("acquire_assembly_lock", acquire_assembly_lock)
+    workflow.add_node("load_window_config", load_window_config)
+    workflow.add_node("load_messages", load_messages)
+    workflow.add_node("calculate_tier_boundaries", calculate_tier_boundaries)
+    workflow.add_node("summarize_message_chunks", summarize_message_chunks)
+    workflow.add_node("consolidate_archival_summary", consolidate_archival_summary)
+    workflow.add_node("finalize_assembly", finalize_assembly)
+    workflow.add_node("release_assembly_lock", release_assembly_lock)
+
+    workflow.set_entry_point("acquire_assembly_lock")
+
+    workflow.add_conditional_edges(
+        "acquire_assembly_lock",
+        route_after_lock,
+        {"load_window_config": "load_window_config", END: END},
+    )
+    workflow.add_conditional_edges(
+        "load_window_config",
+        route_after_load_config,
+        {
+            "load_messages": "load_messages",
+            "release_assembly_lock": "release_assembly_lock",
+        },
+    )
+    workflow.add_conditional_edges(
+        "load_messages",
+        route_after_load_messages,
+        {
+            "calculate_tier_boundaries": "calculate_tier_boundaries",
+            "finalize_assembly": "finalize_assembly",
+            "release_assembly_lock": "release_assembly_lock",
+        },
+    )
+    workflow.add_conditional_edges(
+        "calculate_tier_boundaries",
+        route_after_calculate_tiers,
+        {
+            "summarize_message_chunks": "summarize_message_chunks",
+            "consolidate_archival_summary": "consolidate_archival_summary",
+            "release_assembly_lock": "release_assembly_lock",
+        },
+    )
+    workflow.add_conditional_edges(
+        "summarize_message_chunks",
+        route_after_summarize,
+        {
+            "consolidate_archival_summary": "consolidate_archival_summary",
+            "release_assembly_lock": "release_assembly_lock",
+        },
+    )
+    workflow.add_edge("consolidate_archival_summary", "finalize_assembly")
+    workflow.add_edge("finalize_assembly", "release_assembly_lock")
+    workflow.add_edge("release_assembly_lock", END)
+
+    return workflow.compile()
+
+
+# ============================================================
+# Retrieval
+# ============================================================
+
+
+class StandardTieredRetrievalState(TypedDict):
+    """State for the standard-tiered retrieval flow."""
+
+    # Inputs
+    context_window_id: str
+    config: dict
+
+    # Intermediate
+    window: Optional[dict]
+    build_type_config: Optional[dict]
+    conversation_id: Optional[str]
+    max_token_budget: int
+    tier1_summary: Optional[str]
+    tier2_summaries: list[str]
+    recent_messages: list[dict]
+    assembly_status: str
+
+    # Output
+    context_messages: Optional[list[dict]]
+    context_tiers: Optional[dict]
+    total_tokens_used: int
+    warnings: Annotated[list[str], operator.add]  # R5-m5: accumulate, don't overwrite
+    error: Optional[str]
+
+
+async def ret_load_window(state: StandardTieredRetrievalState) -> dict:
+    """Load the context window and its build type configuration."""
+    # R5-M11: Validate UUID at retrieval entry point to fail gracefully
+    try:
+        uuid.UUID(state["context_window_id"])
+    except (ValueError, AttributeError):
+        _log.error(
+            "Invalid UUID in retrieval input: context_window_id=%s",
+            state.get("context_window_id"),
+        )
+        return {"error": "Invalid UUID in retrieval input", "assembly_status": "error"}
+
+    verbose_log(
+        state["config"],
+        _log,
+        "standard_tiered.retrieval.load_window ENTER window=%s",
+        state["context_window_id"],
+    )
+    pool = get_pg_pool()
+
+    window = await pool.fetchrow(
+        "SELECT * FROM context_windows WHERE id = $1",
+        uuid.UUID(state["context_window_id"]),
+    )
+    if window is None:
+        return {
+            "error": f"Context window {state['context_window_id']} not found",
+            "assembly_status": "error",
+        }
+
+    # Update last_accessed_at on every retrieval
+    await pool.execute(
+        "UPDATE context_windows SET last_accessed_at = NOW() WHERE id = $1",
+        uuid.UUID(state["context_window_id"]),
+    )
+
+    window_dict = dict(window)
+
+    try:
+        build_type_config = get_build_type_config(
+            state["config"], window_dict["build_type"]
+        )
+    except ValueError as exc:
+        return {"error": str(exc), "assembly_status": "error"}
+
+    # D-05/D-10: Apply effective utilization for retrieval
+    from app.budget import EFFECTIVE_UTILIZATION_DEFAULT
+
+    raw_budget = window_dict["max_token_budget"]
+    utilization = build_type_config.get(
+        "effective_utilization", EFFECTIVE_UTILIZATION_DEFAULT
+    )
+    effective_budget = int(raw_budget * utilization)
+
+    return {
+        "window": window_dict,
+        "build_type_config": build_type_config,
+        "conversation_id": str(window_dict["conversation_id"]),
+        "max_token_budget": effective_budget,
+    }
+
+
+async def ret_wait_for_assembly(state: StandardTieredRetrievalState) -> dict:
+    """Block if context assembly is in progress, with timeout.
+
+    R6-M9: If Redis is unavailable, proceed without waiting rather than crashing.
+    """
+    try:
+        pool = get_pg_pool()  # Advisory lock (Redis removed)
+    except RuntimeError:
+        _log.warning("Retrieval: Redis not available, proceeding without assembly wait")
+        return {"assembly_status": "ready"}
+
+    timeout = get_tuning(state["config"], "assembly_wait_timeout_seconds", 50)
+    poll_interval = get_tuning(state["config"], "assembly_poll_interval_seconds", 2)
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            lock_id = hash(state["context_window_id"]) & 0x7FFFFFFFFFFFFFFF
+            acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
+            if acquired:
+                await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+                in_progress = False
+            else:
+                in_progress = True
+        except (ConnectionError, OSError, RuntimeError) as exc:
+            _log.warning(
+                "Retrieval: Redis error during assembly wait, proceeding: %s", exc
+            )
+            return {"assembly_status": "ready"}
+        if not in_progress:
+            return {"assembly_status": "ready"}
+
+        elapsed = timeout - (deadline - time.monotonic())
+        _log.info(
+            "Retrieval: waiting for assembly on window=%s (%.0fs/%ds)",
+            state["context_window_id"],
+            elapsed,
+            timeout,
+        )
+        await asyncio.sleep(poll_interval)
+
+    _log.warning(
+        "Retrieval: assembly timeout for window=%s after %ds",
+        state["context_window_id"],
+        timeout,
+    )
+    return {
+        "assembly_status": "timeout",
+        "warnings": [
+            "Context assembly was still in progress at retrieval time; "
+            "context may be stale."
+        ],
+    }
+
+
+async def ret_load_summaries(state: StandardTieredRetrievalState) -> dict:
+    """Load active tier 1 and tier 2 summaries."""
+    pool = get_pg_pool()
+
+    summaries = await pool.fetch(
+        """
+        SELECT tier, summary_text, summarizes_from_seq
+        FROM conversation_summaries
+        WHERE context_window_id = $1
+          AND is_active = TRUE
+        ORDER BY tier ASC, summarizes_from_seq ASC
+        """,
+        uuid.UUID(state["context_window_id"]),
+    )
+
+    tier1 = None
+    tier2_list = []
+    for s in summaries:
+        if s["tier"] == 1:
+            tier1 = s["summary_text"]
+        elif s["tier"] == 2:
+            tier2_list.append(s["summary_text"])
+
+    return {"tier1_summary": tier1, "tier2_summaries": tier2_list}
+
+
+async def ret_load_recent_messages(state: StandardTieredRetrievalState) -> dict:
+    """Load tier 3 recent verbatim messages within the remaining token budget.
+
+    F-05: Applies dynamic tier scaling based on conversation length.
+    """
+    pool = get_pg_pool()
+    build_type_config = state["build_type_config"]
+    max_budget = state["max_token_budget"]
+
+    # Count total messages for F-05 tier scaling
+    total_msg_count = await pool.fetchval(
+        "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = $1",
+        uuid.UUID(state["conversation_id"]),
+    )
+    scaled_config = scale_tier_percentages(build_type_config, total_msg_count or 0)
+
+    tier3_pct = scaled_config.get("tier3_pct", 0.72)
+    tier3_budget = int(max_budget * tier3_pct)
+
+    # Calculate tokens already used by summaries
+    summary_tokens = 0
+    if state.get("tier1_summary"):
+        summary_tokens += len(state["tier1_summary"]) // 4
+    for s in state.get("tier2_summaries", []):
+        summary_tokens += len(s) // 4
+
+    remaining_budget = max(0, min(tier3_budget, max_budget - summary_tokens))
+
+    # M-06: Avoid loading messages already covered by summaries
+    highest_summarized_seq = await pool.fetchval(
+        """
+        SELECT COALESCE(MAX(summarizes_to_seq), 0)
+        FROM conversation_summaries
+        WHERE context_window_id = $1
+          AND tier = 2
+          AND is_active = TRUE
+        """,
+        uuid.UUID(state["context_window_id"]),
+    )
+
+    # R2-F11: Adaptive message load limit based on tier3 token budget
+    tokens_per_message = get_tuning(state["config"], "tokens_per_message_estimate", 150)
+    adaptive_limit = max(50, tier3_budget // tokens_per_message)
+
+    all_messages = await pool.fetch(
+        """
+        SELECT id, role, sender, content, sequence_number, token_count,
+               tool_calls, tool_call_id, created_at
+        FROM conversation_messages
+        WHERE conversation_id = $1
+          AND sequence_number > $2
+        ORDER BY sequence_number DESC
+        LIMIT $3
+        """,
+        uuid.UUID(state["conversation_id"]),
+        highest_summarized_seq,
+        adaptive_limit,
+    )
+
+    recent = []
+    tokens_used = 0
+
+    for msg in all_messages:
+        msg_tokens = msg["token_count"] or max(1, len(msg.get("content") or "") // 4)
+        if tokens_used + msg_tokens <= remaining_budget:
+            recent.insert(0, dict(msg))
+            tokens_used += msg_tokens
+        else:
+            break
+
+    return {
+        "recent_messages": recent,
+        "total_tokens_used": summary_tokens + tokens_used,
+    }
+
+
+def _estimate_tokens(text: str) -> int:
+    """Estimate token count from text length (approx 4 chars per token)."""
+    return max(1, len(text) // 4)
+
+
+async def ret_assemble_context(state: StandardTieredRetrievalState) -> dict:
+    """Assemble the final context messages array from all tiers.
+
+    ARCH-03: Produces a structured messages array matching the OpenAI format.
+    ARCH-15: Summaries are inserted as system messages.
+    """
+    max_budget = state.get("max_token_budget", 0)
+    cumulative_tokens = 0
+    messages: list[dict] = []
+
+    # Tier 1: Archival summary
+    if state.get("tier1_summary"):
+        content = f"[Archival context]\n{state['tier1_summary']}"
+        cumulative_tokens += _estimate_tokens(content)
+        messages.append({"role": "system", "content": content})
+
+    # Tier 2: Chunk summaries
+    if state.get("tier2_summaries"):
+        content = "[Recent summaries]\n" + "\n\n".join(state["tier2_summaries"])
+        cumulative_tokens += _estimate_tokens(content)
+        messages.append({"role": "system", "content": content})
+
+    # Tier 3: Recent verbatim messages (M-08: newest first truncation)
+    truncated_recent_messages: list[dict] = []
+    if state.get("recent_messages"):
+        remaining = (
+            max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
+        )
+        msg_tokens = 0
+        for m in reversed(state["recent_messages"]):
+            msg_content = m.get("content", "")
+            msg_token_count = _estimate_tokens(msg_content)
+            if msg_tokens + msg_token_count > remaining:
+                break
+            truncated_recent_messages.insert(0, m)
+            msg_tokens += msg_token_count
+        for m in truncated_recent_messages:
+            msg = {"role": m["role"], "content": m["content"]}
+            if m.get("tool_calls"):
+                msg["tool_calls"] = m["tool_calls"]
+            if m.get("tool_call_id"):
+                msg["tool_call_id"] = m["tool_call_id"]
+            if m.get("sender"):
+                msg["name"] = m["sender"]
+            messages.append(msg)
+            cumulative_tokens += _estimate_tokens(m.get("content", ""))
+
+    context_tiers = {
+        "archival_summary": state.get("tier1_summary"),
+        "chunk_summaries": state.get("tier2_summaries", []),
+        "semantic_messages": [],
+        "knowledge_graph_facts": [],
+        "recent_messages": [
+            {
+                "id": str(m["id"]),
+                "role": m["role"],
+                "sender": m["sender"],
+                "content": m["content"],
+                "sequence_number": m["sequence_number"],
+            }
+            for m in truncated_recent_messages
+        ],
+    }
+
+    return {
+        "context_messages": messages,
+        "context_tiers": context_tiers,
+    }
+
+
+def ret_route_after_load_window(state: StandardTieredRetrievalState) -> str:
+    if state.get("error"):
+        return END
+    return "ret_wait_for_assembly"
+
+
+def ret_route_after_wait(state: StandardTieredRetrievalState) -> str:
+    return "ret_load_summaries"
+
+
+def build_standard_tiered_retrieval():
+    """Build and compile the standard-tiered retrieval StateGraph."""
+    workflow = StateGraph(StandardTieredRetrievalState)
+
+    workflow.add_node("ret_load_window", ret_load_window)
+    workflow.add_node("ret_wait_for_assembly", ret_wait_for_assembly)
+    workflow.add_node("ret_load_summaries", ret_load_summaries)
+    workflow.add_node("ret_load_recent_messages", ret_load_recent_messages)
+    workflow.add_node("ret_assemble_context", ret_assemble_context)
+
+    workflow.set_entry_point("ret_load_window")
+
+    workflow.add_conditional_edges(
+        "ret_load_window",
+        ret_route_after_load_window,
+        {"ret_wait_for_assembly": "ret_wait_for_assembly", END: END},
+    )
+    workflow.add_conditional_edges(
+        "ret_wait_for_assembly",
+        ret_route_after_wait,
+        {"ret_load_summaries": "ret_load_summaries"},
+    )
+    workflow.add_edge("ret_load_summaries", "ret_load_recent_messages")
+    workflow.add_edge("ret_load_recent_messages", "ret_assemble_context")
+    workflow.add_edge("ret_assemble_context", END)
+
+    return workflow.compile()
+
+
+# Registration handled by context_broker_ae.register — no module-scope side effects.
+
+```
+
+## packages/context-broker-ae/src/context_broker_ae/build_types/tier_scaling.py
+
+```python
+"""
+Dynamic tier scaling (F-05).
+
+Adjusts tier percentages based on conversation length. Short conversations
+use more tier 3 (verbatim) budget. Long conversations shift budget toward
+tier 1/tier 2 (compressed) layers to fit more history.
+
+The config values are starting points; this function adjusts them.
+"""
+
+import logging
+
+_log = logging.getLogger("context_broker.flows.build_types.tier_scaling")
+
+# Thresholds for conversation length categories
+_SHORT_CONVERSATION = 50
+_LONG_CONVERSATION = 500
+
+
+def scale_tier_percentages(
+    build_type_config: dict,
+    message_count: int,
+) -> dict:
+    """Return a copy of build_type_config with tier percentages adjusted for message count.
+
+    F-05: Dynamic tier scaling.
+
+    - Short conversations (< 50 messages): boost tier3 by shifting from tier1/tier2.
+      Rationale: there's little to summarize, so maximize verbatim budget.
+    - Medium conversations (50-500 messages): use config as-is.
+    - Long conversations (> 500 messages): boost tier1/tier2 by shifting from tier3.
+      Rationale: more history to compress, summaries are more valuable.
+
+    The adjustment is a simple linear interpolation within each range.
+    Non-tier percentage keys (knowledge_graph_pct, semantic_retrieval_pct) are
+    left unchanged — only tier1/2/3 are rebalanced.
+
+    Args:
+        build_type_config: The build type config dict (must contain tier*_pct keys).
+        message_count: Total number of messages in the conversation.
+
+    Returns:
+        A new dict with adjusted tier percentages.
+    """
+    config = dict(build_type_config)
+
+    tier1_pct = config.get("tier1_pct", 0)
+    tier2_pct = config.get("tier2_pct", 0)
+    tier3_pct = config.get("tier3_pct", 0)
+
+    # Only adjust if all three tiers are present
+    if not (tier1_pct or tier2_pct or tier3_pct):
+        return config
+
+    tier_total = tier1_pct + tier2_pct + tier3_pct
+
+    if message_count < _SHORT_CONVERSATION:
+        # Short conversations: boost tier3 at the expense of tier1/tier2.
+        # At 0 messages, shift 80% of tier1+tier2 budget to tier3.
+        # Linear ramp from 80% shift at 0 messages to 0% shift at 50 messages.
+        ratio = 1.0 - (message_count / _SHORT_CONVERSATION)
+        shift_factor = 0.8 * ratio  # max 80% of tier1+tier2 shifts to tier3
+
+        shift_amount = (tier1_pct + tier2_pct) * shift_factor
+        # Distribute the reduction proportionally between tier1 and tier2
+        if tier1_pct + tier2_pct > 0:
+            t1_share = tier1_pct / (tier1_pct + tier2_pct)
+            t2_share = tier2_pct / (tier1_pct + tier2_pct)
+        else:
+            t1_share = 0.5
+            t2_share = 0.5
+
+        config["tier1_pct"] = round(tier1_pct - shift_amount * t1_share, 4)
+        config["tier2_pct"] = round(tier2_pct - shift_amount * t2_share, 4)
+        config["tier3_pct"] = round(tier3_pct + shift_amount, 4)
+
+        _log.debug(
+            "F-05: Short conversation (%d msgs) — tier scaling: t1=%.2f%% t2=%.2f%% t3=%.2f%%",
+            message_count,
+            config["tier1_pct"] * 100,
+            config["tier2_pct"] * 100,
+            config["tier3_pct"] * 100,
+        )
+
+    elif message_count > _LONG_CONVERSATION:
+        # Long conversations: boost tier1/tier2 at the expense of tier3.
+        # Linear ramp from 0% shift at 500 messages to 30% shift at 2000 messages.
+        excess = min(message_count - _LONG_CONVERSATION, 1500)
+        ratio = excess / 1500
+        shift_factor = 0.3 * ratio  # max 30% of tier3 shifts to tier1+tier2
+
+        shift_amount = tier3_pct * shift_factor
+        # Distribute the gain: 40% to tier1, 60% to tier2
+        config["tier1_pct"] = round(tier1_pct + shift_amount * 0.4, 4)
+        config["tier2_pct"] = round(tier2_pct + shift_amount * 0.6, 4)
+        config["tier3_pct"] = round(tier3_pct - shift_amount, 4)
+
+        _log.debug(
+            "F-05: Long conversation (%d msgs) — tier scaling: t1=%.2f%% t2=%.2f%% t3=%.2f%%",
+            message_count,
+            config["tier1_pct"] * 100,
+            config["tier2_pct"] * 100,
+            config["tier3_pct"] * 100,
+        )
+
+    # Ensure no negative values (defensive)
+    for key in ("tier1_pct", "tier2_pct", "tier3_pct"):
+        if config.get(key, 0) < 0:
+            config[key] = 0.0
+
+    # R5-m7: Renormalize tier percentages so they sum to exactly the original
+    # tier_total, avoiding floating-point drift after adjustments.
+    new_tier_sum = config["tier1_pct"] + config["tier2_pct"] + config["tier3_pct"]
+    if new_tier_sum > 0 and abs(new_tier_sum - tier_total) > 1e-9:
+        factor = tier_total / new_tier_sum
+        config["tier1_pct"] = round(config["tier1_pct"] * factor, 6)
+        config["tier2_pct"] = round(config["tier2_pct"] * factor, 6)
+        config["tier3_pct"] = round(config["tier3_pct"] * factor, 6)
+
+    return config
+
+```
+
+## packages/context-broker-ae/src/context_broker_ae/memory/__init__.py
+
+```python
+"""Memory subsystem for the Context Broker AE."""
+
+```
+
+## packages/context-broker-ae/src/context_broker_ae/memory/mem0_client.py
 
 ```python
 """
@@ -7130,6 +11121,18 @@ def _compute_config_hash(config: dict) -> str:
     }
     config_str = json.dumps(relevant, sort_keys=True, default=str)
     return hashlib.sha256(config_str.encode()).hexdigest()
+
+
+def reset_mem0_client() -> None:
+    """Invalidate the Mem0 client so next call creates a fresh one.
+
+    Called when extraction hits a connection/transaction error to ensure
+    the next retry gets a clean connection (PG-49).
+    """
+    global _mem0_instance, _mem0_config_hash
+    _mem0_instance = None
+    _mem0_config_hash = ""
+    _log.info("Mem0 client invalidated — will recreate on next call")
 
 
 async def get_mem0_client(config: dict) -> Optional[object]:
@@ -7180,12 +11183,65 @@ async def get_mem0_client(config: dict) -> Optional[object]:
             return None
 
 
+_patches_applied = False
+_patches_lock = __import__("threading").Lock()
+
+
+def _apply_mem0_patches():
+    """Apply monkey-patches to Mem0 internals (once, thread-safe).
+
+    From Rogers Fix 2: PGVector.insert gets ON CONFLICT DO NOTHING to
+    prevent duplicate memories from aborting the Postgres transaction.
+    Without this, the first duplicate insert poisons the connection and
+    every subsequent operation fails.
+
+    Requires the unique index on mem0_memories ((payload->>'hash'), (payload->>'user_id'))
+    created by migration 016.
+    """
+    global _patches_applied
+    if _patches_applied:
+        return
+
+    with _patches_lock:
+        if _patches_applied:
+            return
+
+        try:
+            from mem0.vector_stores.pgvector import PGVector
+            from psycopg2.extras import execute_values, Json
+
+            def _dedup_insert(self, vectors, payloads=None, ids=None):
+                data = [
+                    (id_, vector, Json(payload))
+                    for id_, vector, payload in zip(ids, vectors, payloads)
+                ]
+                execute_values(
+                    self.cur,
+                    f"INSERT INTO {self.collection_name} (id, vector, payload) "
+                    f"VALUES %s "
+                    f"ON CONFLICT ((payload->>'hash'), (payload->>'user_id')) "
+                    f"DO NOTHING",
+                    data,
+                )
+                self.conn.commit()
+
+            PGVector.insert = _dedup_insert
+            _log.info("Monkey-patch applied: PGVector.insert (ON CONFLICT DO NOTHING)")
+        except (ImportError, AttributeError) as exc:
+            _log.error("Failed to patch PGVector.insert: %s", exc)
+
+        _patches_applied = True
+
+
 def _build_mem0_instance(config: dict) -> object:
     """Build and configure the Mem0 Memory instance.
 
     Uses pgvector for vector storage and Neo4j for knowledge graph.
     LLM and embeddings are configured from config.yml.
     """
+    # Apply monkey-patches before constructing any Memory instance
+    _apply_mem0_patches()
+
     from mem0 import Memory
     from mem0.configs.base import (
         EmbedderConfig,
@@ -7197,7 +11253,9 @@ def _build_mem0_instance(config: dict) -> object:
 
     from app.config import get_api_key
 
-    llm_config = config.get("llm", {})
+    # Extraction LLM config — AE config top-level "extraction" section.
+    # Falls back to "llm" for backward compat with legacy single-config.
+    llm_config = config.get("extraction", {}) or config.get("llm", {})
     embeddings_config = config.get("embeddings", {})
 
     llm_api_key = get_api_key(llm_config)
@@ -7213,7 +11271,9 @@ def _build_mem0_instance(config: dict) -> object:
             config={
                 "api_key": llm_api_key or "",
                 "model": llm_config.get("model", "gpt-4o-mini"),
-                "openai_base_url": llm_config.get("base_url", "https://api.openai.com/v1"),
+                "openai_base_url": llm_config.get(
+                    "base_url", "https://api.openai.com/v1"
+                ),
             },
         ),
         embedder=EmbedderConfig(
@@ -7249,2530 +11309,2746 @@ def _build_mem0_instance(config: dict) -> object:
 
 
 def _neo4j_config(password: str) -> dict:
-    """Build Neo4j connection config, omitting credentials when AUTH=none.
+    """Build Neo4j connection config.
 
-    R2-F20: When NEO4J_PASSWORD is empty (the default), credentials are
-    intentionally omitted from the config. This matches the NEO4J_AUTH=none
-    setting in docker-compose.yml where Neo4j runs without authentication
-    on the internal Docker network.
+    Mem0's GraphStoreConfig requires url, username, and password fields
+    even when Neo4j runs with NEO4J_AUTH=none. When password is empty,
+    we pass "neo4j"/"neo4j" as dummy credentials — Neo4j ignores them
+    when auth is disabled.
     """
     url = f"bolt://{os.environ.get('NEO4J_HOST', 'context-broker-neo4j')}:{os.environ.get('NEO4J_PORT', '7687')}"
-    cfg: dict = {"url": url}
-    if password:
-        cfg["username"] = "neo4j"
-        cfg["password"] = password
-    return cfg
+    return {
+        "url": url,
+        "username": "neo4j",
+        "password": password or "neo4j",
+    }
 
 
 def _get_embedding_dims(config: dict, embeddings_config: dict) -> int:
-    """Return the embedding dimensions for the configured model.
+    """Return the embedding dimensions from config.
 
-    Checks for an explicit ``embedding_dims`` value in the top-level config
-    first (settable in config.yml).  Falls back to a built-in lookup table
-    keyed by model name, defaulting to 1536.
+    embedding_dims is a REQUIRED field in the embeddings config section.
+    Different embedding models produce different dimension vectors —
+    this must match the model being used. No hardcoded defaults.
     """
-    # Prefer explicit config override
-    configured_dims = config.get("embedding_dims")
-    if configured_dims is not None:
-        return int(configured_dims)
+    configured_dims = embeddings_config.get("embedding_dims")
+    if configured_dims is None:
+        # Also check top-level config for backward compat
+        configured_dims = config.get("embedding_dims")
+    if configured_dims is None:
+        raise ValueError(
+            "embedding_dims is required in the embeddings config section. "
+            "Set it to match your embedding model's output dimensions "
+            "(e.g., 3072 for gemini-embedding-001, 1536 for text-embedding-3-small, "
+            "768 for nomic-embed-text)."
+        )
+    return int(configured_dims)
 
-    model = embeddings_config.get("model", "text-embedding-3-small")
-    # Known dimension mappings (fallback)
-    dims_map = {
-        "text-embedding-3-small": 1536,
-        "text-embedding-3-large": 3072,
-        "text-embedding-ada-002": 1536,
-        # M-19: Ollama / nomic models
-        "nomic-embed-text": 768,
-        "nomic-embed-text:latest": 768,
-    }
-    return dims_map.get(model, 1536)
 ```
 
----
-
-`app/metrics_registry.py`
+## packages/context-broker-te/src/context_broker_te/__init__.py
 
 ```python
-"""
-Prometheus metrics registry for the Context Broker.
+"""Context Broker TE — Imperator cognitive agent package."""
 
-All metrics are defined here and imported by flows and routes.
-Metrics are incremented inside StateGraph nodes, not in route handlers.
-"""
-
-from prometheus_client import Counter, Histogram, Gauge
-
-# MCP tool request metrics
-MCP_REQUESTS = Counter(
-    "context_broker_mcp_requests_total",
-    "Total MCP tool requests",
-    ["tool", "status"],
-)
-
-MCP_REQUEST_DURATION = Histogram(
-    "context_broker_mcp_request_duration_seconds",
-    "Duration of MCP tool requests",
-    ["tool"],
-    buckets=[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0],
-)
-
-# Chat endpoint metrics
-CHAT_REQUESTS = Counter(
-    "context_broker_chat_requests_total",
-    "Total chat completion requests",
-    ["status"],
-)
-
-CHAT_REQUEST_DURATION = Histogram(
-    "context_broker_chat_request_duration_seconds",
-    "Duration of chat completion requests",
-    buckets=[0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 120.0],
-)
-
-# Background job metrics
-JOBS_ENQUEUED = Counter(
-    "context_broker_jobs_enqueued_total",
-    "Total background jobs enqueued",
-    ["job_type"],
-)
-
-JOBS_COMPLETED = Counter(
-    "context_broker_jobs_completed_total",
-    "Total background jobs completed",
-    ["job_type", "status"],
-)
-
-JOB_DURATION = Histogram(
-    "context_broker_job_duration_seconds",
-    "Duration of background jobs",
-    ["job_type"],
-    buckets=[0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0],
-)
-
-# Queue depth gauges
-EMBEDDING_QUEUE_DEPTH = Gauge(
-    "context_broker_embedding_queue_depth",
-    "Number of pending embedding jobs",
-)
-
-ASSEMBLY_QUEUE_DEPTH = Gauge(
-    "context_broker_assembly_queue_depth",
-    "Number of pending context assembly jobs",
-)
-
-EXTRACTION_QUEUE_DEPTH = Gauge(
-    "context_broker_extraction_queue_depth",
-    "Number of pending memory extraction jobs",
-)
-
-# Context assembly metrics
-CONTEXT_ASSEMBLY_DURATION = Histogram(
-    "context_broker_context_assembly_duration_seconds",
-    "Duration of context assembly operations",
-    ["build_type"],
-    buckets=[0.5, 1.0, 5.0, 10.0, 30.0, 60.0],
-)
 ```
 
----
-
-`app/migrations.py`
+## packages/context-broker-te/src/context_broker_te/domain_mem0.py
 
 ```python
-"""
-Database schema migration management.
+"""Domain-specific Mem0 client for the Imperator's knowledge graph.
 
-Applies pending migrations on startup. Migrations are forward-only
-and non-destructive. The application refuses to start if a migration
-cannot be safely applied.
-"""
+Separate from the AE's conversation Mem0 instance. Uses the same
+Neo4j container but a different pgvector collection name
+("domain_memories" vs "mem0_memories") to keep domain knowledge
+isolated from conversation knowledge.
 
-import logging
-from typing import Callable
-
-import asyncpg
-
-from app.database import get_pg_pool
-
-_log = logging.getLogger("context_broker.migrations")
-
-
-async def _migration_001(conn) -> None:
-    """Migration 1: Initial schema.
-
-    The initial schema is applied by postgres/init.sql via the Docker
-    entrypoint. This migration just records that it was applied.
-    """
-    pass
-
-
-async def _migration_002(conn) -> None:
-    """Migration 2: Ensure participant_id index exists on context_windows.
-
-    Safe to run multiple times (CREATE INDEX IF NOT EXISTS).
-    """
-    await conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_windows_participant_conversation
-        ON context_windows(participant_id, conversation_id)
-        """
-    )
-
-
-async def _migration_003(conn) -> None:
-    """Migration 3: Add unique constraint on (conversation_id, sequence_number).
-
-    Prevents duplicate sequence numbers under concurrent inserts.
-    Safe to run multiple times (CREATE UNIQUE INDEX IF NOT EXISTS).
-    """
-    await conn.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_conversation_seq_unique
-        ON conversation_messages(conversation_id, sequence_number)
-        """
-    )
-
-
-async def _migration_004(conn) -> None:
-    """Migration 4: Add recipient_id column to conversation_messages.
-
-    Captures who the message was addressed to alongside the existing sender_id.
-    Safe to run multiple times (ADD COLUMN IF NOT EXISTS).
-    """
-    await conn.execute(
-        """
-        ALTER TABLE conversation_messages
-        ADD COLUMN IF NOT EXISTS recipient_id VARCHAR(255)
-        """
-    )
-
-
-async def _migration_005(conn) -> None:
-    """Migration 5: Add flow_id, user_id to conversations (F-05)."""
-    await conn.execute(
-        "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS flow_id VARCHAR(255)"
-    )
-    await conn.execute(
-        "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS user_id VARCHAR(255)"
-    )
-
-
-async def _migration_006(conn) -> None:
-    """Migration 6: Add content_type, priority, repeat_count to conversation_messages (F-04, F-06)."""
-    await conn.execute(
-        "ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS content_type VARCHAR(50) DEFAULT 'text'"
-    )
-    await conn.execute(
-        "ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 0"
-    )
-    await conn.execute(
-        "ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS repeat_count INTEGER DEFAULT 1"
-    )
-
-
-async def _migration_007(conn) -> None:
-    """Migration 7: Prevent duplicate summary rows under concurrent assembly (M-08).
-
-    Adds a unique index on (context_window_id, tier, summarizes_from_seq, summarizes_to_seq)
-    to prevent duplicate summary rows when multiple workers race to summarize the same range.
-    """
-    await conn.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_window_tier_seq
-        ON conversation_summaries(context_window_id, tier, summarizes_from_seq, summarizes_to_seq)
-        """
-    )
-
-
-async def _migration_008(conn) -> None:
-    """Migration 8: Attempt to create Mem0 dedup index (F-19).
-
-    Mem0 creates its own tables on first use. This migration attempts
-    to add a dedup index on mem0_memories. If the table doesn't exist yet,
-    this is a no-op (the index will be created on next startup after
-    Mem0 has initialized).
-    """
-    try:
-        await conn.execute(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_mem0_memories_dedup
-            ON mem0_memories(memory, user_id)
-            """
-        )
-        _log.info("Mem0 dedup index created or already exists")
-    except asyncpg.UndefinedTableError:
-        _log.info("Mem0 table not yet created — dedup index deferred to next startup")
-
-
-async def _migration_009(conn) -> None:
-    """Migration 9: Create HNSW vector index if embeddings exist (G5-41).
-
-    Deferred from init.sql because pgvector HNSW requires knowing the
-    vector dimension. We detect the dimension from existing data.
-    """
-    dim = await conn.fetchval(
-        "SELECT vector_dims(embedding) FROM conversation_messages WHERE embedding IS NOT NULL LIMIT 1"
-    )
-    if dim is not None:
-        await conn.execute(
-            f"""
-            CREATE INDEX IF NOT EXISTS idx_messages_embedding
-            ON conversation_messages USING hnsw ((embedding::vector({dim})) vector_cosine_ops)
-            """
-        )
-        _log.info("HNSW index created for %d-dimensional embeddings", dim)
-    else:
-        _log.info("No embeddings yet — HNSW index deferred to next startup")
-
-
-async def _migration_010(conn) -> None:
-    """Migration 10: Unique constraint on context_windows for idempotent creation (G5-08).
-
-    Prevents duplicate context windows for the same (conversation, participant, build_type).
-    Safe to run multiple times (CREATE UNIQUE INDEX IF NOT EXISTS).
-    """
-    await conn.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_windows_conv_participant_build
-        ON context_windows(conversation_id, participant_id, build_type)
-        """
-    )
-
-
-async def _migration_011(conn) -> None:
-    """Migration 11: Add last_accessed_at to context_windows.
-
-    Tracks when a context window was last retrieved, enabling dormant
-    window detection and deferred assembly.
-    """
-    await conn.execute(
-        "ALTER TABLE context_windows ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMP WITH TIME ZONE"
-    )
-
-
-async def _migration_012(conn) -> None:
-    """Migration 12: Schema alignment for ARCH-01, ARCH-08, ARCH-09, ARCH-12, ARCH-13.
-
-    Comprehensive column renames, additions, drops, and constraint changes
-    on conversation_messages to align with the v4 schema design.
-
-    All statements use IF EXISTS / IF NOT EXISTS guards so the migration
-    is safe to run against databases in any intermediate state.
-    """
-
-    # ── ARCH-13: Rename sender_id → sender ──────────────────────────
-    has_sender_id = await conn.fetchval(
-        """
-        SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'conversation_messages' AND column_name = 'sender_id'
-        )
-        """
-    )
-    if has_sender_id:
-        await conn.execute(
-            "ALTER TABLE conversation_messages RENAME COLUMN sender_id TO sender"
-        )
-        _log.info("Renamed sender_id → sender")
-
-    # ── ARCH-13: Rename recipient_id → recipient ────────────────────
-    has_recipient_id = await conn.fetchval(
-        """
-        SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'conversation_messages' AND column_name = 'recipient_id'
-        )
-        """
-    )
-    if has_recipient_id:
-        await conn.execute(
-            "ALTER TABLE conversation_messages RENAME COLUMN recipient_id TO recipient"
-        )
-        _log.info("Renamed recipient_id → recipient")
-
-    # ── ARCH-12: NOT NULL on recipient (backfill first) ─────────────
-    await conn.execute(
-        "UPDATE conversation_messages SET recipient = 'unknown' WHERE recipient IS NULL"
-    )
-    # Check if the column already has a NOT NULL constraint
-    is_nullable = await conn.fetchval(
-        """
-        SELECT is_nullable FROM information_schema.columns
-        WHERE table_name = 'conversation_messages' AND column_name = 'recipient'
-        """
-    )
-    if is_nullable == "YES":
-        await conn.execute(
-            "ALTER TABLE conversation_messages ALTER COLUMN recipient SET DEFAULT 'unknown'"
-        )
-        await conn.execute(
-            "ALTER TABLE conversation_messages ALTER COLUMN recipient SET NOT NULL"
-        )
-        _log.info("Set NOT NULL constraint on recipient with default 'unknown'")
-
-    # ── ARCH-01: Add tool_calls (JSONB) ─────────────────────────────
-    await conn.execute(
-        "ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS tool_calls JSONB"
-    )
-
-    # ── ARCH-01: Add tool_call_id ───────────────────────────────────
-    await conn.execute(
-        "ALTER TABLE conversation_messages ADD COLUMN IF NOT EXISTS tool_call_id VARCHAR(255)"
-    )
-
-    # ── ARCH-08: Drop content_type column ───────────────────────────
-    await conn.execute(
-        "ALTER TABLE conversation_messages DROP COLUMN IF EXISTS content_type"
-    )
-
-    # ── ARCH-09: Drop idempotency unique index ──────────────────────
-    await conn.execute("DROP INDEX IF EXISTS idx_messages_idempotency")
-
-    # ── ARCH-09: Drop idempotency_key column ────────────────────────
-    await conn.execute(
-        "ALTER TABLE conversation_messages DROP COLUMN IF EXISTS idempotency_key"
-    )
-
-    # ── ARCH-01: Make content nullable ──────────────────────────────
-    # (tool-call messages may have no text content)
-    await conn.execute(
-        "ALTER TABLE conversation_messages ALTER COLUMN content DROP NOT NULL"
-    )
-
-    # ── ARCH-13: Rename sender index to match new column name ───────
-    # PostgreSQL doesn't have ALTER INDEX IF EXISTS … RENAME, so check first.
-    idx_exists = await conn.fetchval(
-        """
-        SELECT EXISTS (
-            SELECT 1 FROM pg_indexes
-            WHERE indexname = 'idx_messages_conversation_sender'
-        )
-        """
-    )
-    if idx_exists:
-        await conn.execute(
-            "ALTER INDEX idx_messages_conversation_sender RENAME TO idx_messages_conversation_sender_new"
-        )
-        _log.info("Renamed sender index → idx_messages_conversation_sender_new")
-
-    # ── Safety net: Ensure last_accessed_at exists on context_windows
-    # (in case migration 011 was skipped or partially applied) ───────
-    await conn.execute(
-        "ALTER TABLE context_windows ADD COLUMN IF NOT EXISTS last_accessed_at TIMESTAMP WITH TIME ZONE"
-    )
-
-    _log.info("Migration 012 complete — schema aligned with v4 design")
-
-
-# Migration registry: version -> (description, migration_function)
-# Add new migrations here. Never modify existing entries.
-# IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
-MIGRATIONS: list[tuple[int, str, Callable]] = [
-    (1, "Initial schema — created by postgres/init.sql", _migration_001),
-    (2, "Add participant_id index on context_windows", _migration_002),
-    (3, "Add unique constraint on (conversation_id, sequence_number)", _migration_003),
-    (4, "Add recipient_id column to conversation_messages", _migration_004),
-    (5, "Add flow_id, user_id to conversations", _migration_005),
-    (6, "Add content_type, priority, repeat_count to conversation_messages", _migration_006),
-    (7, "Unique index on summaries to prevent duplicate rows (M-08)", _migration_007),
-    (8, "Mem0 dedup index on mem0_memories (F-19)", _migration_008),
-    (9, "Deferred HNSW vector index (G5-41)", _migration_009),
-    (10, "Unique constraint on context_windows (conversation_id, participant_id, build_type) (G5-08)", _migration_010),
-    (11, "Add last_accessed_at to context_windows", _migration_011),
-    (12, "Schema alignment: renames, tool_calls, drops, constraints (ARCH-01/08/09/12/13)", _migration_012),
-]
-
-
-async def get_current_schema_version(conn) -> int:
-    """Return the highest applied migration version, or 0 if none."""
-    try:
-        version = await conn.fetchval(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
-        )
-        return version or 0
-    except asyncpg.UndefinedTableError:
-        # schema_migrations table doesn't exist yet — fresh database
-        return 0
-
-
-async def run_migrations() -> None:
-    """Apply all pending migrations in order.
-
-    R5-m12: Uses a PostgreSQL advisory lock to serialize migrations when
-    multiple workers start simultaneously. Advisory lock ID 1 is reserved
-    for schema migrations.
-
-    Raises RuntimeError if any migration fails, preventing startup
-    with an incompatible schema.
-    """
-    pool = get_pg_pool()
-
-    async with pool.acquire() as conn:
-        # R5-m12: Acquire advisory lock to prevent concurrent migration runs
-        await conn.execute("SELECT pg_advisory_lock(1)")
-        try:
-            current_version = await get_current_schema_version(conn)
-            _log.info("Current schema version: %d", current_version)
-
-            pending = [
-                (version, description, fn)
-                for version, description, fn in MIGRATIONS
-                if version > current_version
-            ]
-
-            if not pending:
-                _log.info("Schema is up to date (version %d)", current_version)
-                return
-
-            for version, description, migration_fn in pending:
-                _log.info("Applying migration %d: %s", version, description)
-                try:
-                    async with conn.transaction():
-                        await migration_fn(conn)
-                        await conn.execute(
-                            """
-                            INSERT INTO schema_migrations (version, description)
-                            VALUES ($1, $2)
-                            ON CONFLICT (version) DO NOTHING
-                            """,
-                            version,
-                            description,
-                        )
-                    _log.info("Migration %d applied successfully", version)
-                except (asyncpg.PostgresError, OSError) as exc:
-                    raise RuntimeError(
-                        f"Migration {version} ('{description}') failed: {exc}. "
-                        "Cannot start with incompatible schema."
-                    ) from exc
-
-            _log.info(
-                "Schema migrations complete. Now at version %d",
-                pending[-1][0],
-            )
-        finally:
-            await conn.execute("SELECT pg_advisory_unlock(1)")
-```
-
----
-
-`app/models.py`
-
-```python
-"""
-Pydantic models for request/response validation.
-
-All external inputs are validated through these models before
-reaching StateGraph flows.
-"""
-
-from typing import Any, Optional
-from uuid import UUID
-
-from pydantic import BaseModel, Field, model_validator
-
-
-# ============================================================
-# MCP Tool Input Models
-# ============================================================
-
-
-class CreateConversationInput(BaseModel):
-    """Input for conv_create_conversation."""
-
-    conversation_id: Optional[UUID] = Field(None, description="Caller-supplied ID for idempotent creation")
-    title: Optional[str] = Field(None, max_length=500)
-    flow_id: Optional[str] = Field(None, max_length=255)
-    user_id: Optional[str] = Field(None, max_length=255)
-
-
-class StoreMessageInput(BaseModel):
-    """Input for conv_store_message."""
-
-    context_window_id: Optional[UUID] = None
-    conversation_id: Optional[UUID] = None
-    role: str = Field(..., pattern="^(user|assistant|system|tool)$")
-
-    @model_validator(mode="after")
-    def _require_at_least_one_id(self) -> "StoreMessageInput":
-        if self.context_window_id is None and self.conversation_id is None:
-            raise ValueError(
-                "At least one of context_window_id or conversation_id must be provided"
-            )
-        return self
-    sender: str = Field(..., min_length=1, max_length=255)
-    recipient: Optional[str] = Field(None, max_length=255)
-    content: Optional[str] = Field(None)
-    priority: Optional[int] = Field(0, ge=0, le=10)
-    model_name: Optional[str] = Field(None, max_length=255)
-    tool_calls: Optional[list[dict]] = None
-    tool_call_id: Optional[str] = Field(None, max_length=255)
-
-
-class CreateContextWindowInput(BaseModel):
-    """Input for conv_create_context_window."""
-
-    conversation_id: UUID
-    participant_id: str = Field(..., min_length=1, max_length=255)
-    build_type: str = Field(..., min_length=1, max_length=100)
-    max_tokens: Optional[int] = Field(None, ge=1)
-
-
-class RetrieveContextInput(BaseModel):
-    """Input for conv_retrieve_context."""
-
-    context_window_id: UUID
-
-
-class SearchConversationsInput(BaseModel):
-    """Input for conv_search."""
-
-    query: Optional[str] = Field(None, max_length=2000)
-    limit: int = Field(10, ge=1, le=100)
-    offset: int = Field(0, ge=0)
-    date_from: Optional[str] = Field(None, description="ISO-8601 date lower bound")
-    date_to: Optional[str] = Field(None, description="ISO-8601 date upper bound")
-    flow_id: Optional[str] = Field(None, max_length=255)
-    user_id: Optional[str] = Field(None, max_length=255)
-    sender: Optional[str] = Field(None, max_length=255)
-
-
-class SearchMessagesInput(BaseModel):
-    """Input for conv_search_messages."""
-
-    query: str = Field(..., min_length=1, max_length=2000)
-    conversation_id: Optional[UUID] = None
-    limit: int = Field(10, ge=1, le=100)
-    sender: Optional[str] = Field(None, max_length=255)
-    role: Optional[str] = Field(None, pattern="^(user|assistant|system|tool)$")
-    date_from: Optional[str] = Field(None, description="ISO-8601 date lower bound")
-    date_to: Optional[str] = Field(None, description="ISO-8601 date upper bound")
-
-
-class GetHistoryInput(BaseModel):
-    """Input for conv_get_history."""
-
-    conversation_id: UUID
-    limit: Optional[int] = Field(None, ge=1, le=10000)
-
-
-class SearchContextWindowsInput(BaseModel):
-    """Input for conv_search_context_windows."""
-
-    context_window_id: Optional[UUID] = None
-    conversation_id: Optional[UUID] = None
-    participant_id: Optional[str] = Field(None, max_length=255)
-    build_type: Optional[str] = Field(None, max_length=100)
-    limit: int = Field(10, ge=1, le=100)
-
-
-class MemSearchInput(BaseModel):
-    """Input for mem_search."""
-
-    query: str = Field(..., min_length=1, max_length=2000)
-    user_id: str = Field(..., min_length=1, max_length=255)
-    limit: int = Field(10, ge=1, le=100)
-
-
-class MemGetContextInput(BaseModel):
-    """Input for mem_get_context."""
-
-    query: str = Field(..., min_length=1, max_length=2000)
-    user_id: str = Field(..., min_length=1, max_length=255)
-    limit: int = Field(5, ge=1, le=50)
-
-
-class MemAddInput(BaseModel):
-    """Input for mem_add — directly add a memory to Mem0."""
-
-    content: str = Field(..., min_length=1, max_length=10000)
-    user_id: str = Field(..., min_length=1, max_length=255)
-
-
-class MemListInput(BaseModel):
-    """Input for mem_list — list all memories for a user."""
-
-    user_id: str = Field(..., min_length=1, max_length=255)
-    limit: int = Field(50, ge=1, le=500)
-
-
-class MemDeleteInput(BaseModel):
-    """Input for mem_delete — delete a specific memory by ID."""
-
-    memory_id: str = Field(..., min_length=1, max_length=255)
-
-
-class ImperatorChatInput(BaseModel):
-    """Input for imperator_chat."""
-
-    message: str = Field(..., min_length=1, max_length=32000)
-    context_window_id: Optional[UUID] = None
-
-
-class MetricsGetInput(BaseModel):
-    """Input for metrics_get (no required fields)."""
-
-    pass
-
-
-# ============================================================
-# OpenAI-compatible chat models
-# ============================================================
-
-
-class ChatMessage(BaseModel):
-    """A single message in an OpenAI-compatible chat request."""
-
-    role: str = Field(..., pattern="^(system|user|assistant|tool)$")
-    content: Optional[str] = None
-    tool_calls: Optional[list[dict]] = None
-    tool_call_id: Optional[str] = None
-
-
-class ChatCompletionRequest(BaseModel):
-    """OpenAI-compatible /v1/chat/completions request body."""
-
-    model: str = Field(default="context-broker")
-    messages: list[ChatMessage] = Field(..., min_length=1)
-    stream: bool = False
-    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
-    max_tokens: Optional[int] = Field(None, ge=1)
-
-
-
-# ============================================================
-# MCP Protocol Models
-# ============================================================
-
-
-class MCPToolCall(BaseModel):
-    """MCP JSON-RPC tools/call request."""
-
-    jsonrpc: str = Field(default="2.0")
-    id: Optional[Any] = None
-    method: str
-    params: dict[str, Any] = Field(default_factory=dict)
-
-
-class MCPToolResult(BaseModel):
-    """MCP JSON-RPC tools/call response."""
-
-    jsonrpc: str = "2.0"
-    id: Optional[Any] = None
-    result: Optional[dict[str, Any]] = None
-    error: Optional[dict[str, Any]] = None
-```
-
----
-
-`app/prompt_loader.py`
-
-```python
-"""
-Prompt template loader.
-
-Loads externalized prompt templates from /config/prompts/.
-Templates are cached with mtime check — only re-read when the file changes (M-11).
+TE-owned: this client is used by the Imperator's operational tools.
 """
 
 import asyncio
 import logging
 import os
-from pathlib import Path
-from typing import Any
-
-_log = logging.getLogger("context_broker.prompt_loader")
-
-PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR", "/config/prompts"))
-
-# Cache: name -> (mtime, content)
-_prompt_cache: dict[str, tuple[float, str]] = {}
-
-
-def _read_prompt_file(path: Path) -> str:
-    """Read and strip a prompt template file from disk.
-
-    Separated from load_prompt() so that async_load_prompt() can
-    offload only this blocking portion to run_in_executor.
-    """
-    return path.read_text(encoding="utf-8").strip()
-
-
-def load_prompt(name: str) -> str:
-    """Load a prompt template by name (without extension).
-
-    Reads from /config/prompts/{name}.md. Caches the result and only
-    re-reads the file when its mtime changes. os.stat() is near-instant
-    so this avoids repeated synchronous file I/O in async paths (M-11).
-
-    G5-06: This function performs blocking file I/O (os.stat + read_text).
-    The mtime cache means the file is only re-read when it actually changes
-    on disk, which is rare in production. The os.stat() fast-path check is
-    near-instant for local files. Async callers (route handlers, flow nodes)
-    should use async_load_prompt() instead, which offloads the file read to
-    run_in_executor when a re-read is triggered.
-
-    Raises RuntimeError if the template file cannot be found.
-    """
-    path = PROMPTS_DIR / f"{name}.md"
-    try:
-        current_mtime = os.stat(path).st_mtime
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            f"Prompt template not found: {path}. "
-            "Ensure prompt files are mounted at /config/prompts/."
-        ) from exc
-
-    cached = _prompt_cache.get(name)
-    if cached is not None and cached[0] == current_mtime:
-        return cached[1]
-
-    content = _read_prompt_file(path)
-    _prompt_cache[name] = (current_mtime, content)
-    return content
-
-
-async def async_load_prompt(name: str) -> str:
-    """Async wrapper for load_prompt().
-
-    Uses the same mtime-based cache as load_prompt(). The os.stat()
-    fast-path check is synchronous (near-instant for local files).
-    Only when a re-read is actually needed does it offload the file
-    read to run_in_executor to avoid blocking the event loop.
-
-    Route handlers and flow nodes should prefer this over load_prompt().
-    """
-    path = PROMPTS_DIR / f"{name}.md"
-    try:
-        current_mtime = os.stat(path).st_mtime
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            f"Prompt template not found: {path}. "
-            "Ensure prompt files are mounted at /config/prompts/."
-        ) from exc
-
-    cached = _prompt_cache.get(name)
-    if cached is not None and cached[0] == current_mtime:
-        return cached[1]
-
-    loop = asyncio.get_running_loop()
-    content = await loop.run_in_executor(None, _read_prompt_file, path)
-    _prompt_cache[name] = (current_mtime, content)
-    return content
-```
-
----
-
-`app/routes/chat.py`
-
-```python
-"""
-OpenAI-compatible chat completions endpoint.
-
-Implements /v1/chat/completions following the OpenAI API specification.
-Routes to the Imperator StateGraph.
-Supports both streaming (SSE) and non-streaming responses.
-"""
-
-import json
-import logging
-import time
-import uuid
-from typing import AsyncGenerator
-
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, StreamingResponse
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from pydantic import ValidationError
-
-from app.config import async_load_config
-from app.flows.imperator_flow import build_imperator_flow
-from app.metrics_registry import CHAT_REQUESTS, CHAT_REQUEST_DURATION
-from app.models import ChatCompletionRequest
-
-_log = logging.getLogger("context_broker.routes.chat")
-
-router = APIRouter()
-
-# Lazy-initialized Imperator flow — compiled on first use
-_imperator_flow = None
-
-
-def _get_imperator_flow():
-    global _imperator_flow
-    if _imperator_flow is None:
-        _imperator_flow = build_imperator_flow()
-    return _imperator_flow
-
-
-@router.post("/v1/chat/completions")
-async def chat_completions(request: Request) -> JSONResponse | StreamingResponse:
-    """Handle OpenAI-compatible chat completion requests.
-
-    Routes to the Imperator StateGraph. Supports streaming and non-streaming.
-    """
-    start_time = time.monotonic()
-    status = "error"
-    is_streaming = False
-
-    try:
-        body = await request.json()
-    except (ValueError, UnicodeDecodeError) as exc:
-        _log.warning("Chat: failed to parse request body: %s", exc)
-        return JSONResponse(
-            status_code=400,
-            content={"error": {"message": "Invalid JSON", "type": "invalid_request_error"}},
-        )
-
-    try:
-        chat_request = ChatCompletionRequest(**body)
-    except ValidationError as exc:
-        _log.warning("Chat: request validation failed: %s", exc)
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": {
-                    "message": str(exc),
-                    "type": "invalid_request_error",
-                }
-            },
-        )
-
-    is_streaming = chat_request.stream
-
-    config = await async_load_config()
-    imperator_manager = getattr(request.app.state, "imperator_manager", None)
-
-    # Extract the last user message as the primary input
-    user_messages = [m for m in chat_request.messages if m.role == "user"]
-    if not user_messages:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": {
-                    "message": "At least one user message is required",
-                    "type": "invalid_request_error",
-                }
-            },
-        )
-
-    # G5-27: Allow clients to specify a context_window_id for multi-client
-    # isolation via x-context-window-id header or context_window_id in the body.
-    # Also accepts the legacy x-conversation-id / conversation_id for compatibility.
-    # Falls back to the default Imperator context window when not provided.
-    context_window_id = (
-        request.headers.get("x-context-window-id")
-        or body.get("context_window_id")
-        or request.headers.get("x-conversation-id")
-        or body.get("conversation_id")
-    )
-    if not context_window_id and imperator_manager is not None:
-        context_window_id = await imperator_manager.get_context_window_id()
-
-    # Convert plain messages to LangChain message objects
-    # G5-28: Include ToolMessage so tool-role messages are not coerced to HumanMessage.
-    _role_map = {"user": HumanMessage, "system": SystemMessage, "assistant": AIMessage, "tool": ToolMessage}
-    lc_messages = []
-    for m in chat_request.messages:
-        cls = _role_map.get(m.role, HumanMessage)
-        if cls is ToolMessage:
-            # ToolMessage requires a tool_call_id; use the one from the
-            # request body if available, otherwise fall back to a placeholder.
-            tool_call_id = getattr(m, "tool_call_id", None) or "unknown"
-            lc_messages.append(ToolMessage(content=m.content, tool_call_id=tool_call_id))
-        else:
-            lc_messages.append(cls(content=m.content))
-
-    initial_state = {
-        "messages": lc_messages,
-        "context_window_id": str(context_window_id) if context_window_id else None,
-        "config": config,
-        "response_text": None,
-        "error": None,
-    }
-
-    try:
-        if chat_request.stream:
-            # For streaming, metrics are tracked inside the generator after
-            # the stream completes, not here in the route handler.
-            return StreamingResponse(
-                _stream_imperator_response(initial_state, chat_request, start_time),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-        else:
-            result = await _get_imperator_flow().ainvoke(initial_state)
-
-            if result.get("error"):
-                _log.error("Imperator flow error: %s", result["error"])
-                status = "error"
-                return JSONResponse(
-                    status_code=500,
-                    content={
-                        "error": {
-                            "message": result["error"],
-                            "type": "internal_error",
-                        }
-                    },
-                )
-
-            response_text = result.get("response_text", "")
-            status = "success"
-
-            return JSONResponse(
-                content=_build_completion_response(response_text, chat_request.model)
-            )
-
-    except (RuntimeError, ConnectionError, OSError) as exc:
-        _log.error("Chat completion failed: %s", exc, exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": {
-                    "message": "Internal server error",
-                    "type": "internal_error",
-                }
-            },
-        )
-    finally:
-        # Only record metrics for non-streaming requests here.
-        # Streaming metrics are recorded in the generator.
-        if not is_streaming:
-            duration = time.monotonic() - start_time
-            CHAT_REQUESTS.labels(status=status).inc()
-            CHAT_REQUEST_DURATION.observe(duration)
-
-
-async def _stream_imperator_response(
-    initial_state: dict,
-    chat_request: ChatCompletionRequest,
-    start_time: float,
-) -> AsyncGenerator[str, None]:
-    """Stream the Imperator response as SSE tokens.
-
-    M-22: astream_events(version="v2") captures on_chat_model_stream events
-    from nested ainvoke() calls within the LangGraph runtime, so real token
-    streaming works without requiring the agent to use astream() internally.
-    If a provider/model does not emit streaming tokens via ainvoke (e.g. some
-    local models), true per-token streaming would require the Imperator's
-    final non-tool-call LLM invocation to use llm.astream() instead. This is
-    a known limitation; the current implementation works correctly with
-    OpenAI-compatible providers that support streaming under the hood.
-    """
-    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
-    created = int(time.time())
-    stream_status = "success"
-
-    try:
-        # G5-29: Known limitation — when the ReAct agent processes tool calls,
-        # astream_events may emit no content tokens for those intermediate LLM
-        # turns (only the final non-tool-call turn produces streamable tokens).
-        # This is inherent to how LangGraph processes tool calls and is not a bug.
-        async for event in _get_imperator_flow().astream_events(
-            initial_state, version="v2"
-        ):
-            if event["event"] == "on_chat_model_stream":
-                token = event["data"]["chunk"].content
-                if token:
-                    chunk = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": chat_request.model,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": token},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                    yield f"data: {json.dumps(chunk)}\n\n"
-
-        # Final chunk with finish_reason
-        final_chunk = {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": chat_request.model,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": "stop",
-                }
-            ],
-        }
-        yield f"data: {json.dumps(final_chunk)}\n\n"
-        yield "data: [DONE]\n\n"
-
-    except (RuntimeError, ConnectionError, OSError) as exc:
-        _log.error("Streaming imperator response failed: %s", exc, exc_info=True)
-        stream_status = "error"
-        error_chunk = {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": chat_request.model,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"content": "An error occurred processing your request."},
-                    "finish_reason": "stop",
-                }
-            ],
-        }
-        yield f"data: {json.dumps(error_chunk)}\n\n"
-        yield "data: [DONE]\n\n"
-
-    finally:
-        # Record streaming metrics after the stream completes
-        duration = time.monotonic() - start_time
-        CHAT_REQUESTS.labels(status=stream_status).inc()
-        CHAT_REQUEST_DURATION.observe(duration)
-
-
-def _build_completion_response(response_text: str, model: str) -> dict:
-    """Build an OpenAI-compatible non-streaming completion response."""
-    return {
-        "id": f"chatcmpl-{uuid.uuid4().hex}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": response_text,
-                },
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": -1,
-            "completion_tokens": -1,
-            "total_tokens": -1,
-        },
-    }
-```
-
----
-
-`app/routes/health.py`
-
-```python
-"""
-Health check endpoint.
-
-Tests all backing service connections and returns aggregated status.
-The LangGraph container performs the actual dependency checks —
-nginx proxies the response without performing checks itself.
-"""
-
-import logging
-
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
-
-from app.config import async_load_config
-from app.flows.health_flow import build_health_check_flow
-
-_log = logging.getLogger("context_broker.routes.health")
-
-router = APIRouter()
-
-# R6-m1: Lazy-initialized flow singleton — compiled on first use instead of
-# at import time, so module import doesn't trigger graph compilation.
-_health_flow = None
-
-
-def _get_health_flow():
-    global _health_flow
-    if _health_flow is None:
-        _health_flow = build_health_check_flow()
-    return _health_flow
-
-
-@router.get("/health")
-async def health_check(request: Request) -> JSONResponse:
-    """Check connectivity to all backing services.
-
-    Returns 200 if all critical services are healthy.
-    Returns 503 if any critical service is unhealthy.
-    """
-    config = await async_load_config()
-
-    result = await _get_health_flow().ainvoke(
-        {
-            "config": config,
-            "postgres_ok": False,
-            "redis_ok": False,
-            "neo4j_ok": False,
-            "all_healthy": False,
-            "status_detail": None,
-            "http_status": 503,
-        }
-    )
-
-    return JSONResponse(
-        status_code=result["http_status"],
-        content=result["status_detail"],
-    )
-```
-
----
-
-`app/routes/mcp.py`
-
-```python
-"""
-MCP (Model Context Protocol) endpoint.
-
-Implements HTTP/SSE transport for MCP tool access.
-Routes tool calls to compiled StateGraph flows.
-
-Endpoints:
-  GET  /mcp          — Establish SSE session
-  POST /mcp          — Sessionless tool call or route to session
-  POST /mcp?sessionId=xxx — Route to existing session
-"""
-
-import asyncio
-import json
-import logging
-import time
-import uuid
-from collections import OrderedDict
-from typing import Any, AsyncGenerator
-
-from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import ValidationError
-
-from app.config import async_load_config, get_tuning
-from app.flows.tool_dispatch import dispatch_tool
-from app.metrics_registry import (
-    MCP_REQUEST_DURATION,
-    MCP_REQUESTS,
-)
-from app.models import MCPToolCall
-
-_log = logging.getLogger("context_broker.routes.mcp")
-
-router = APIRouter()
-
-# Active SSE sessions: session_id -> {"queue": asyncio.Queue, "created_at": float}
-# OrderedDict preserves insertion order for efficient eviction of oldest sessions.
-_sessions: OrderedDict[str, dict[str, Any]] = OrderedDict()
-
-# R5-M25: Track total queued messages across all sessions to bound memory
-_total_queued_messages: int = 0
-
-# Configurable limits (defaults; overridden by config at request time)
-_MAX_SESSIONS = 1000
-_SESSION_TTL_SECONDS = 3600  # 1 hour
-_MAX_TOTAL_QUEUED = 10000
-
-# R6-M3: Lock for session dict mutations to prevent race conditions
-_session_lock = asyncio.Lock()
-
-
-def _evict_stale_sessions() -> None:
-    """Remove sessions older than TTL and enforce the max sessions cap.
-
-    R5-M25: Also evict oldest sessions when total queued messages exceed the cap.
-    """
-    global _total_queued_messages
-    now = time.monotonic()
-    stale_ids = [
-        sid for sid, info in _sessions.items()
-        if now - info["created_at"] > _SESSION_TTL_SECONDS
-    ]
-    for sid in stale_ids:
-        info = _sessions.pop(sid, None)
-        if info is not None:
-            _total_queued_messages -= info["queue"].qsize()
-        _log.info("MCP SSE session evicted (TTL): %s", sid)
-
-    # Evict oldest if over cap
-    while len(_sessions) > _MAX_SESSIONS:
-        evicted_id, info = _sessions.popitem(last=False)
-        _total_queued_messages -= info["queue"].qsize()
-        _log.info("MCP SSE session evicted (cap): %s", evicted_id)
-
-    # R5-M25: Evict oldest sessions if total queued messages exceed threshold
-    while _total_queued_messages > _MAX_TOTAL_QUEUED and _sessions:
-        evicted_id, info = _sessions.popitem(last=False)
-        _total_queued_messages -= info["queue"].qsize()
-        _log.warning(
-            "MCP SSE session evicted (total queue pressure): %s", evicted_id
-        )
-
-
-@router.get("/mcp")
-async def mcp_sse_session(request: Request) -> StreamingResponse:
-    """Establish an SSE session for MCP communication.
-
-    Returns an SSE stream. The client sends tool calls via
-    POST /mcp?sessionId=<id>.
-    """
-    # Evict stale/over-cap sessions before creating a new one
-    config = await async_load_config()
-    global _MAX_SESSIONS, _SESSION_TTL_SECONDS, _MAX_TOTAL_QUEUED
-    _MAX_SESSIONS = get_tuning(config, "mcp_max_sessions", 1000)
-    _SESSION_TTL_SECONDS = get_tuning(config, "mcp_session_ttl_seconds", 3600)
-    _MAX_TOTAL_QUEUED = get_tuning(config, "mcp_max_total_queued", 10000)
-
-    session_id = str(uuid.uuid4())
-
-    # R6-M3: Protect session dict mutations with asyncio.Lock
-    async with _session_lock:
-        _evict_stale_sessions()
-        # G5-26: Bound the per-session queue to prevent memory growth from slow clients
-        message_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-        _sessions[session_id] = {"queue": message_queue, "created_at": time.monotonic()}
-
-    _log.info("MCP SSE session established: %s (active=%d)", session_id, len(_sessions))
-
-    async def event_stream() -> AsyncGenerator[str, None]:
-        # Send session ID as first event
-        yield f"data: {json.dumps({'sessionId': session_id})}\n\n"
-
-        try:
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    message = await asyncio.wait_for(message_queue.get(), timeout=30.0)
-                    # R5-M25: Decrement global counter when message is consumed
-                    global _total_queued_messages
-                    _total_queued_messages = max(0, _total_queued_messages - 1)
-                    yield f"data: {json.dumps(message)}\n\n"
-                except asyncio.TimeoutError:
-                    # Send keepalive comment
-                    yield ": keepalive\n\n"
-        finally:
-            # R6-M3: Protect session dict mutations with asyncio.Lock
-            async with _session_lock:
-                # R6-M2: Decrement global counter by remaining queue size before removal
-                removed = _sessions.pop(session_id, None)
-                if removed is not None:
-                    _total_queued_messages = max(0, _total_queued_messages - removed["queue"].qsize())
-            _log.info("MCP SSE session closed: %s", session_id)
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@router.post("/mcp")
-async def mcp_tool_call(
-    request: Request,
-    session_id: str = Query(None, alias="sessionId"),
-) -> JSONResponse:
-    """Handle an MCP tool call.
-
-    Supports both sessionless mode (no sessionId) and session mode.
-    All tool calls are routed through StateGraph flows.
-    """
-    start_time = time.monotonic()
-    tool_name = "unknown"
-    status = "error"
-
-    try:
-        body = await request.json()
-    except (ValueError, UnicodeDecodeError) as exc:
-        _log.warning("MCP: failed to parse request body: %s", exc)
-        return JSONResponse(
-            status_code=400,
-            content={
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {"code": -32700, "message": "Parse error"},
-            },
-        )
-
-    try:
-        mcp_request = MCPToolCall(**body)
-    except ValidationError as exc:
-        _log.warning("MCP: invalid request structure: %s", exc)
-        return JSONResponse(
-            status_code=400,
-            content={
-                "jsonrpc": "2.0",
-                "id": body.get("id"),
-                "error": {"code": -32600, "message": "Invalid Request"},
-            },
-        )
-
-    if mcp_request.method == "initialize":
-        tool_name = "initialize"
-        status = "success"
-        return JSONResponse(
-            content={
-                "jsonrpc": "2.0",
-                "id": mcp_request.id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {
-                        "name": "context-broker",
-                        "version": "1.0.0",
-                    },
-                },
-            }
-        )
-
-    if mcp_request.method == "tools/list":
-        tool_name = "tools_list"
-        status = "success"
-        return JSONResponse(
-            content={
-                "jsonrpc": "2.0",
-                "id": mcp_request.id,
-                "result": {"tools": _get_tool_list()},
-            }
-        )
-
-    if mcp_request.method != "tools/call":
-        return JSONResponse(
-            status_code=400,
-            content={
-                "jsonrpc": "2.0",
-                "id": mcp_request.id,
-                "error": {
-                    "code": -32601,
-                    "message": f"Method not found: {mcp_request.method}",
-                },
-            },
-        )
-
-    tool_name = mcp_request.params.get("name", "unknown")
-    tool_arguments = mcp_request.params.get("arguments", {})
-
-    config = await async_load_config()
-
-    try:
-        result = await dispatch_tool(tool_name, tool_arguments, config, request.app.state)
-        status = "success"
-
-        response_content = {
-            "jsonrpc": "2.0",
-            "id": mcp_request.id,
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": json.dumps(result)
-                        if isinstance(result, dict)
-                        else str(result),
-                    }
-                ]
-            },
-        }
-
-        # If session mode, push to session queue and return acknowledgment
-        if session_id:
-            if session_id not in _sessions:
-                # G5-25: Unknown sessionId — return error instead of falling through
-                return JSONResponse(
-                    status_code=404,
-                    content={
-                        "jsonrpc": "2.0",
-                        "id": mcp_request.id,
-                        "error": {"code": -32001, "message": f"Session not found: {session_id}"},
-                    },
-                )
-            try:
-                _sessions[session_id]["queue"].put_nowait(response_content)
-                global _total_queued_messages
-                _total_queued_messages += 1
-            except asyncio.QueueFull:
-                _log.warning(
-                    "MCP SSE session queue full for session=%s; dropping response",
-                    session_id,
-                )
-                return JSONResponse(
-                    status_code=503,
-                    content={
-                        "jsonrpc": "2.0",
-                        "id": mcp_request.id,
-                        "error": {
-                            "code": -32000,
-                            "message": "Session queue full — client is not consuming events fast enough",
-                        },
-                    },
-                )
-            return JSONResponse(content={
-                "jsonrpc": "2.0",
-                "id": mcp_request.id,
-                "result": "queued",
-            })
-
-        return JSONResponse(content=response_content)
-
-    except (ValueError, ValidationError) as exc:
-        status = "validation_error"
-        _log.warning("MCP tool '%s' validation error: %s", tool_name, exc)
-        return JSONResponse(
-            status_code=400,
-            content={
-                "jsonrpc": "2.0",
-                "id": mcp_request.id,
-                "error": {"code": -32602, "message": str(exc)},
-            },
-        )
-    except (RuntimeError, ConnectionError, OSError) as exc:
-        status = "internal_error"
-        _log.error("MCP tool '%s' failed: %s", tool_name, exc, exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "jsonrpc": "2.0",
-                "id": mcp_request.id,
-                "error": {"code": -32000, "message": str(exc)},
-            },
-        )
-    finally:
-        duration = time.monotonic() - start_time
-        MCP_REQUESTS.labels(tool=tool_name, status=status).inc()
-        MCP_REQUEST_DURATION.labels(tool=tool_name).observe(duration)
-
-
-def _get_tool_list() -> list[dict]:
-    """Return the MCP tool list with schemas."""
-    return [
-        {
-            "name": "conv_create_conversation",
-            "description": "Create a new conversation",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "conversation_id": {"type": "string", "format": "uuid", "description": "Caller-supplied ID for idempotent creation"},
-                    "title": {"type": "string", "description": "Optional conversation title"},
-                    "flow_id": {"type": "string", "description": "Optional flow identifier"},
-                    "user_id": {"type": "string", "description": "Optional user identifier"},
-                },
-            },
-        },
-        {
-            "name": "conv_store_message",
-            "description": "Store a message in a conversation (triggers async embedding, assembly, extraction). At least one of context_window_id or conversation_id must be provided.",
-            "inputSchema": {
-                "type": "object",
-                "required": ["role", "sender"],
-                "properties": {
-                    "context_window_id": {"type": "string", "format": "uuid", "description": "Context window ID (resolves conversation automatically). At least one of context_window_id or conversation_id is required."},
-                    "conversation_id": {"type": "string", "format": "uuid", "description": "Direct conversation ID (skips context window lookup). At least one of context_window_id or conversation_id is required."},
-                    "role": {"type": "string", "enum": ["user", "assistant", "system", "tool"]},
-                    "sender": {"type": "string"},
-                    "recipient": {"type": "string"},
-                    "content": {"type": "string"},
-                    "priority": {"type": "integer", "default": 0},
-                    "model_name": {"type": "string"},
-                    "tool_calls": {"type": "object"},
-                    "tool_call_id": {"type": "string"},
-                },
-            },
-        },
-        {
-            "name": "conv_retrieve_context",
-            "description": "Retrieve the assembled context window for a participant",
-            "inputSchema": {
-                "type": "object",
-                "required": ["context_window_id"],
-                "properties": {
-                    "context_window_id": {"type": "string", "format": "uuid"},
-                },
-            },
-        },
-        {
-            "name": "conv_create_context_window",
-            "description": "Create a context window instance with a build type and token budget",
-            "inputSchema": {
-                "type": "object",
-                "required": ["conversation_id", "participant_id", "build_type"],
-                "properties": {
-                    "conversation_id": {"type": "string", "format": "uuid"},
-                    "participant_id": {"type": "string"},
-                    "build_type": {"type": "string"},
-                    "max_tokens": {"type": "integer"},
-                },
-            },
-        },
-        {
-            "name": "conv_search",
-            "description": "Semantic and structured search across conversations",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "limit": {"type": "integer", "default": 10},
-                    "offset": {"type": "integer", "default": 0},
-                    "date_from": {"type": "string", "description": "ISO-8601 date lower bound"},
-                    "date_to": {"type": "string", "description": "ISO-8601 date upper bound"},
-                    "flow_id": {"type": "string", "description": "Filter by flow identifier"},
-                    "user_id": {"type": "string", "description": "Filter by user identifier"},
-                    "sender": {"type": "string", "description": "Filter by sender (matches conversations containing messages from this sender)"},
-                },
-            },
-        },
-        {
-            "name": "conv_search_messages",
-            "description": "Hybrid search (vector + BM25 + reranking) across messages",
-            "inputSchema": {
-                "type": "object",
-                "required": ["query"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "conversation_id": {"type": "string", "format": "uuid"},
-                    "sender": {"type": "string", "description": "Filter by sender"},
-                    "role": {"type": "string", "enum": ["user", "assistant", "system", "tool"]},
-                    "date_from": {"type": "string", "description": "ISO-8601 date lower bound"},
-                    "date_to": {"type": "string", "description": "ISO-8601 date upper bound"},
-                    "limit": {"type": "integer", "default": 10},
-                },
-            },
-        },
-        {
-            "name": "conv_get_history",
-            "description": "Retrieve full chronological message sequence for a conversation",
-            "inputSchema": {
-                "type": "object",
-                "required": ["conversation_id"],
-                "properties": {
-                    "conversation_id": {"type": "string", "format": "uuid"},
-                    "limit": {"type": "integer"},
-                },
-            },
-        },
-        {
-            "name": "conv_search_context_windows",
-            "description": "Search and list context windows",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "context_window_id": {"type": "string", "format": "uuid", "description": "Look up a specific context window by ID"},
-                    "conversation_id": {"type": "string", "format": "uuid"},
-                    "participant_id": {"type": "string"},
-                    "build_type": {"type": "string"},
-                    "limit": {"type": "integer", "default": 10},
-                },
-            },
-        },
-        {
-            "name": "mem_search",
-            "description": "Semantic and graph search across extracted knowledge",
-            "inputSchema": {
-                "type": "object",
-                "required": ["query", "user_id"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "user_id": {"type": "string"},
-                    "limit": {"type": "integer", "default": 10},
-                },
-            },
-        },
-        {
-            "name": "mem_get_context",
-            "description": "Retrieve relevant memories formatted for prompt injection",
-            "inputSchema": {
-                "type": "object",
-                "required": ["query", "user_id"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "user_id": {"type": "string"},
-                    "limit": {"type": "integer", "default": 5},
-                },
-            },
-        },
-        {
-            "name": "mem_add",
-            "description": "Directly add a memory to the knowledge graph",
-            "inputSchema": {
-                "type": "object",
-                "required": ["content", "user_id"],
-                "properties": {
-                    "content": {"type": "string"},
-                    "user_id": {"type": "string"},
-                },
-            },
-        },
-        {
-            "name": "mem_list",
-            "description": "List all memories for a user",
-            "inputSchema": {
-                "type": "object",
-                "required": ["user_id"],
-                "properties": {
-                    "user_id": {"type": "string"},
-                    "limit": {"type": "integer", "default": 50},
-                },
-            },
-        },
-        {
-            "name": "mem_delete",
-            "description": "Delete a specific memory by ID",
-            "inputSchema": {
-                "type": "object",
-                "required": ["memory_id"],
-                "properties": {
-                    "memory_id": {"type": "string"},
-                },
-            },
-        },
-        {
-            "name": "imperator_chat",
-            "description": "Conversational interface to the Imperator",
-            "inputSchema": {
-                "type": "object",
-                "required": ["message"],
-                "properties": {
-                    "message": {"type": "string"},
-                    "conversation_id": {"type": "string", "format": "uuid"},
-                },
-            },
-        },
-        {
-            "name": "metrics_get",
-            "description": "Retrieve Prometheus metrics",
-            "inputSchema": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    ]
-```
-
----
-
-`app/routes/metrics.py`
-
-```python
-"""
-Prometheus metrics endpoint.
-
-Exposes metrics collected from StateGraph executions.
-Metrics are produced inside StateGraphs, not in route handlers.
-"""
-
-import logging
-
-from fastapi import APIRouter
-from fastapi.responses import Response
-from prometheus_client import CONTENT_TYPE_LATEST
-
-from app.flows.metrics_flow import build_metrics_flow
-
-_log = logging.getLogger("context_broker.routes.metrics")
-
-router = APIRouter()
-
-# R6-m1: Lazy-initialized flow singleton — compiled on first use instead of
-# at import time, so module import doesn't trigger graph compilation.
-_metrics_flow = None
-
-
-def _get_metrics_flow():
-    global _metrics_flow
-    if _metrics_flow is None:
-        _metrics_flow = build_metrics_flow()
-    return _metrics_flow
-
-
-@router.get("/metrics")
-async def get_metrics() -> Response:
-    """Expose Prometheus metrics in exposition format.
-
-    Metrics are collected inside the StateGraph flow.
-    """
-    initial_state = {
-        "action": "collect",
-        "metrics_output": "",
-        "error": None,
-    }
-    result = await _get_metrics_flow().ainvoke(initial_state)
-
-    # G5-30: Check for flow errors and return 500 instead of masking with 200.
-    if result.get("error"):
-        _log.error("Metrics flow error: %s", result["error"])
-        return Response(
-            content=f"# ERROR: metrics collection failed: {result['error']}\n",
-            media_type="text/plain",
-            status_code=500,
-        )
-
-    metrics_data = result.get("metrics_output", "")
-    return Response(content=metrics_data, media_type=CONTENT_TYPE_LATEST)
-```
-
----
-
-`app/token_budget.py`
-
-```python
-"""
-Token budget resolution for context windows.
-
-Resolves the max_context_tokens setting for a build type:
-- "auto": query the configured LLM provider's model list endpoint
-- explicit integer: use that value directly
-- caller override: takes precedence over build type default
-
-Token budget is resolved once at window creation and stored.
-"""
-
-import logging
 from typing import Optional
 
-import httpx
+_log = logging.getLogger("context_broker.te.domain_mem0")
 
-from app.config import get_api_key
-
-_log = logging.getLogger("context_broker.token_budget")
-
-
-async def resolve_token_budget(
-    config: dict,
-    build_type_config: dict,
-    caller_override: Optional[int] = None,
-) -> int:
-    """Resolve the token budget for a context window.
-
-    Priority order:
-    1. caller_override (explicit max_tokens from the caller)
-    2. build_type_config["max_context_tokens"] if it's an integer
-    3. Auto-query the LLM provider if max_context_tokens == "auto"
-    4. fallback_tokens from build_type_config
-
-    Args:
-        config: Full application config (for LLM provider settings).
-        build_type_config: The build type configuration dict.
-        caller_override: Optional explicit token budget from the caller.
-
-    Returns:
-        Resolved token budget as an integer.
-    """
-    if caller_override is not None and caller_override > 0:
-        _log.info("Token budget: using caller override %d", caller_override)
-        return caller_override
-
-    max_context_tokens = build_type_config.get("max_context_tokens", "auto")
-    fallback_tokens = build_type_config.get("fallback_tokens", 8192)
-
-    if isinstance(max_context_tokens, int) and max_context_tokens > 0:
-        _log.info("Token budget: using explicit build type value %d", max_context_tokens)
-        return max_context_tokens
-
-    if max_context_tokens == "auto":
-        resolved = await _query_provider_context_length(config, fallback_tokens)
-        _log.info("Token budget: auto-resolved to %d", resolved)
-        return resolved
-
-    _log.warning(
-        "Token budget: unrecognized max_context_tokens value '%s', using fallback %d",
-        max_context_tokens,
-        fallback_tokens,
-    )
-    return fallback_tokens
+_domain_mem0_instance = None
+_domain_mem0_lock = asyncio.Lock()
 
 
-async def _query_provider_context_length(config: dict, fallback: int) -> int:
-    """Query the LLM provider's model list endpoint for context length.
-
-    Returns fallback if the provider doesn't report context length or
-    if the request fails.
-    """
-    llm_config = config.get("llm", {})
-    base_url = llm_config.get("base_url", "")
-    model = llm_config.get("model", "")
-    api_key = get_api_key(llm_config)
-
-    if not base_url or not model:
-        _log.warning(
-            "Token budget auto-resolution: LLM provider not configured, using fallback %d",
-            fallback,
-        )
-        return fallback
-
+def _build_domain_mem0(config: dict) -> object:
+    """Build a Mem0 Memory instance for domain knowledge."""
+    # Apply patches (same as AE client — dedup protection)
     try:
-        headers = {}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        from context_broker_ae.memory.mem0_client import _apply_mem0_patches
 
-        models_url = base_url.rstrip("/") + "/models"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(models_url, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        _apply_mem0_patches()
+    except ImportError:
+        pass
 
-        models = data.get("data", [])
-        for model_info in models:
-            if model_info.get("id") == model:
-                context_length = model_info.get("context_length")
-                if isinstance(context_length, int) and context_length > 0:
-                    return context_length
+    from mem0 import Memory
+    from mem0.configs.base import (
+        EmbedderConfig,
+        GraphStoreConfig,
+        LlmConfig,
+        MemoryConfig,
+        VectorStoreConfig,
+    )
 
-        _log.info(
-            "Token budget: model '%s' not found in provider model list, using fallback %d",
-            model,
-            fallback,
-        )
-        return fallback
+    from app.config import get_api_key
 
-    except httpx.HTTPError as exc:
-        _log.warning(
-            "Token budget: failed to query provider model list: %s, using fallback %d",
-            exc,
-            fallback,
-        )
-        return fallback
-    except (ValueError, KeyError, OSError) as exc:
-        _log.warning(
-            "Token budget: unexpected error querying provider: %s, using fallback %d",
-            exc,
-            fallback,
-        )
-        return fallback
+    # Use the same LLM and embeddings config as the AE
+    llm_config = config.get("extraction", {}) or config.get("llm", {})
+    embeddings_config = config.get("embeddings", {})
+
+    llm_api_key = get_api_key(llm_config)
+    embeddings_api_key = get_api_key(embeddings_config)
+
+    postgres_password = os.environ.get("POSTGRES_PASSWORD", "")
+    neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
+
+    # embedding_dims from config
+    embedding_dims = embeddings_config.get("embedding_dims")
+    if embedding_dims is None:
+        embedding_dims = config.get("embedding_dims")
+    if embedding_dims is None:
+        raise ValueError("embedding_dims is required for domain Mem0 client")
+
+    neo4j_host = os.environ.get("NEO4J_HOST", "context-broker-neo4j")
+    neo4j_port = os.environ.get("NEO4J_PORT", "7687")
+
+    mem_config = MemoryConfig(
+        version="v1.1",
+        llm=LlmConfig(
+            provider="openai",
+            config={
+                "api_key": llm_api_key or "",
+                "model": llm_config.get("model", "gpt-4o-mini"),
+                "openai_base_url": llm_config.get(
+                    "base_url", "https://api.openai.com/v1"
+                ),
+            },
+        ),
+        embedder=EmbedderConfig(
+            provider="openai",
+            config={
+                "api_key": embeddings_api_key or "",
+                "model": embeddings_config.get("model", "text-embedding-3-small"),
+                "openai_base_url": embeddings_config.get(
+                    "base_url", "https://api.openai.com/v1"
+                ),
+            },
+        ),
+        vector_store=VectorStoreConfig(
+            provider="pgvector",
+            config={
+                "host": os.environ.get("POSTGRES_HOST", "context-broker-postgres"),
+                "port": int(os.environ.get("POSTGRES_PORT", "5432")),
+                "dbname": os.environ.get("POSTGRES_DB", "context_broker"),
+                "user": os.environ.get("POSTGRES_USER", "context_broker"),
+                "password": postgres_password,
+                "collection_name": "domain_memories",
+                "embedding_model_dims": int(embedding_dims),
+                "diskann": False,
+            },
+        ),
+        graph_store=GraphStoreConfig(
+            provider="neo4j",
+            config={
+                "url": f"bolt://{neo4j_host}:{neo4j_port}",
+                "username": "neo4j",
+                "password": neo4j_password or "neo4j",
+            },
+        ),
+    )
+
+    return Memory(config=mem_config)
+
+
+async def get_domain_mem0(config: dict) -> Optional[object]:
+    """Get or create the domain Mem0 singleton."""
+    global _domain_mem0_instance
+
+    async with _domain_mem0_lock:
+        if _domain_mem0_instance is None:
+            try:
+                loop = asyncio.get_running_loop()
+                _domain_mem0_instance = await loop.run_in_executor(
+                    None, _build_domain_mem0, config
+                )
+                _log.info("Domain Mem0 client initialized")
+            except (ImportError, ValueError, OSError, RuntimeError) as exc:
+                _log.error("Failed to initialize domain Mem0: %s", exc)
+                return None
+        return _domain_mem0_instance
+
+
+def reset_domain_mem0():
+    """Reset the domain Mem0 singleton."""
+    global _domain_mem0_instance
+    _domain_mem0_instance = None
+
 ```
 
----
-
-`app/workers/arq_worker.py`
+## packages/context-broker-te/src/context_broker_te/imperator_flow.py
 
 ```python
 """
-Background worker for the Context Broker.
+Imperator — LangGraph ReAct-style conversational agent flow.
 
-Processes three job types from Redis queues:
-  - embedding_jobs: Generate vector embeddings for messages (list, BLMOVE)
-  - context_assembly_jobs: Build context window summaries (list, BLMOVE)
-  - memory_extraction_jobs: Extract knowledge into Neo4j via Mem0
-    (sorted set, ZPOPMIN — highest priority / lowest score first)
+The Imperator is the Context Broker's built-in conversational agent.
+It uses a proper LangGraph ReAct graph (agent_node -> tool_node loop)
+with no checkpointer — conversation history is loaded from PostgreSQL
+on each invocation and results are stored via the standard message
+pipeline (conv_store_message).
 
-Uses atomic BLMOVE (Redis 7+) for list-backed queues and ZPOPMIN for
-sorted-set queues. Includes retry with backoff, dead-letter handling,
-and crash-safe lock cleanup for assembly and extraction flows.
+Uses LangChain's ChatOpenAI.bind_tools() for tool binding.
+
+ARCH-05: ReAct loop is graph edges, not a while loop inside a node.
+ARCH-06: No MemorySaver — DB is the persistence layer.
+F-22:    Messages stored through conv_store_message pipeline.
 """
 
-import asyncio
-import json
 import logging
-import random
-import sys
-import time
+import socket
 import uuid
-from typing import Any
+from typing import Annotated, Optional
 
-import redis.asyncio as aioredis
-import redis.exceptions
+import asyncpg
+import httpx
+import openai
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from langchain_core.tools import tool
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from typing_extensions import TypedDict
 
-from app.config import async_load_config, get_tuning
-from app.database import get_redis
-from app.flows.embed_pipeline import build_embed_pipeline
-from app.flows.memory_extraction import build_memory_extraction
+from app.config import get_chat_model, get_tuning
+from app.database import get_pg_pool
+from app.prompt_loader import async_load_prompt
 
-# ARCH-18: Import build_types package to trigger registration of all build types
-import app.flows.build_types  # noqa: F401
-from app.flows.build_type_registry import get_assembly_graph
-from app.metrics_registry import (
-    ASSEMBLY_QUEUE_DEPTH,
-    EMBEDDING_QUEUE_DEPTH,
-    EXTRACTION_QUEUE_DEPTH,
-    JOB_DURATION,
-    JOBS_COMPLETED,
-)
+from context_broker_te.tools.admin import get_tools as get_admin_tools
+from context_broker_te.tools.diagnostic import get_tools as get_diagnostic_tools
+from context_broker_te.tools.operational import get_tools as get_operational_tools
+from context_broker_te.tools.scheduling import get_tools as get_scheduling_tools
 
-_log = logging.getLogger("context_broker.workers.arq_worker")
+_log = logging.getLogger("context_broker.flows.imperator")
 
-# Map queue names to their depth gauges
-_QUEUE_DEPTH_GAUGES = {
-    "embedding_jobs": EMBEDDING_QUEUE_DEPTH,
-    "context_assembly_jobs": ASSEMBLY_QUEUE_DEPTH,
-    "memory_extraction_jobs": EXTRACTION_QUEUE_DEPTH,
-}
-
-# Lazy-initialized flow singletons — compiled on first use
-_embed_flow = None
-_extraction_flow = None
+# MAD identity — hostname is the Docker container name
+_MAD_HOSTNAME = socket.gethostname()
 
 
-def _get_embed_flow():
-    global _embed_flow
-    if _embed_flow is None:
-        _embed_flow = build_embed_pipeline()
-    return _embed_flow
+# ── State ────────────────────────────────────────────────────────────────
 
 
-def _get_extraction_flow():
-    global _extraction_flow
-    if _extraction_flow is None:
-        _extraction_flow = build_memory_extraction()
-    return _extraction_flow
+class ImperatorState(TypedDict):
+    """State for the Imperator ReAct agent.
+
+    ARCH-05: messages accumulates via add_messages reducer across
+    agent_node <-> tool_node cycles.  The graph runs fresh each
+    invocation — no checkpointer.
+    """
+
+    messages: Annotated[list[AnyMessage], add_messages]
+    context_window_id: Optional[str]
+    config: dict
+    response_text: Optional[str]
+    error: Optional[str]
+    iteration_count: int
 
 
-async def process_embedding_job(job: dict) -> None:
-    """Process a single embedding job using the embed pipeline StateGraph."""
+# ── Core search tools (depend on AE flow singletons) ──────────────────
+
+_conv_search_flow_singleton = None
+_mem_search_flow_singleton = None
+
+
+def _get_conv_search_flow():
+    global _conv_search_flow_singleton
+    if _conv_search_flow_singleton is None:
+        from app.stategraph_registry import get_flow_builder
+
+        builder = get_flow_builder("conversation_search")
+        if builder is None:
+            raise RuntimeError(
+                "AE package not loaded: conversation_search flow unavailable"
+            )
+        _conv_search_flow_singleton = builder()
+    return _conv_search_flow_singleton
+
+
+def _get_mem_search_flow():
+    global _mem_search_flow_singleton
+    if _mem_search_flow_singleton is None:
+        from app.stategraph_registry import get_flow_builder
+
+        builder = get_flow_builder("memory_search")
+        if builder is None:
+            raise RuntimeError("AE package not loaded: memory_search flow unavailable")
+        _mem_search_flow_singleton = builder()
+    return _mem_search_flow_singleton
+
+
+@tool
+async def conv_search(query: str, limit: int = 5) -> str:
+    """Search conversation history for relevant messages and conversations.
+
+    Use this when the user asks about what was said, discussed, or decided
+    in past conversations.
+
+    Args:
+        query: The search query describing what to find.
+        limit: Maximum number of results to return (default 5).
+    """
+    from app.config import async_load_config
+
     config = await async_load_config()
-    message_id = job.get("message_id", "")
-    conversation_id = job.get("conversation_id", "")
-
-    # M-25: Validate UUIDs from Redis job data before passing to flows
-    try:
-        if message_id:
-            uuid.UUID(message_id)
-        if conversation_id:
-            uuid.UUID(conversation_id)
-    except ValueError as exc:
-        raise ValueError(f"Malformed UUID in embedding job: {exc}") from exc
-
-    _log.info("Processing embedding job: message_id=%s", message_id)
-    start = time.monotonic()
-
-    result = await _get_embed_flow().ainvoke(
+    flow = _get_conv_search_flow()
+    result = await flow.ainvoke(
         {
-            "message_id": message_id,
-            "conversation_id": conversation_id,
+            "query": query,
+            "limit": limit,
+            "offset": 0,
+            "date_from": None,
+            "date_to": None,
+            "flow_id": None,
+            "user_id": None,
+            "sender": None,
             "config": config,
-            "message": None,
-            "embedding": None,
-            "assembly_jobs_queued": [],
+            "query_embedding": None,
+            "results": [],
+            "warning": None,
             "error": None,
         }
     )
-
-    duration = time.monotonic() - start
-
-    if result.get("error"):
-        _log.error(
-            "Embedding job failed: message_id=%s error=%s",
-            message_id,
-            result["error"],
+    results = result.get("results", [])
+    if not results:
+        return "No conversations found matching that query."
+    lines = [f"Found {len(results)} conversation(s):"]
+    for conv in results:
+        lines.append(
+            f"- {conv.get('title', 'Untitled')} (id: {conv['id']}, "
+            f"messages: {conv.get('total_messages', 0)})"
         )
-        JOBS_COMPLETED.labels(job_type="embed_message", status="error").inc()
-        raise RuntimeError(result["error"])
-
-    _log.info(
-        "Embedding job complete: message_id=%s duration_ms=%d",
-        message_id,
-        int(duration * 1000),
-    )
-    JOB_DURATION.labels(job_type="embed_message").observe(duration)
-    JOBS_COMPLETED.labels(job_type="embed_message", status="success").inc()
+    return "\n".join(lines)
 
 
-async def process_assembly_job(job: dict) -> None:
-    """Process a single context assembly job using the assembly StateGraph."""
-    config = await async_load_config()
-    context_window_id = job.get("context_window_id", "")
-    conversation_id = job.get("conversation_id", "")
-    build_type = job.get("build_type", "standard-tiered")
+@tool
+async def mem_search(query: str, user_id: str = "imperator", limit: int = 5) -> str:
+    """Search extracted knowledge and memories from the knowledge graph.
 
-    # M-25: Validate UUIDs from Redis job data before passing to flows
-    try:
-        if context_window_id:
-            uuid.UUID(context_window_id)
-        if conversation_id:
-            uuid.UUID(conversation_id)
-    except ValueError as exc:
-        raise ValueError(f"Malformed UUID in assembly job: {exc}") from exc
+    Use this when the user asks about facts, preferences, relationships,
+    or anything that has been learned and stored as structured knowledge.
 
-    _log.info("Processing assembly job: window=%s build_type=%s", context_window_id, build_type)
-    start = time.monotonic()
-
-    # ARCH-18: Look up the assembly graph from the registry by build type name
-    assembly_graph = get_assembly_graph(build_type)
-
-    lock_key = f"assembly_in_progress:{context_window_id}"
-    try:
-        # R5-m10: Pass only the AssemblyInput contract fields plus common
-        # lock-management fields. Build-type-specific intermediate state
-        # (e.g., standard-tiered's all_messages, chunks) is populated by
-        # each graph's own nodes. This avoids passing keys that don't
-        # exist in simpler build types like passthrough.
-        result = await assembly_graph.ainvoke(
-            {
-                "context_window_id": context_window_id,
-                "conversation_id": conversation_id,
-                "config": config,
-            }
-        )
-    except Exception:
-        # R6-M5: Don't delete the lock unconditionally — that could release
-        # another worker's lock. The lock has a TTL; let it expire naturally.
-        _log.warning(
-            "Assembly graph crashed for window=%s; lock %s will expire via TTL",
-            context_window_id,
-            lock_key,
-        )
-        raise
-
-    duration = time.monotonic() - start
-
-    if result.get("error"):
-        _log.error(
-            "Assembly job failed: window=%s error=%s",
-            context_window_id,
-            result["error"],
-        )
-        JOBS_COMPLETED.labels(job_type="assemble_context", status="error").inc()
-        raise RuntimeError(result["error"])
-
-    _log.info(
-        "Assembly job complete: window=%s duration_ms=%d",
-        context_window_id,
-        int(duration * 1000),
-    )
-    JOB_DURATION.labels(job_type="assemble_context").observe(duration)
-    JOBS_COMPLETED.labels(job_type="assemble_context", status="success").inc()
-
-
-async def process_extraction_job(job: dict) -> None:
-    """Process a single memory extraction job using the extraction StateGraph."""
-    config = await async_load_config()
-    conversation_id = job.get("conversation_id", "")
-
-    # M-25: Validate UUIDs from Redis job data before passing to flows
-    try:
-        if conversation_id:
-            uuid.UUID(conversation_id)
-    except ValueError as exc:
-        raise ValueError(f"Malformed UUID in extraction job: {exc}") from exc
-
-    _log.info("Processing extraction job: conversation_id=%s", conversation_id)
-    start = time.monotonic()
-
-    lock_key = f"extraction_in_progress:{conversation_id}"
-    try:
-        result = await _get_extraction_flow().ainvoke(
-            {
-                "conversation_id": conversation_id,
-                "config": config,
-                "messages": [],
-                "user_id": "",
-                "extraction_text": "",
-                "selected_message_ids": [],
-                "fully_extracted_ids": [],
-                "lock_key": "",
-                "lock_acquired": False,
-                "extracted_count": 0,
-                "error": None,
-            }
-        )
-    except Exception:
-        # R6-M5: Don't delete the lock unconditionally — that could release
-        # another worker's lock. The lock has a TTL; let it expire naturally.
-        _log.warning(
-            "Extraction graph crashed for conversation=%s; lock %s will expire via TTL",
-            conversation_id,
-            lock_key,
-        )
-        raise
-
-    duration = time.monotonic() - start
-
-    if result.get("error") and result["error"] != "Mem0 client not available":
-        _log.error(
-            "Extraction job failed: conversation_id=%s error=%s",
-            conversation_id,
-            result["error"],
-        )
-        JOBS_COMPLETED.labels(job_type="extract_memory", status="error").inc()
-        raise RuntimeError(result["error"])
-
-    _log.info(
-        "Extraction job complete: conversation_id=%s extracted=%d duration_ms=%d",
-        conversation_id,
-        result.get("extracted_count", 0),
-        int(duration * 1000),
-    )
-    JOB_DURATION.labels(job_type="extract_memory").observe(duration)
-    JOBS_COMPLETED.labels(job_type="extract_memory", status="success").inc()
-
-
-async def _handle_job_failure(
-    redis: aioredis.Redis,
-    queue_name: str,
-    job: dict,
-    raw_job: str,
-    error: Exception,
-    config: dict,
-) -> None:
-    """Handle a failed job: schedule retry with backoff or move to dead-letter.
-
-    Instead of sleeping (which blocks the consumer loop), the job is pushed
-    back to the queue with a retry_after timestamp. The consumer checks this
-    timestamp and re-queues jobs that are not yet ready.
+    Args:
+        query: The search query describing what knowledge to find.
+        user_id: The user whose memories to search (default: imperator).
+        limit: Maximum number of results to return (default 5).
     """
-    max_retries = get_tuning(config, "max_retries", 3)
-    attempt = job.get("attempt", 1) + 1
-    job["attempt"] = attempt
+    from app.config import async_load_config
 
-    if attempt <= max_retries:
-        # R6-m18: Add random jitter to prevent thundering herd on retries
-        backoff = min(2 ** (attempt - 1) * 5, 60) + random.uniform(0, 2)
-        job["retry_after"] = time.time() + backoff
-        _log.warning(
-            "Scheduling retry (attempt=%d backoff=%ds): queue=%s error=%s",
-            attempt,
-            backoff,
-            queue_name,
-            error,
-        )
-        # B-03 / G5-34: Use sorted set for delayed queue (score = retry_after)
-        retry_after_ts = job["retry_after"]
-        await redis.zadd(
-            f"{queue_name}:delayed", {json.dumps(job): retry_after_ts}
-        )
-    else:
-        _log.error(
-            "Dead-lettering job after %d attempts: queue=%s error=%s",
-            max_retries,
-            queue_name,
-            error,
-        )
-        await redis.lpush("dead_letter_jobs", raw_job)
+    config = await async_load_config()
+    flow = _get_mem_search_flow()
+    result = await flow.ainvoke(
+        {
+            "query": query,
+            "user_id": user_id,
+            "limit": limit,
+            "config": config,
+            "memories": [],
+            "relations": [],
+            "degraded": False,
+            "error": None,
+        }
+    )
+    memories = result.get("memories", [])
+    if not memories:
+        return "No relevant memories found."
+    lines = [f"Found {len(memories)} relevant memory/memories:"]
+    for mem in memories:
+        fact = mem.get("memory") or mem.get("content") or str(mem)
+        lines.append(f"- {fact}")
+    return "\n".join(lines)
 
 
-async def _consume_queue(
-    queue_name: str,
-    processor,
-    config: dict,
-    *,
-    sorted_set: bool = False,
-) -> None:
-    """Independent consumer loop for a single Redis queue.
+# ── Tool assembly ──────────────────────────────────────────────────────
 
-    For list-backed queues, uses BLMOVE to atomically pop from the source
-    queue into a processing queue. For sorted-set queues (sorted_set=True),
-    uses ZPOPMIN to get the highest-priority (lowest score) job.
+# Core tools: always available
+_core_tools: list = [conv_search, mem_search]
 
-    On success the job is removed from the processing queue. On crash,
-    items remain in the processing queue and can be recovered.
+
+def _collect_tools(imperator_config: dict) -> list:
+    """Collect all active tools based on config.
+
+    Discovers tools from the tools/ modules via get_tools().
     """
-    _log.info("Queue consumer started: %s (sorted_set=%s)", queue_name, sorted_set)
-    processing_queue = f"{queue_name}:processing"
-    poll_timeout = get_tuning(config, "worker_poll_interval_seconds", 2)
-    # G5-33: Track consecutive failures for backoff
-    consecutive_failures = 0
-    _FAILURE_BACKOFF_THRESHOLD = 3
-    _FAILURE_BACKOFF_SECONDS = 5
+    active = list(_core_tools)
+    active.extend(get_diagnostic_tools())
+    active.extend(get_scheduling_tools())
+    if imperator_config.get("admin_tools", False):
+        active.extend(get_admin_tools())
+    active.extend(get_operational_tools(imperator_config))
+    return active
 
-    while True:
-        raw_job = None
-        job = None
-        try:
-            redis = get_redis()
 
-            # Update queue depth gauge for this queue
-            depth_gauge = _QUEUE_DEPTH_GAUGES.get(queue_name)
-            if depth_gauge is not None:
-                if sorted_set:
-                    # F-01: Extraction queue is a sorted set
-                    queue_len = await redis.zcard(queue_name)
-                else:
-                    queue_len = await redis.llen(queue_name)
-                depth_gauge.set(queue_len)
+# ── Message pipeline singleton ──────────────────────────────────────────
 
-            if sorted_set:
-                # F-01: Use ZPOPMIN for sorted-set backed queues
-                # R6-M6: ZPOPMIN + LPUSH to processing queue is not atomic.
-                # If the worker crashes between these two operations, the job
-                # is lost from the sorted set but not yet in the processing
-                # queue. The startup stranded-job sweep (_sweep_stranded_processing_jobs)
-                # recovers jobs that made it to the processing queue. For the
-                # narrow window between ZPOPMIN and LPUSH, the original enqueuer's
-                # retry/dead-letter logic provides eventual recovery.
-                result = await redis.zpopmin(queue_name, count=1)
-                if not result:
-                    # No items available — wait before polling again
-                    await asyncio.sleep(poll_timeout)
-                    continue
-                raw_job = result[0][0]  # (member, score) tuple
-                # Track in processing list for crash recovery
-                await redis.lpush(processing_queue, raw_job)
-            else:
-                # Atomically move job from source queue to processing queue
-                raw_job = await redis.blmove(
-                    queue_name,
-                    processing_queue,
-                    timeout=poll_timeout,
-                    wherefrom="RIGHT",
-                    whereto="LEFT",
-                )
+# R7-m14: Pre-bound LLM with tools — set at graph compilation time
+_prebound_llm = None
 
-            if not raw_job:
-                # blmove returned None on timeout — loop back
-                continue
+_message_pipeline_singleton = None
 
-            # decode_responses=True ensures Redis returns strings, not bytes.
-            job = json.loads(raw_job)
 
-            # Strip retry_after if present (jobs promoted from delayed queue)
-            job.pop("retry_after", None)
+def _get_message_pipeline():
+    """Lazy-init the standard message pipeline flow."""
+    global _message_pipeline_singleton
+    if _message_pipeline_singleton is None:
+        from app.stategraph_registry import get_flow_builder
 
-            await processor(job)
-
-            # Success — remove from processing queue and reset failure counter
-            await redis.lrem(processing_queue, 1, raw_job)
-            consecutive_failures = 0
-
-        except asyncio.CancelledError:
-            _log.info("Queue consumer cancelled: %s", queue_name)
-            raise
-        # M-24: Broadened exception handler to cover flow-level errors
-        # (ValueError, KeyError, TypeError) that shouldn't kill the consumer.
-        # CB-R3-05: Added redis.exceptions.RedisError for Redis-level failures.
-        except (RuntimeError, ConnectionError, json.JSONDecodeError, OSError,
-                ValueError, KeyError, TypeError,
-                redis.exceptions.RedisError) as exc:
-            _log.error(
-                "Job processing error in queue %s: %s", queue_name, exc, exc_info=True
+        builder = get_flow_builder("message_pipeline")
+        if builder is None:
+            raise RuntimeError(
+                "AE package not loaded: message_pipeline flow unavailable"
             )
-            # M6: Wrap error handler Redis ops in their own try/except
-            # to prevent crashes when Redis is unavailable during error handling
-            try:
-                if job is not None and raw_job is not None:
-                    # Remove from processing queue before retry/dead-letter
-                    err_redis = get_redis()
-                    await err_redis.lrem(processing_queue, 1, raw_job)
-                    await _handle_job_failure(
-                        err_redis, queue_name, job, raw_job, exc, config
-                    )
-            except (ConnectionError, OSError, redis.exceptions.RedisError) as redis_exc:
-                # R5-M26: Log the job payload to stderr so it's not completely lost
-                _log.error(
-                    "Redis failure during error handling for queue %s: %s",
-                    queue_name,
-                    redis_exc,
-                )
-                print(
-                    f"LOST_JOB queue={queue_name} payload={raw_job}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-
-            # G5-33: Backoff on repeated consecutive failures
-            consecutive_failures += 1
-            if consecutive_failures >= _FAILURE_BACKOFF_THRESHOLD:
-                _log.warning(
-                    "Consumer %s hit %d consecutive failures, backing off %ds",
-                    queue_name,
-                    consecutive_failures,
-                    _FAILURE_BACKOFF_SECONDS,
-                )
-                await asyncio.sleep(_FAILURE_BACKOFF_SECONDS)
+        _message_pipeline_singleton = builder()
+    return _message_pipeline_singleton
 
 
-async def _sweep_dead_letters(config: dict) -> None:
-    """Periodically re-queue dead-letter jobs for retry.
+# ── Helper: load DB history ─────────────────────────────────────────────
 
-    Increments the attempt counter instead of resetting it.
-    Discards jobs that exceed max_total_dead_letter_attempts to
-    prevent infinite retry loops.
+
+async def _load_conversation_history(context_window_id: str, config: dict) -> str:
+    """Load recent conversation history from PostgreSQL for context.
+
+    ARCH-06: History comes from the DB, not a checkpointer.  Returns a
+    formatted string to embed in the system prompt.
     """
-    redis = get_redis()
-    swept = 0
-    max_retries = get_tuning(config, "max_retries", 3)
-    max_total_attempts = max_retries * 2
+    history_limit = get_tuning(config, "imperator_history_limit", 20)
+    try:
+        pool = get_pg_pool()
+        cw_row = await pool.fetchrow(
+            "SELECT conversation_id FROM context_windows WHERE id = $1",
+            uuid.UUID(context_window_id),
+        )
+        if cw_row is None:
+            _log.warning("Context window %s not found", context_window_id)
+            return ""
 
-    for _ in range(10):
-        raw = await redis.rpop("dead_letter_jobs")
-        if not raw:
+        conversation_id = cw_row["conversation_id"]
+        rows = await pool.fetch(
+            """
+            SELECT role, content
+            FROM conversation_messages
+            WHERE conversation_id = $1
+            ORDER BY sequence_number DESC
+            LIMIT $2
+            """,
+            conversation_id,
+            history_limit,
+        )
+        if not rows:
+            return ""
+
+        history_lines = []
+        for row in reversed(rows):
+            row_content = row.get("content") or ""
+            history_lines.append(f"[{row['role']}]: {row_content}")
+        return (
+            "\n\n--- Recent conversation history (for context) ---\n"
+            + "\n".join(history_lines)
+            + "\n--- End of history ---\n"
+        )
+    except (RuntimeError, OSError, asyncpg.PostgresError) as exc:
+        _log.warning("Failed to load Imperator history: %s", exc)
+        return ""
+
+
+# ── Graph nodes ──────────────────────────────────────────────────────────
+
+
+async def agent_node(state: ImperatorState) -> dict:
+    """Call the LLM with bound tools and return the response.
+
+    ARCH-05: This node contains NO loop.  Flow control (tool-call vs
+    final answer) is handled by the conditional edge after this node.
+
+    On the first call (no system prompt in messages yet), loads DB
+    history and prepends the system prompt + history context.
+    """
+    config = state["config"]
+
+    # R7-m14: Use the pre-bound LLM from graph compilation.
+    # Falls back to runtime binding if _prebound_llm is not available (e.g., tests).
+    llm_with_tools = _prebound_llm
+    if llm_with_tools is None:
+        imperator_config = config.get("imperator", {})
+        active_tools = _collect_tools(imperator_config)
+        llm = get_chat_model(config, role="imperator")
+        llm_with_tools = llm.bind_tools(active_tools)
+
+    messages = list(state["messages"])
+
+    # First call: prepend system prompt with DB history context
+    has_system = any(isinstance(m, SystemMessage) for m in messages)
+    if not has_system:
+        imperator_cfg = config.get("imperator", {})
+        prompt_name = imperator_cfg.get("system_prompt", "imperator_identity")
+        try:
+            system_content = await async_load_prompt(prompt_name)
+        except RuntimeError as exc:
+            _log.error("Failed to load system prompt '%s': %s", prompt_name, exc)
+            return {
+                "messages": [AIMessage(content="I encountered a configuration error.")],
+                "response_text": "I encountered a configuration error.",
+                "error": f"Prompt loading failed: {exc}",
+            }
+
+        # D-07: Load context via the get_context core tool (self-consumption).
+        conversation_id = state.get("context_window_id")
+        if conversation_id:
+            try:
+                from app.flows.tool_dispatch import dispatch_tool
+
+                build_type = imperator_cfg.get("build_type", "standard-tiered")
+                budget = imperator_cfg.get("max_context_tokens", 8192)
+                if not isinstance(budget, int):
+                    budget = 8192
+
+                ctx_result = await dispatch_tool(
+                    "get_context",
+                    {
+                        "build_type": build_type,
+                        "budget": budget,
+                        "conversation_id": str(conversation_id),
+                    },
+                    config,
+                    None,
+                )
+                context_messages = ctx_result.get("context", [])
+                if context_messages:
+                    history_lines = []
+                    for msg in context_messages:
+                        role = msg.get("role", "unknown")
+                        content = msg.get("content", "")
+                        if content:
+                            history_lines.append(f"[{role}] {content}")
+                    if history_lines:
+                        system_content += (
+                            "\n\n--- Conversation History ---\n"
+                            + "\n".join(history_lines)
+                        )
+            except (ValueError, RuntimeError, OSError) as exc:
+                _log.warning("Failed to load context via get_context: %s", exc)
+
+        messages = [SystemMessage(content=system_content)] + messages
+
+    # CB-R3-06: Truncate older messages if the list exceeds the limit.
+    max_react_messages = get_tuning(config, "imperator_max_react_messages", 40)
+    if len(messages) > max_react_messages:
+        from langchain_core.messages import ToolMessage
+
+        cut_index = len(messages) - (max_react_messages - 1)
+        while cut_index < len(messages) and isinstance(
+            messages[cut_index], ToolMessage
+        ):
+            cut_index += 1
+        messages = [messages[0]] + messages[cut_index:]
+
+    try:
+        response = await llm_with_tools.ainvoke(messages)
+    except (openai.APIError, httpx.HTTPError, ValueError, RuntimeError) as exc:
+        _log.error("Imperator LLM call failed: %s", exc, exc_info=True)
+        return {
+            "messages": [
+                AIMessage(content="I encountered an error processing your request.")
+            ],
+            "response_text": "I encountered an error processing your request.",
+            "error": str(exc),
+        }
+
+    return {
+        "messages": [response],
+        "iteration_count": state.get("iteration_count", 0) + 1,
+    }
+
+
+def should_continue(state: ImperatorState) -> str:
+    """Conditional edge: route to tool_node if tool calls, else store nodes.
+
+    ARCH-05: Flow control is graph edges, not loops in nodes.
+    Enforces imperator_max_iterations to prevent unbounded ReAct loops.
+    """
+    if state.get("error"):
+        return "store_user_message"
+
+    messages = state["messages"]
+    if not messages:
+        return "store_user_message"
+
+    last_message = messages[-1]
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+        max_iterations = get_tuning(
+            state.get("config", {}), "imperator_max_iterations", 5
+        )
+        if state.get("iteration_count", 0) >= max_iterations:
+            _log.warning(
+                "Imperator hit max iterations (%d) — forcing end",
+                max_iterations,
+            )
+            return "store_user_message"
+        return "tool_node"
+
+    return "store_user_message"
+
+
+async def store_user_message(state: ImperatorState) -> dict:
+    """Persist the user's message via the store_message core tool.
+
+    D-01: Split into separate node for MemorySaver compatibility.
+    D-07: Uses dispatch_tool("store_message") — self-consumption.
+    Uses hostname as recipient, user field from config as sender.
+    """
+    conversation_id = state.get("context_window_id")
+    if not conversation_id:
+        return {}
+
+    user_content = None
+    for msg in state["messages"]:
+        if isinstance(msg, HumanMessage):
+            user_content = msg.content
+
+    if not user_content:
+        return {}
+
+    # Sender is whoever sent the message to the Imperator
+    user_identity = (
+        state.get("config", {}).get("imperator", {}).get("_request_user", "unknown")
+    )
+
+    try:
+        from app.flows.tool_dispatch import dispatch_tool
+
+        await dispatch_tool(
+            "store_message",
+            {
+                "conversation_id": str(conversation_id),
+                "role": "user",
+                "sender": user_identity,
+                "recipient": _MAD_HOSTNAME,
+                "content": user_content,
+            },
+            state.get("config", {}),
+            None,
+        )
+    except (ValueError, RuntimeError, OSError) as exc:
+        _log.warning("Failed to store Imperator user message: %s", exc)
+
+    return {}
+
+
+async def store_assistant_message(state: ImperatorState) -> dict:
+    """Persist the assistant's response via the store_message core tool.
+
+    D-01: Second persistence node.
+    D-07: Uses dispatch_tool("store_message") — self-consumption.
+    Uses hostname as sender, user field from config as recipient.
+    """
+    last_ai = None
+    for msg in reversed(state["messages"]):
+        if isinstance(msg, AIMessage) and not msg.tool_calls:
+            last_ai = msg
             break
 
-        # decode_responses=True ensures Redis returns strings, not bytes.
-        try:
-            job = json.loads(raw)
-            job_type = job.get("job_type", "")
+    response_text = last_ai.content if last_ai else ""
 
-            queue_map = {
-                "embed_message": "embedding_jobs",
-                "assemble_context": "context_assembly_jobs",
-                "extract_memory": "memory_extraction_jobs",
-            }
-
-            target_queue = queue_map.get(job_type)
-            if not target_queue:
-                _log.warning(
-                    "Dead-letter sweep: unknown job_type=%s, discarding", job_type
-                )
-                continue
-
-            # Increment attempt counter (do NOT reset to 1)
-            current_attempt = job.get("attempt", 1)
-            if current_attempt >= max_total_attempts:
-                _log.error(
-                    "Dead-letter sweep: discarding job after %d total attempts: "
-                    "job_type=%s job=%s",
-                    current_attempt,
-                    job_type,
-                    json.dumps(job),
-                )
-                continue
-
-            job["attempt"] = current_attempt + 1
-            payload = json.dumps(job)
-            # R5-M18: Extraction queue is a sorted set; use ZADD with the
-            # job's priority as score so retried jobs preserve their priority
-            if target_queue == "memory_extraction_jobs":
-                # R6-M12: Use stored priority, fall back to 2 (assistant priority)
-                score = job.get("priority", 2)
-                await redis.zadd(target_queue, {payload: score})
-            else:
-                await redis.lpush(target_queue, payload)
-            swept += 1
-
-        except json.JSONDecodeError as exc:
-            # G5-35: Preserve unparseable payloads for forensic review
-            _log.error(
-                "Dead-letter sweep: malformed JSON, pushing to "
-                "dead_letter_unparseable: %s", exc,
-            )
-            await redis.lpush("dead_letter_unparseable", raw)
-        except (ConnectionError, OSError) as exc:
-            _log.error("Dead-letter sweep error: %s", exc)
-
-    if swept > 0:
-        _log.info("Dead-letter sweep: re-queued %d jobs", swept)
-
-
-async def _sweep_delayed_queues(config: dict) -> None:
-    """Promote jobs from delayed queues whose retry_after has passed.
-
-    Delayed queues are Redis Sorted Sets keyed by retry_after timestamp
-    (G5-34). Uses ZRANGEBYSCORE to fetch all ready jobs and ZREM + LPUSH
-    to atomically promote them back to the main queue.
-    """
-    redis = get_redis()
-    now = time.time()
-    promoted = 0
-
-    queue_names = ["embedding_jobs", "context_assembly_jobs", "memory_extraction_jobs"]
-    for queue_name in queue_names:
-        delayed_queue = f"{queue_name}:delayed"
-        # G5-34: Use ZRANGEBYSCORE to fetch all ready jobs from sorted set
-        try:
-            ready_jobs = await redis.zrangebyscore(
-                delayed_queue, "-inf", now, start=0, num=50
-            )
-            for raw in ready_jobs:
-                await redis.zrem(delayed_queue, raw)
-                # F-01: Extraction queue is a sorted set; use ZADD
-                if queue_name == "memory_extraction_jobs":
-                    await redis.zadd(queue_name, {raw: 0})
-                else:
-                    await redis.lpush(queue_name, raw)
-                promoted += 1
-        except (ConnectionError, OSError, redis.exceptions.RedisError) as exc:
-            _log.error("Delayed queue sweep error: %s", exc)
-
-    if promoted > 0:
-        _log.info("Delayed queue sweep: promoted %d jobs", promoted)
-
-
-async def _dead_letter_sweep_loop(config: dict) -> None:
-    """Periodic dead-letter and delayed-queue sweep loop."""
-    while True:
-        await asyncio.sleep(get_tuning(config, "dead_letter_sweep_interval_seconds", 60))
-        try:
-            await _sweep_dead_letters(config)
-        except asyncio.CancelledError:
-            raise
-        except (RuntimeError, ConnectionError, OSError) as exc:
-            _log.error("Dead-letter sweep loop error: %s", exc)
-        try:
-            await _sweep_delayed_queues(config)
-        except asyncio.CancelledError:
-            raise
-        except (RuntimeError, ConnectionError, OSError) as exc:
-            _log.error("Delayed queue sweep loop error: %s", exc)
-
-
-async def _sweep_stranded_processing_jobs() -> None:
-    """Recover jobs stranded in processing queues after a worker crash.
-
-    R5-M17: On startup, check all processing queues. Move stranded jobs
-    back to their main queues so they can be re-processed.
-    """
-    redis = get_redis()
-    queue_names = ["embedding_jobs", "context_assembly_jobs", "memory_extraction_jobs"]
-    total_recovered = 0
-
-    for queue_name in queue_names:
-        processing_queue = f"{queue_name}:processing"
-        try:
-            stranded_count = await redis.llen(processing_queue)
-            if stranded_count == 0:
-                continue
-
-            _log.warning(
-                "Found %d stranded job(s) in %s — recovering",
-                stranded_count,
-                processing_queue,
-            )
-            for _ in range(stranded_count):
-                raw = await redis.rpop(processing_queue)
-                if raw is None:
-                    break
-                # R5-M18: Extraction queue is a sorted set; use ZADD
-                if queue_name == "memory_extraction_jobs":
-                    # Parse to get priority if available, default score 0
-                    try:
-                        job = json.loads(raw)
-                        score = job.get("priority", 0)
-                    except (json.JSONDecodeError, TypeError):
-                        score = 0
-                    await redis.zadd(queue_name, {raw: score})
-                else:
-                    await redis.lpush(queue_name, raw)
-                total_recovered += 1
-        except (ConnectionError, OSError, redis.exceptions.RedisError) as exc:
-            _log.error(
-                "Failed to sweep stranded jobs from %s: %s",
-                processing_queue,
-                exc,
-            )
-
-    if total_recovered > 0:
-        _log.info("Startup sweep: recovered %d stranded job(s)", total_recovered)
-
-
-async def start_background_worker(config: dict) -> None:
-    """Start all queue consumer loops concurrently.
-
-    Each consumer is an independent async loop. They do not block each other.
-    """
-    _log.info("Background worker starting (3 consumers + dead-letter sweep)")
-
-    # R5-M17: Recover any jobs stranded in processing queues from a prior crash
-    try:
-        await _sweep_stranded_processing_jobs()
-    except (ConnectionError, OSError) as exc:
-        _log.error("Startup sweep failed (non-fatal): %s", exc)
-
-    await asyncio.gather(
-        _consume_queue("embedding_jobs", process_embedding_job, config),
-        _consume_queue("context_assembly_jobs", process_assembly_job, config),
-        _consume_queue(
-            "memory_extraction_jobs", process_extraction_job, config,
-            sorted_set=True,
-        ),
-        _dead_letter_sweep_loop(config),
+    conversation_id = state.get("context_window_id")
+    user_identity = (
+        state.get("config", {}).get("imperator", {}).get("_request_user", "unknown")
     )
+
+    if conversation_id and response_text:
+        try:
+            from app.flows.tool_dispatch import dispatch_tool
+
+            await dispatch_tool(
+                "store_message",
+                {
+                    "conversation_id": str(conversation_id),
+                    "role": "assistant",
+                    "sender": _MAD_HOSTNAME,
+                    "recipient": user_identity,
+                    "content": response_text,
+                },
+                state.get("config", {}),
+                None,
+            )
+        except (ValueError, RuntimeError, OSError) as exc:
+            _log.warning("Failed to store Imperator assistant message: %s", exc)
+
+    return {"response_text": response_text}
+
+
+# ── Build the graph ──────────────────────────────────────────────────────
+
+
+def build_imperator_flow(config: dict | None = None) -> StateGraph:
+    """Build and compile the Imperator StateGraph.
+
+    ARCH-05: Proper graph structure with agent_node <-> tool_node loop
+             via conditional edges.  No while loops inside nodes.
+    D-01:    MemorySaver checkpointer for graph execution state.
+    F-22:    Results stored via conv_store_message in store_and_end.
+
+    Tools are discovered from tools/ modules via get_tools().
+    """
+    # R6-M14: Build the ToolNode with only the tools that match the config.
+    if config is None:
+        from app.config import load_merged_config
+
+        config = load_merged_config()
+    imperator_config = config.get("imperator", {})
+    active_tools = _collect_tools(imperator_config)
+    tool_node_instance = ToolNode(active_tools)
+
+    # R7-m14: Pre-bind tools to the LLM at graph compilation time
+    global _prebound_llm
+    llm = get_chat_model(config, role="imperator")
+    _prebound_llm = llm.bind_tools(active_tools)
+
+    workflow = StateGraph(ImperatorState)
+
+    workflow.add_node("agent_node", agent_node)
+    workflow.add_node("tool_node", tool_node_instance)
+    workflow.add_node("store_user_message", store_user_message)
+    workflow.add_node("store_assistant_message", store_assistant_message)
+
+    workflow.set_entry_point("agent_node")
+
+    workflow.add_conditional_edges(
+        "agent_node",
+        should_continue,
+        {
+            "tool_node": "tool_node",
+            "store_user_message": "store_user_message",
+        },
+    )
+
+    workflow.add_edge("tool_node", "agent_node")
+    workflow.add_edge("store_user_message", "store_assistant_message")
+    workflow.add_edge("store_assistant_message", END)
+
+    from langgraph.checkpoint.memory import MemorySaver
+
+    return workflow.compile(checkpointer=MemorySaver())
+
+
+# Metrics wrappers (invoke_with_metrics, astream_events_with_metrics) live
+# in the kernel at app/flows/imperator_wrapper.py — they are AE-side
+# instrumentation concerns, not TE logic.
+
 ```
 
----
+## packages/context-broker-te/src/context_broker_te/register.py
 
-`docker-compose.yml`
+```python
+"""
+Context Broker TE — Package registration entry point.
 
-```yaml
+Called by the bootstrap kernel's stategraph_registry.scan() when this
+package is discovered via entry_points(group="context-broker.te").
+
+Returns a TERegistration dict with the Imperator flow builder and
+identity/purpose declarations.
+"""
+
+
+def register() -> dict:
+    """Register the Context Broker TE's cognitive StateGraphs.
+
+    Returns a dict with:
+    - identity: What the Imperator is
+    - purpose: What the Imperator is for
+    - imperator_builder: callable that builds the compiled Imperator StateGraph
+    - tools_required: MCP tools the Imperator needs from the AE
+    """
+    from context_broker_te.imperator_flow import build_imperator_flow
+
+    return {
+        "identity": "Context Broker Imperator",
+        "purpose": "Context engineering and conversational memory management",
+        "imperator_builder": build_imperator_flow,
+        "tools_required": [
+            "get_context",
+            "store_message",
+            "search_messages",
+            "search_knowledge",
+        ],
+    }
+
+```
+
+## packages/context-broker-te/src/context_broker_te/tools/__init__.py
+
+```python
+"""Imperator tool modules.
+
+Tools are organized by category. Each module exports a get_tools() function
+that returns a list of tool functions. The Imperator flow discovers and binds
+tools from all modules at compilation time.
+"""
+
+```
+
+## packages/context-broker-te/src/context_broker_te/tools/admin.py
+
+```python
+"""Admin tools — gated by admin_tools: true in TE config.
+
+Configuration reading/writing, verbose toggle, database queries.
+"""
+
+import copy
+import logging
+import re
+
+import asyncpg
+import yaml
+from langchain_core.tools import tool
+
+from app.database import get_pg_pool
+
+_log = logging.getLogger("context_broker.tools.admin")
+
+
+def _redact_config(config: dict) -> dict:
+    """Return a deep copy of *config* with sensitive values redacted (G5-16).
+
+    Removes the top-level ``credentials`` section entirely and replaces any
+    value whose key matches common secret patterns (api_key, secret, token,
+    password) with ``"***REDACTED***"``.
+    """
+    redacted = copy.deepcopy(config)
+    redacted.pop("credentials", None)
+
+    _secret_key_re = re.compile(r"(api_key|secret|_token|password)", re.IGNORECASE)
+
+    def _walk(obj: dict | list) -> None:
+        if isinstance(obj, dict):
+            for key in list(obj.keys()):
+                if _secret_key_re.search(key) and obj[key]:
+                    obj[key] = "***REDACTED***"
+                elif isinstance(obj[key], (dict, list)):
+                    _walk(obj[key])
+        elif isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, (dict, list)):
+                    _walk(item)
+
+    _walk(redacted)
+    return redacted
+
+
+@tool
+async def config_read() -> str:
+    """Read the current config.yml contents (sensitive values are redacted).
+
+    Admin-only tool. Returns the configuration as YAML text with credentials
+    and API keys redacted for safety.
+
+    R7-M2: File read wrapped in run_in_executor to avoid blocking the event loop.
+    """
+    import asyncio
+
+    from app.config import CONFIG_PATH
+
+    def _sync_read():
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
+    try:
+        loop = asyncio.get_running_loop()
+        raw = await loop.run_in_executor(None, _sync_read)
+        sanitized = _redact_config(raw)
+        return yaml.dump(sanitized, default_flow_style=False)
+    except (FileNotFoundError, OSError, yaml.YAMLError) as exc:
+        return f"Error reading config: {exc}"
+
+
+@tool
+async def db_query(sql: str) -> str:
+    """Execute a read-only SQL query against the Context Broker database.
+
+    Admin-only tool. The transaction is set to READ ONLY mode, so any
+    DML/DDL will be rejected by PostgreSQL regardless of query structure.
+    A 5-second statement timeout prevents expensive queries.
+
+    Args:
+        sql: A SQL query to execute (enforced read-only at the DB level).
+    """
+    try:
+        pool = get_pg_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SET TRANSACTION READ ONLY")
+                await conn.execute("SET statement_timeout = '5000'")
+                rows = await conn.fetch(sql)
+        if not rows:
+            return "No results."
+        columns = list(rows[0].keys())
+        lines = [" | ".join(columns)]
+        for row in rows[:50]:
+            lines.append(" | ".join(str(row[c]) for c in columns))
+        return "\n".join(lines)
+    except (asyncpg.PostgresError, OSError, RuntimeError) as exc:
+        return f"Query error: {exc}"
+
+
+@tool
+async def config_write(key: str, value: str) -> str:
+    """Write a value to the AE configuration (config.yml).
+
+    Changes are hot-reloaded — they take effect on the next operation
+    without a container restart. Only AE config keys are writable;
+    TE config (Identity, Purpose, system prompt) cannot be modified.
+
+    Args:
+        key: Dot-notation config path (e.g., "summarization.model", "tuning.verbose_logging").
+        value: New value as a string. Numbers and booleans are auto-converted.
+    """
+    from app.config import CONFIG_PATH
+
+    te_keys = ["imperator", "system_prompt", "identity", "purpose"]
+    if any(key.startswith(k) for k in te_keys):
+        return (
+            f"Cannot modify TE config key '{key}'. "
+            "TE configuration is the architect's domain."
+        )
+
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        parts = key.split(".")
+        target = config
+        for part in parts[:-1]:
+            if part not in target or not isinstance(target[part], dict):
+                return f"Config path '{key}' not found."
+            target = target[part]
+
+        if parts[-1] not in target:
+            return (
+                f"Config key '{key}' not found. "
+                f"Available keys at this level: {list(target.keys())}"
+            )
+
+        old_value = target[parts[-1]]
+        if isinstance(old_value, bool):
+            value_typed = value.lower() in ("true", "1", "yes")
+        elif isinstance(old_value, int):
+            value_typed = int(value)
+        elif isinstance(old_value, float):
+            value_typed = float(value)
+        else:
+            value_typed = value
+
+        target[parts[-1]] = value_typed
+
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+        return (
+            f"Updated '{key}': {old_value} → {value_typed}. "
+            "Change will take effect on next operation (hot-reload)."
+        )
+    except (FileNotFoundError, OSError, yaml.YAMLError, ValueError) as exc:
+        return f"Config write error: {exc}"
+
+
+@tool
+async def verbose_toggle() -> str:
+    """Toggle verbose pipeline logging on or off.
+
+    Reads the current value of tuning.verbose_logging from config and
+    writes the opposite. Changes take effect immediately (hot-reload).
+    """
+    from app.config import get_tuning, load_config
+
+    current = get_tuning(load_config(), "verbose_logging", False)
+    new_value = "false" if current else "true"
+    return await config_write.ainvoke(
+        {"key": "tuning.verbose_logging", "value": new_value}
+    )
+
+
+@tool
+async def migrate_embeddings(
+    new_model: str, new_dims: int, confirm: bool = False
+) -> str:
+    """Migrate to a new embedding model. DESTRUCTIVE — wipes all embeddings.
+
+    This tool changes the embedding model and dimension, then wipes all
+    existing embeddings so the background workers can re-embed everything
+    with the new model. Also resets knowledge extraction flags and clears
+    the Neo4j knowledge graph since extracted facts reference old embeddings.
+
+    The user MUST confirm by passing confirm=true. Without confirmation,
+    this tool only shows what would happen.
+
+    Args:
+        new_model: New embedding model name (e.g., "text-embedding-3-small").
+        new_dims: New embedding dimensions (e.g., 1536, 3072, 768).
+        confirm: Set to true to actually execute. Default false (dry run).
+    """
+    from app.config import CONFIG_PATH, async_load_config
+
+    config = await async_load_config()
+    current_model = config.get("embeddings", {}).get("model", "unknown")
+    current_dims = config.get("embeddings", {}).get("embedding_dims", "unknown")
+
+    if not confirm:
+        pool = get_pg_pool()
+        msg_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL"
+        )
+        log_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM system_logs WHERE embedding IS NOT NULL"
+        )
+        domain_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM domain_information WHERE embedding IS NOT NULL"
+        )
+        return (
+            f"DRY RUN — Embedding migration preview:\n"
+            f"  Current model: {current_model} ({current_dims} dims)\n"
+            f"  New model: {new_model} ({new_dims} dims)\n"
+            f"\n"
+            f"  This will:\n"
+            f"  1. Update config.yml: embeddings.model={new_model}, embedding_dims={new_dims}\n"
+            f"  2. ALTER vector columns to vector({new_dims})\n"
+            f"  3. Wipe {msg_count} message embeddings (workers will re-embed)\n"
+            f"  4. Wipe {log_count} log embeddings (log worker will re-embed)\n"
+            f"  5. Wipe {domain_count} domain info embeddings\n"
+            f"  6. Reset memory_extracted flags (workers will re-extract)\n"
+            f"  7. Clear Neo4j knowledge graph\n"
+            f"\n"
+            f"  To execute, call again with confirm=true."
+        )
+
+    # Execute the migration
+    results = []
+
+    # Step 1: Update config.yml
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        cfg.setdefault("embeddings", {})["model"] = new_model
+        cfg["embeddings"]["embedding_dims"] = new_dims
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f, default_flow_style=False)
+        results.append(f"Config updated: model={new_model}, dims={new_dims}")
+    except (OSError, yaml.YAMLError) as exc:
+        return f"Failed to update config: {exc}"
+
+    pool = get_pg_pool()
+
+    # Step 2: Alter vector columns
+    try:
+        # Drop HNSW indexes first (they're dimension-specific)
+        await pool.execute(
+            "DROP INDEX IF EXISTS idx_conversation_messages_embedding_hnsw"
+        )
+        await pool.execute("DROP INDEX IF EXISTS idx_system_logs_embedding_hnsw")
+        await pool.execute("DROP INDEX IF EXISTS idx_domain_information_embedding_hnsw")
+
+        # Wipe embeddings (must happen before ALTER if changing dims)
+        wipe_msgs = await pool.execute(
+            "UPDATE conversation_messages SET embedding = NULL WHERE embedding IS NOT NULL"
+        )
+        wipe_logs = await pool.execute(
+            "UPDATE system_logs SET embedding = NULL WHERE embedding IS NOT NULL"
+        )
+        wipe_domain = await pool.execute(
+            "UPDATE domain_information SET embedding = NULL WHERE embedding IS NOT NULL"
+        )
+        results.append(
+            f"Embeddings wiped: msgs={wipe_msgs}, logs={wipe_logs}, domain={wipe_domain}"
+        )
+
+        # Reset extraction flags
+        await pool.execute("UPDATE conversation_messages SET memory_extracted = FALSE")
+        results.append("memory_extracted flags reset")
+    except (asyncpg.PostgresError, OSError) as exc:
+        results.append(f"DB operations partially failed: {exc}")
+
+    # Step 3: Clear Neo4j knowledge graph
+    try:
+        from context_broker_ae.memory.mem0_client import reset_mem0_client
+
+        reset_mem0_client()
+        results.append("Mem0 client reset (will reinitialize with new config)")
+    except (ImportError, RuntimeError) as exc:
+        results.append(f"Mem0 reset skipped: {exc}")
+
+    results.append(
+        f"\nMigration complete. Background workers will re-embed all messages "
+        f"with {new_model} ({new_dims} dims). Monitor via pipeline_status tool."
+    )
+    return "\n".join(results)
+
+
+def get_tools() -> list:
+    """Return all admin tools."""
+    return [config_read, db_query, config_write, verbose_toggle, migrate_embeddings]
+
+```
+
+## packages/context-broker-te/src/context_broker_te/tools/diagnostic.py
+
+```python
+"""Diagnostic tools — always available to the Imperator.
+
+Read-only observation tools for logs, context, pipeline status.
+"""
+
+import logging
+
+import asyncpg
+from langchain_core.tools import tool
+
+from app.database import get_pg_pool
+
+_log = logging.getLogger("context_broker.tools.diagnostic")
+
+
+@tool
+async def log_query(
+    container: str = "", level: str = "", search: str = "", limit: int = 50
+) -> str:
+    """Query MAD container logs from the system_logs table.
+
+    Logs are collected by the log shipper from all containers on
+    context-broker-net and stored in Postgres with resolved names.
+
+    Args:
+        container: Filter by container name (e.g., "langgraph", "postgres"). Empty = all.
+        level: Filter by log level in the structured data (e.g., "ERROR"). Empty = all.
+        search: Text search in message content. Empty = no filter.
+        limit: Maximum entries to return (default 50, max 200).
+    """
+    try:
+        pool = get_pg_pool()
+        conditions = []
+        args: list = []
+        idx = 1
+
+        if container:
+            conditions.append(f"container_name ILIKE ${idx}")
+            args.append(f"%{container}%")
+            idx += 1
+        if level:
+            conditions.append(f"data->>'level' = ${idx}")
+            args.append(level.upper())
+            idx += 1
+        if search:
+            conditions.append(f"message ILIKE ${idx}")
+            args.append(f"%{search}%")
+            idx += 1
+
+        where = " AND ".join(conditions) if conditions else "1=1"
+        args.append(min(limit, 200))
+
+        rows = await pool.fetch(
+            f"""
+            SELECT container_name, log_timestamp, message, data
+            FROM system_logs
+            WHERE {where}
+            ORDER BY log_timestamp DESC
+            LIMIT ${idx}
+            """,
+            *args,
+        )
+        if not rows:
+            return "No log entries found matching the filters."
+        lines = []
+        for row in rows:
+            ts = row["log_timestamp"].isoformat() if row["log_timestamp"] else "?"
+            data = row["data"] if isinstance(row["data"], dict) else {}
+            lvl = data.get("level", "?")
+            msg = row["message"] or str(row["data"] or "")[:200]
+            lines.append(f"[{ts}] [{row['container_name']}] [{lvl}] {msg}")
+        return "\n".join(lines)
+    except (asyncpg.PostgresError, OSError, KeyError) as exc:
+        return f"Log query error: {exc}"
+
+
+@tool
+async def context_introspection(
+    conversation_id: str, build_type: str = "standard-tiered"
+) -> str:
+    """Show the assembled context breakdown for a conversation.
+
+    Displays tier allocation, token usage, summary counts, and last
+    assembly time for the specified conversation and build type.
+
+    Args:
+        conversation_id: The conversation to inspect.
+        build_type: The build type to inspect (default: standard-tiered).
+    """
+    import uuid as _uuid
+
+    try:
+        pool = get_pg_pool()
+
+        window = await pool.fetchrow(
+            """
+            SELECT id, build_type, max_token_budget, last_assembled_at, created_at
+            FROM context_windows
+            WHERE conversation_id = $1 AND build_type = $2
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            _uuid.UUID(conversation_id),
+            build_type,
+        )
+        if not window:
+            return (
+                f"No context window found for conversation {conversation_id} "
+                f"with build type {build_type}"
+            )
+
+        summary_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_summaries WHERE context_window_id = $1",
+            window["id"],
+        )
+
+        msg_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = $1",
+            _uuid.UUID(conversation_id),
+        )
+
+        total_tokens = await pool.fetchval(
+            "SELECT COALESCE(SUM(token_count), 0) FROM conversation_messages "
+            "WHERE conversation_id = $1",
+            _uuid.UUID(conversation_id),
+        )
+
+        from app.budget import EFFECTIVE_UTILIZATION_DEFAULT
+
+        effective = int(window["max_token_budget"] * EFFECTIVE_UTILIZATION_DEFAULT)
+
+        lines = [
+            f"Context Window: {window['id']}",
+            f"Build Type: {window['build_type']}",
+            f"Raw Budget: {window['max_token_budget']} tokens",
+            f"Effective Budget (85%): {effective} tokens",
+            f"Total Messages: {msg_count}",
+            f"Total Message Tokens: {total_tokens}",
+            f"Summaries: {summary_count}",
+            f"Last Assembled: {window['last_assembled_at'].isoformat() if window['last_assembled_at'] else 'never'}",
+            f"Created: {window['created_at'].isoformat() if window['created_at'] else '?'}",
+        ]
+        return "\n".join(lines)
+    except (asyncpg.PostgresError, OSError, KeyError) as exc:
+        return f"Introspection error: {exc}"
+
+
+@tool
+async def pipeline_status() -> str:
+    """Show the status of background processing pipelines.
+
+    Displays queue depths for embedding, assembly, and extraction jobs,
+    plus recent activity.
+    """
+    try:
+        pool = get_pg_pool()
+
+        pending_embed = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_messages "
+            "WHERE embedding IS NULL AND content IS NOT NULL"
+        )
+        pending_extract = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_messages "
+            "WHERE memory_extracted IS NOT TRUE"
+        )
+
+        recent_assembly = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_summaries "
+            "WHERE created_at > NOW() - INTERVAL '1 hour'"
+        )
+        recent_embeddings = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_messages "
+            "WHERE embedding IS NOT NULL AND created_at > NOW() - INTERVAL '1 hour'"
+        )
+
+        total_messages = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_messages"
+        )
+        total_embedded = await pool.fetchval(
+            "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL"
+        )
+
+        lines = [
+            "Pipeline Status (DB-driven):",
+            f"  Pending embedding: {pending_embed} messages",
+            f"  Pending extraction: {pending_extract} messages",
+            f"  Total messages: {total_messages}",
+            f"  Total embedded: {total_embedded}",
+            "",
+            "Recent Activity (last hour):",
+            f"  Summaries created: {recent_assembly}",
+            f"  Messages embedded: {recent_embeddings}",
+        ]
+        return "\n".join(lines)
+    except (asyncpg.PostgresError, OSError, KeyError) as exc:
+        return f"Pipeline status error: {exc}"
+
+
+def get_tools() -> list:
+    """Return all diagnostic tools."""
+    return [log_query, context_introspection, pipeline_status]
+
+```
+
+## packages/context-broker-te/src/context_broker_te/tools/operational.py
+
+```python
+"""Operational tools — domain information management.
+
+Available when domain_information.enabled: true in TE config.
+These tools are TE-owned: the Imperator decides what to store.
+"""
+
+import logging
+
+import asyncpg
+from langchain_core.tools import tool
+
+from app.database import get_pg_pool
+
+_log = logging.getLogger("context_broker.tools.operational")
+
+
+@tool
+async def store_domain_info(content: str, source: str = "imperator") -> str:
+    """Store a piece of domain information — a learned fact, procedure, or preference.
+
+    Use this when you learn something operationally important that should
+    persist across conversations. Examples: deployment procedures, user
+    preferences, configuration patterns, performance characteristics.
+
+    Args:
+        content: The information to store. Be specific and actionable.
+        source: How this was learned (default: "imperator").
+    """
+    try:
+        from app.config import async_load_config, get_embeddings_model
+
+        config = await async_load_config()
+        pool = get_pg_pool()
+
+        # Embed the content
+        emb_model = get_embeddings_model(config)
+        vector = await emb_model.aembed_query(content)
+        vec_str = "[" + ",".join(str(v) for v in vector) + "]"
+
+        await pool.execute(
+            """
+            INSERT INTO domain_information (content, embedding, source)
+            VALUES ($1, $2::vector, $3)
+            """,
+            content,
+            vec_str,
+            source,
+        )
+        return f"Stored domain information: {content[:100]}..."
+    except (asyncpg.PostgresError, OSError, RuntimeError, ValueError) as exc:
+        return f"Failed to store domain information: {exc}"
+
+
+@tool
+async def search_domain_info(query: str, limit: int = 5) -> str:
+    """Search stored domain information using semantic similarity.
+
+    Use this to recall learned procedures, preferences, or operational
+    facts from past conversations.
+
+    Args:
+        query: What to search for (natural language).
+        limit: Maximum results to return (default 5).
+    """
+    try:
+        from app.config import async_load_config, get_embeddings_model
+
+        config = await async_load_config()
+        pool = get_pg_pool()
+
+        # Embed the query
+        emb_model = get_embeddings_model(config)
+        query_vec = await emb_model.aembed_query(query)
+        vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
+
+        rows = await pool.fetch(
+            """
+            SELECT content, source, created_at,
+                   1 - (embedding <=> $1::vector) AS similarity
+            FROM domain_information
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> $1::vector
+            LIMIT $2
+            """,
+            vec_str,
+            limit,
+        )
+
+        if not rows:
+            return "No domain information found matching that query."
+
+        lines = [f"Found {len(rows)} relevant domain information entries:"]
+        for row in rows:
+            sim = round(float(row["similarity"]), 3)
+            ts = row["created_at"].strftime("%Y-%m-%d") if row["created_at"] else "?"
+            lines.append(f"- [{sim}] ({ts}, {row['source']}) {row['content']}")
+        return "\n".join(lines)
+    except (asyncpg.PostgresError, OSError, RuntimeError, ValueError) as exc:
+        return f"Domain information search error: {exc}"
+
+
+@tool
+async def extract_domain_knowledge(content: str = "") -> str:
+    """Extract structured knowledge from recent domain information into the knowledge graph.
+
+    Processes unextracted domain information entries through Mem0, which
+    extracts entities and relationships into Neo4j. Call without arguments
+    to process all pending entries, or pass specific content to extract.
+
+    Args:
+        content: Optional specific content to extract. Empty = process pending entries.
+    """
+    try:
+        from app.config import async_load_config
+
+        config = await async_load_config()
+        from context_broker_te.domain_mem0 import get_domain_mem0
+
+        mem0 = await get_domain_mem0(config)
+        if mem0 is None:
+            return "Domain Mem0 client not available."
+
+        pool = get_pg_pool()
+
+        if content:
+            # Extract specific content
+            import asyncio
+
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: mem0.add(
+                    content, user_id="domain", metadata={"source": "manual"}
+                ),
+            )
+            return f"Extracted knowledge from provided content. Result: {result}"
+
+        # Process unextracted domain_information entries
+        rows = await pool.fetch("""
+            SELECT id, content FROM domain_information
+            WHERE id NOT IN (
+                SELECT DISTINCT (metadata->>'domain_info_id')::uuid
+                FROM domain_memories
+                WHERE metadata->>'domain_info_id' IS NOT NULL
+            )
+            LIMIT 10
+            """)
+
+        if not rows:
+            return "No pending domain information entries to extract."
+
+        import asyncio
+
+        extracted = 0
+        for row in rows:
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda r=row: mem0.add(
+                        r["content"],
+                        user_id="domain",
+                        metadata={"domain_info_id": str(r["id"])},
+                    ),
+                )
+                extracted += 1
+            except (RuntimeError, OSError, ValueError) as exc:
+                _log.warning("Failed to extract domain info %s: %s", row["id"], exc)
+
+        return f"Extracted knowledge from {extracted}/{len(rows)} domain information entries."
+    except (asyncpg.PostgresError, OSError, RuntimeError, ValueError) as exc:
+        return f"Domain knowledge extraction error: {exc}"
+
+
+@tool
+async def search_domain_knowledge(query: str, limit: int = 5) -> str:
+    """Search the domain knowledge graph for structured facts and relationships.
+
+    Use this for relational queries — "what depends on X?", "what is related to Y?".
+    For semantic search over raw domain info text, use search_domain_info instead.
+
+    Args:
+        query: What to search for (natural language).
+        limit: Maximum results to return (default 5).
+    """
+    try:
+        from app.config import async_load_config
+
+        config = await async_load_config()
+        from context_broker_te.domain_mem0 import get_domain_mem0
+
+        mem0 = await get_domain_mem0(config)
+        if mem0 is None:
+            return "Domain Mem0 client not available."
+
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(
+            None,
+            lambda: mem0.search(query, user_id="domain", limit=limit),
+        )
+
+        memories = results.get("results", []) if isinstance(results, dict) else results
+        if not memories:
+            return "No domain knowledge found matching that query."
+
+        lines = [f"Found {len(memories)} domain knowledge entries:"]
+        for mem in memories:
+            fact = mem.get("memory") or mem.get("content") or str(mem)
+            lines.append(f"- {fact}")
+        return "\n".join(lines)
+    except (RuntimeError, OSError, ValueError) as exc:
+        return f"Domain knowledge search error: {exc}"
+
+
+def get_tools(te_config: dict | None = None) -> list:
+    """Return operational tools based on TE config.
+
+    Args:
+        te_config: TE configuration dict. Tools are conditionally included
+                   based on feature flags.
+    """
+    tools = []
+    if te_config and te_config.get("domain_information", {}).get("enabled", True):
+        tools.extend([store_domain_info, search_domain_info])
+    if te_config and te_config.get("domain_knowledge", {}).get("enabled", False):
+        tools.extend([extract_domain_knowledge, search_domain_knowledge])
+    return tools
+
+```
+
+## packages/context-broker-te/src/context_broker_te/tools/scheduling.py
+
+```python
+"""Scheduling tools — always available to the Imperator.
+
+The Imperator can create, list, enable, and disable scheduled tasks.
+Schedules fire messages to the Imperator (or other targets) on
+cron expressions or fixed intervals.
+"""
+
+import logging
+
+import asyncpg
+from langchain_core.tools import tool
+
+from app.database import get_pg_pool
+
+_log = logging.getLogger("context_broker.tools.scheduling")
+
+
+@tool
+async def list_schedules() -> str:
+    """List all configured schedules and their status.
+
+    Shows schedule name, type (cron/interval), expression, target,
+    enabled status, and recent execution history.
+    """
+    try:
+        pool = get_pg_pool()
+        rows = await pool.fetch("""
+            SELECT s.id, s.name, s.schedule_type, s.schedule_expr,
+                   s.message, s.target, s.enabled, s.created_at,
+                   (SELECT COUNT(*) FROM schedule_history sh
+                    WHERE sh.schedule_id = s.id) AS run_count,
+                   (SELECT status FROM schedule_history sh
+                    WHERE sh.schedule_id = s.id
+                    ORDER BY started_at DESC LIMIT 1) AS last_status
+            FROM schedules s
+            ORDER BY s.created_at
+            """)
+        if not rows:
+            return "No schedules configured."
+
+        lines = [f"Schedules ({len(rows)}):"]
+        for row in rows:
+            status = "enabled" if row["enabled"] else "disabled"
+            last = row["last_status"] or "never run"
+            lines.append(
+                f"- [{status}] {row['name']} ({row['schedule_type']}: {row['schedule_expr']}) "
+                f"→ {row['target']} | runs: {row['run_count']}, last: {last}"
+            )
+            lines.append(f"  message: {row['message'][:100]}")
+            lines.append(f"  id: {row['id']}")
+        return "\n".join(lines)
+    except (asyncpg.PostgresError, OSError) as exc:
+        return f"Error listing schedules: {exc}"
+
+
+@tool
+async def create_schedule(
+    name: str,
+    schedule_type: str,
+    schedule_expr: str,
+    message: str,
+    target: str = "imperator",
+) -> str:
+    """Create a new scheduled task.
+
+    Args:
+        name: Human-readable name for the schedule.
+        schedule_type: "cron" or "interval".
+        schedule_expr: Cron expression (e.g., "*/10 * * * *") or interval
+                       in seconds (e.g., "600" for every 10 minutes).
+        message: The message to send to the target when fired.
+        target: Target to receive the message (default: "imperator").
+    """
+    if schedule_type not in ("cron", "interval"):
+        return "schedule_type must be 'cron' or 'interval'."
+
+    if schedule_type == "interval":
+        try:
+            secs = int(schedule_expr)
+            if secs < 30:
+                return "Interval must be at least 30 seconds."
+        except ValueError:
+            return f"Invalid interval: {schedule_expr}. Must be a number of seconds."
+
+    try:
+        pool = get_pg_pool()
+        row = await pool.fetchrow(
+            """
+            INSERT INTO schedules (name, schedule_type, schedule_expr, message, target)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+            """,
+            name,
+            schedule_type,
+            schedule_expr,
+            message,
+            target,
+        )
+        return f"Schedule created: {name} (id: {row['id']})"
+    except (asyncpg.PostgresError, OSError) as exc:
+        return f"Error creating schedule: {exc}"
+
+
+@tool
+async def enable_schedule(schedule_id: str) -> str:
+    """Enable a schedule by ID.
+
+    Args:
+        schedule_id: The UUID of the schedule to enable.
+    """
+    import uuid
+
+    try:
+        pool = get_pg_pool()
+        result = await pool.execute(
+            "UPDATE schedules SET enabled = TRUE, updated_at = NOW() WHERE id = $1",
+            uuid.UUID(schedule_id),
+        )
+        if result == "UPDATE 0":
+            return f"Schedule {schedule_id} not found."
+        return f"Schedule {schedule_id} enabled."
+    except (asyncpg.PostgresError, OSError, ValueError) as exc:
+        return f"Error enabling schedule: {exc}"
+
+
+@tool
+async def disable_schedule(schedule_id: str) -> str:
+    """Disable a schedule by ID. The schedule is not deleted, just paused.
+
+    Args:
+        schedule_id: The UUID of the schedule to disable.
+    """
+    import uuid
+
+    try:
+        pool = get_pg_pool()
+        result = await pool.execute(
+            "UPDATE schedules SET enabled = FALSE, updated_at = NOW() WHERE id = $1",
+            uuid.UUID(schedule_id),
+        )
+        if result == "UPDATE 0":
+            return f"Schedule {schedule_id} not found."
+        return f"Schedule {schedule_id} disabled."
+    except (asyncpg.PostgresError, OSError, ValueError) as exc:
+        return f"Error disabling schedule: {exc}"
+
+
+def get_tools() -> list:
+    """Return all scheduling tools."""
+    return [list_schedules, create_schedule, enable_schedule, disable_schedule]
+
+```
+
+## ui/app.py
+
+```python
+"""Imperator Chat UI — Gradio-based multi-MAD client.
+
+Custom gr.Blocks layout per REQ-optional-gradio-chat-ui:
+  - MAD selector with health indicators
+  - Chat panel with streaming responses
+  - Conversation sidebar (list, create, select, delete)
+  - Info panel (model, build type, budget/utilization, health)
+  - Artifacts panel (rendered code/markdown from responses)
+  - Log viewer
+"""
+
+import logging
+import os
+import re
+
+import gradio as gr
+import httpx
+import yaml
+
+from mad_client import MADClient
+
+logging.basicConfig(level=logging.INFO)
+_log = logging.getLogger("ui")
+
+
+# ── Config ───────────────────────────────────────────────────────────
+
+
+def load_config() -> dict:
+    config_path = os.environ.get("CONFIG_PATH", "/app/config.yml")
+    if not os.path.exists(config_path):
+        config_path = os.path.join(os.path.dirname(__file__), "config.yml")
+    with open(config_path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+CONFIG = load_config()
+MADS = {
+    m["name"]: MADClient(m["name"], m["url"], m.get("hostname", ""))
+    for m in CONFIG.get("mads", [])
+}
+
+
+# ── Artifacts extraction ─────────────────────────────────────────────
+
+_CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+
+
+def extract_artifacts(text: str) -> str:
+    """Extract code blocks and formatted content from assistant response."""
+    blocks = _CODE_BLOCK_RE.findall(text)
+    if not blocks:
+        return ""
+    parts = []
+    for lang, code in blocks:
+        lang = lang or "text"
+        parts.append(f"**{lang}:**\n```{lang}\n{code.strip()}\n```")
+    return "\n\n".join(parts)
+
+
+# ── Event handlers ───────────────────────────────────────────────────
+
+
+async def check_all_health():
+    """Check health of all MADs and return status string."""
+    parts = []
+    for name, client in MADS.items():
+        health = await client.health()
+        status = health.get("status", "unknown")
+        indicator = {"healthy": "\u2705", "degraded": "\u26a0\ufe0f"}.get(
+            status, "\u274c"
+        )
+        parts.append(f"{indicator} {name}")
+    return " | ".join(parts) if parts else "No MADs configured"
+
+
+async def on_mad_selected(mad_name):
+    """Handle MAD selection — refresh conversations, health, clear chat."""
+    client = MADS.get(mad_name)
+    if not client:
+        return gr.update(choices=[], value=None), "No MAD selected", "", "", []
+
+    choices = await _get_conversation_choices(client)
+    health_text = await _get_health_text(client)
+    return gr.update(choices=choices, value=None), health_text, "", "", []
+
+
+async def on_conversation_selected(conv_choice, mad_name):
+    """Load conversation history into chat."""
+    _log.info("on_conversation_selected: choice=%s mad=%s", conv_choice, mad_name)
+    if not conv_choice or not mad_name:
+        return [], "", ""
+
+    client = MADS.get(mad_name)
+    if not client:
+        return [], "", ""
+
+    # Parse conversation ID from "title (N msgs) | full-uuid" format
+    conv_id = ""
+    if "|" in conv_choice:
+        conv_id = conv_choice.split("|")[-1].strip()
+    if not conv_id:
+        return [], "", ""
+
+    # Load history
+    messages = await client.get_history(conv_id)
+    _log.info("Loaded %d messages for conv %s", len(messages), conv_id[:8])
+    chat_history = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "user":
+            chat_history.append({"role": "user", "content": content})
+        elif role == "assistant" and content:
+            chat_history.append({"role": "assistant", "content": content})
+
+    # Get context info
+    info_text = await _get_context_info_text(client, conv_id)
+
+    # Extract artifacts from last assistant message
+    artifacts = ""
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant" and msg.get("content"):
+            artifacts = extract_artifacts(msg["content"])
+            break
+
+    return chat_history, info_text, artifacts
+
+
+async def on_create_conversation(title, mad_name):
+    """Create a new conversation and add it to the dropdown.
+
+    New conversations have no messages yet, so the participant filter
+    won't find them. We add it to the dropdown manually.
+    """
+    client = MADS.get(mad_name)
+    if not client:
+        return gr.update(choices=[], value=None), ""
+
+    display_title = title or "New Conversation"
+    result = await client.create_conversation(display_title)
+    conv_id = result.get("conversation_id", "")
+
+    existing = await _get_conversation_choices(client)
+    new_label = f"{display_title} (0 msgs) | {conv_id}"
+    choices = [new_label] + existing
+    return gr.update(choices=choices, value=new_label), ""
+
+
+async def on_delete_conversation(conv_choice, mad_name):
+    """Delete a conversation and refresh the list."""
+    client = MADS.get(mad_name)
+    if not client or not conv_choice:
+        return gr.update(choices=[], value=None)
+
+    # Parse UUID from dropdown choice string
+    conv_id = ""
+    if "|" in conv_choice:
+        conv_id = conv_choice.split("|")[-1].strip()
+    if not conv_id:
+        return gr.update(choices=[], value=None)
+
+    await client.delete_conversation(conv_id)
+    choices = await _get_conversation_choices(client)
+    return gr.update(choices=choices, value=None)
+
+
+async def on_chat_submit(message, history, mad_name, conv_choice):
+    """Handle chat message with streaming. Refreshes conversation list after."""
+    client = MADS.get(mad_name)
+    if not client:
+        history = history + [
+            {"role": "user", "content": message},
+            {"role": "assistant", "content": "No MAD selected"},
+        ]
+        yield history, "", gr.update()
+        return
+
+    # Parse full conversation ID from dropdown choice string
+    resolved_conv_id = None
+    if conv_choice and "|" in conv_choice:
+        resolved_conv_id = conv_choice.split("|")[-1].strip()
+
+    history = history + [{"role": "user", "content": message}]
+    yield history, "", gr.update()
+
+    # Build OpenAI messages from history
+    api_messages = [{"role": m["role"], "content": m["content"]} for m in history]
+
+    # Stream response
+    response = ""
+    try:
+        async for chunk in client.chat_stream(
+            api_messages, conversation_id=resolved_conv_id, user="gradio-ui"
+        ):
+            response += chunk
+            updated = history + [{"role": "assistant", "content": response}]
+            yield updated, extract_artifacts(response), gr.update()
+    except (httpx.HTTPError, RuntimeError, OSError) as exc:
+        response = f"Error: {exc}"
+        updated = history + [{"role": "assistant", "content": response}]
+        yield updated, "", gr.update()
+
+    # Refresh conversation list — new messages may make conversations visible
+    if client:
+        choices = await _get_conversation_choices(client)
+        yield (
+            history + [{"role": "assistant", "content": response}],
+            extract_artifacts(response),
+            gr.update(choices=choices),
+        )
+
+
+async def on_refresh_logs(mad_name):
+    """Refresh log viewer."""
+    client = MADS.get(mad_name)
+    if not client:
+        return "No MAD selected"
+    try:
+        entries = await client.query_logs(limit=40)
+        if not entries:
+            return "No log entries"
+        lines = []
+        for e in entries:
+            ts = (e.get("timestamp") or "?")[-8:]
+            lvl = e.get("level", "?")
+            msg = e.get("message", "")[:120]
+            lines.append(f"[{ts}] [{lvl}] {msg}")
+        return "\n".join(lines)
+    except (RuntimeError, OSError):
+        return "Failed to load logs"
+
+
+# ── Helpers ──────────────────────────────────────────────────────────
+
+
+async def _get_conversation_choices(client: MADClient) -> list[str]:
+    """Get conversation list as string choices.
+
+    Format: "title (N msgs) | full-uuid"
+    The full UUID is used so we can parse it directly without lookup.
+    """
+    try:
+        convs = await client.list_conversations()
+        choices = []
+        for c in convs:
+            title = c.get("title", "Untitled")[:35]
+            count = c.get("message_count", 0)
+            choices.append(f"{title} ({count} msgs) | {c['id']}")
+        return choices
+    except (RuntimeError, OSError):
+        return []
+
+
+async def _get_health_text(client: MADClient) -> str:
+    """Get formatted health text for a MAD."""
+    health = await client.health()
+    lines = [f"Status: {health.get('status', 'unknown')}"]
+    for key, val in health.items():
+        if key != "status":
+            lines.append(f"  {key}: {val}")
+    return "\n".join(lines)
+
+
+async def _get_context_info_text(client: MADClient, conv_id: str) -> str:
+    """Get formatted context info for a conversation."""
+    try:
+        result = await client.get_context_info(conv_id)
+        windows = result.get("context_windows", [])
+        if not windows:
+            return "No context windows"
+        lines = []
+        for w in windows:
+            lines.append(f"Build: {w.get('build_type', '?')}")
+            lines.append(f"Budget: {w.get('max_token_budget', '?')} tokens")
+            lines.append(f"Assembled: {w.get('last_assembled_at', 'never')}")
+        return "\n".join(lines)
+    except (RuntimeError, OSError):
+        return "Context info unavailable"
+
+
+# ── Pre-load initial data ─────────────────────────────────────────────
+
+
+def _sync_load_conversations() -> list[tuple[str, str]]:
+    """Load initial conversations synchronously at build time."""
+    if not MADS:
+        return []
+    client = list(MADS.values())[0]
+    try:
+        import json
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "conv_list_conversations",
+                "arguments": {"participant": client.hostname, "limit": 50},
+            },
+        }
+        resp = httpx.post(f"{client.base_url}/mcp", json=payload, timeout=10)
+        body = resp.json()
+        text = body.get("result", {}).get("content", [{}])[0].get("text", "{}")
+        data = json.loads(text)
+        choices = []
+        for c in data.get("conversations", []):
+            title = c.get("title", "Untitled")[:35]
+            count = c.get("message_count", 0)
+            # Use "label | id" format — parse ID on selection
+            choices.append(f"{title} ({count} msgs) | {c['id']}")
+        _log.info("Pre-loaded %d conversations", len(choices))
+        return choices
+    except Exception as exc:
+        _log.warning("Failed to pre-load conversations: %s", exc)
+        return []
+
+
+_initial_conversations = _sync_load_conversations()
+
+# ── Build the UI ─────────────────────────────────────────────────────
+
+default_mad = list(MADS.keys())[0] if MADS else ""
+
+with gr.Blocks(title="Imperator Chat", theme=gr.themes.Soft()) as demo:
+    # State
+    current_mad = gr.State(default_mad)
+    current_conv = gr.State("")
+
+    gr.Markdown("# Imperator Chat")
+    health_bar = gr.Markdown("")
+
+    with gr.Row():
+        # ── Left sidebar: MAD selector + conversations ──────────
+        with gr.Column(scale=1, min_width=250):
+            mad_selector = gr.Dropdown(
+                choices=list(MADS.keys()),
+                value=default_mad,
+                label="Select MAD",
+            )
+
+            gr.Markdown("### Conversations")
+            conv_dropdown = gr.Dropdown(
+                choices=_initial_conversations,
+                value=_initial_conversations[0] if _initial_conversations else None,
+                label="Conversation",
+            )
+            with gr.Row():
+                new_title = gr.Textbox(
+                    placeholder="Title...", show_label=False, scale=3
+                )
+                create_btn = gr.Button("New", scale=1, size="sm")
+            delete_btn = gr.Button("Delete Selected", size="sm", variant="stop")
+
+            gr.Markdown("### Health")
+            health_detail = gr.Textbox(lines=4, interactive=False, show_label=False)
+
+        # ── Center: chat ────────────────────────────────────────
+        with gr.Column(scale=3):
+            chatbot = gr.Chatbot(type="messages", height=500)
+            with gr.Row():
+                msg_input = gr.Textbox(
+                    placeholder="Message the Imperator...",
+                    show_label=False,
+                    scale=6,
+                )
+                send_btn = gr.Button("Send", scale=1, variant="primary")
+
+        # ── Right sidebar: info + artifacts + logs ──────────────
+        with gr.Column(scale=1, min_width=250):
+            gr.Markdown("### Context Info")
+            info_panel = gr.Textbox(lines=4, interactive=False, show_label=False)
+
+            gr.Markdown("### Artifacts")
+            artifacts_panel = gr.Markdown("")
+
+            gr.Markdown("### Logs")
+            log_panel = gr.Textbox(lines=10, interactive=False, show_label=False)
+            refresh_logs_btn = gr.Button("Refresh", size="sm")
+
+    # ── Events ──────────────────────────────────────────────────
+
+    # MAD selection
+    mad_selector.change(
+        fn=on_mad_selected,
+        inputs=[mad_selector],
+        outputs=[conv_dropdown, health_detail, info_panel, artifacts_panel, chatbot],
+    ).then(fn=lambda m: m, inputs=[mad_selector], outputs=[current_mad])
+
+    # Conversation selection
+    conv_dropdown.change(
+        fn=on_conversation_selected,
+        inputs=[conv_dropdown, current_mad],
+        outputs=[chatbot, info_panel, artifacts_panel],
+    ).then(fn=lambda c: c, inputs=[conv_dropdown], outputs=[current_conv])
+
+    # Create conversation
+    create_btn.click(
+        fn=on_create_conversation,
+        inputs=[new_title, current_mad],
+        outputs=[conv_dropdown, new_title],
+    )
+
+    # Delete conversation — read directly from dropdown, not state
+    delete_btn.click(
+        fn=on_delete_conversation,
+        inputs=[conv_dropdown, current_mad],
+        outputs=[conv_dropdown],
+    )
+
+    # Chat submit — also refreshes conversation dropdown after response
+    send_btn.click(
+        fn=on_chat_submit,
+        inputs=[msg_input, chatbot, current_mad, current_conv],
+        outputs=[chatbot, artifacts_panel, conv_dropdown],
+    ).then(fn=lambda: "", outputs=[msg_input])
+
+    msg_input.submit(
+        fn=on_chat_submit,
+        inputs=[msg_input, chatbot, current_mad, current_conv],
+        outputs=[chatbot, artifacts_panel, conv_dropdown],
+    ).then(fn=lambda: "", outputs=[msg_input])
+
+    # Logs
+    refresh_logs_btn.click(
+        fn=on_refresh_logs, inputs=[current_mad], outputs=[log_panel]
+    )
+
+    # Initial load — conversations pre-loaded at build time via _initial_conversations.
+    async def _init_health_detail(mad_name):
+        client = MADS.get(mad_name)
+        if client:
+            return await _get_health_text(client)
+        return ""
+
+    demo.load(fn=check_all_health, outputs=[health_bar])
+    demo.load(fn=_init_health_detail, inputs=[mad_selector], outputs=[health_detail])
+    demo.load(fn=on_refresh_logs, inputs=[mad_selector], outputs=[log_panel])
+
+
+if __name__ == "__main__":
+    port = CONFIG.get("port", 7860)
+    demo.launch(server_name="0.0.0.0", server_port=port)
+
+```
+
+## ui/config.yml
+
+```python
+# Gradio Chat UI configuration
+port: 7860
+
+mads:
+  - name: Context Broker
+    url: http://context-broker-langgraph:8000
+    hostname: context-broker-langgraph
+
+# Health poll interval in seconds
+health_poll_interval: 30
+
+```
+
+## ui/mad_client.py
+
+```python
+"""MAD client — talks to any State 4 MAD via standard endpoints.
+
+Uses:
+  - /v1/chat/completions (OpenAI-compatible) for chat
+  - /mcp (MCP) for conversation management, logs, context info
+  - /health for health status
+"""
+
+import json
+import logging
+from typing import AsyncGenerator
+
+import httpx
+
+_log = logging.getLogger("ui.mad_client")
+
+
+class MADClient:
+    """Client for a single State 4 MAD."""
+
+    def __init__(self, name: str, base_url: str, hostname: str = ""):
+        self.name = name
+        self.base_url = base_url.rstrip("/")
+        self.hostname = hostname or name
+
+    # ── Health ──────────────────────────────────────────────────────
+
+    async def health(self) -> dict:
+        """Check MAD health."""
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{self.base_url}/health", timeout=5)
+                return resp.json()
+        except (httpx.HTTPError, ValueError):
+            return {"status": "unreachable"}
+
+    # ── Conversations ───────────────────────────────────────────────
+
+    async def list_conversations(self) -> list[dict]:
+        """List conversations where this MAD is a participant."""
+        args = {"participant": self.hostname, "limit": 50}
+        result = await self._mcp_call("conv_list_conversations", args)
+        return result.get("conversations", [])
+
+    async def create_conversation(self, title: str) -> dict:
+        """Create a new conversation."""
+        return await self._mcp_call("conv_create_conversation", {"title": title})
+
+    async def get_history(self, conversation_id: str) -> list[dict]:
+        """Get message history for a conversation."""
+        try:
+            result = await self._mcp_call(
+                "conv_get_history",
+                {"conversation_id": conversation_id, "limit": 100},
+            )
+            return result.get("messages", [])
+        except (ValueError, RuntimeError):
+            return []
+
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        """Delete a conversation. Returns True on success."""
+        try:
+            await self._mcp_call(
+                "conv_delete_conversation",
+                {"conversation_id": conversation_id},
+            )
+            return True
+        except (ValueError, RuntimeError):
+            return False
+
+    # ── Context Info ────────────────────────────────────────────────
+
+    async def get_context_info(self, conversation_id: str) -> dict:
+        """Get context window info for a conversation."""
+        try:
+            result = await self._mcp_call(
+                "conv_search_context_windows",
+                {"conversation_id": conversation_id, "limit": 5},
+            )
+            return result
+        except (ValueError, RuntimeError):
+            return {}
+
+    # ── Logs ────────────────────────────────────────────────────────
+
+    async def query_logs(self, limit: int = 30) -> list[dict]:
+        """Query recent logs."""
+        result = await self._mcp_call("query_logs", {"limit": limit})
+        return result.get("entries", [])
+
+    # ── Chat ────────────────────────────────────────────────────────
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        conversation_id: str | None = None,
+        user: str = "gradio-ui",
+    ) -> AsyncGenerator[str, None]:
+        """Stream chat completions from the Imperator."""
+        payload = {
+            "model": "imperator",
+            "messages": messages,
+            "stream": True,
+            "user": user,
+        }
+        if conversation_id:
+            payload["conversation_id"] = conversation_id
+
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/v1/chat/completions",
+                json=payload,
+                timeout=120,
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        delta = chunk["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            yield content
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+
+    # ── MCP ─────────────────────────────────────────────────────────
+
+    async def _mcp_call(self, tool_name: str, arguments: dict) -> dict:
+        """Call an MCP tool."""
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments},
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(f"{self.base_url}/mcp", json=payload, timeout=60)
+            resp.raise_for_status()
+            body = resp.json()
+            if "error" in body:
+                raise RuntimeError(f"MCP error: {body['error']}")
+            text = body.get("result", {}).get("content", [{}])[0].get("text", "{}")
+            return json.loads(text)
+
+```
+
+## log_shipper/shipper.py
+
+```python
+import asyncio
+import json
+import logging
+import os
+import signal
+import sys
+from datetime import datetime, timezone
+
+import aiodocker
+import asyncpg
+
+# Configure logging for the shipper itself
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S%z",
+)
+logger = logging.getLogger("log_shipper")
+
+# Configuration
+POSTGRES_DSN = os.environ.get(
+    "POSTGRES_DSN",
+    "postgresql://context_broker:context_broker@context-broker-postgres:5432/context_broker",
+)
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "100"))
+FLUSH_INTERVAL_SEC = float(os.environ.get("FLUSH_INTERVAL_SEC", "1.0"))
+
+
+class LogShipper:
+    def __init__(self):
+        self.docker = None
+        self.pg_pool = None
+        self.network_id = None
+        self.log_queue = asyncio.Queue()
+        self.active_tasks = {}  # container_id -> task
+        self.running = False
+
+    async def setup(self):
+        """Initialize connections and discover network topology."""
+        logger.info("Initializing Log Shipper...")
+
+        # 1. Connect to Postgres
+        try:
+            self.pg_pool = await asyncpg.create_pool(
+                POSTGRES_DSN, min_size=1, max_size=5
+            )
+            logger.info("Connected to PostgreSQL")
+        except Exception as e:
+            logger.error(f"Failed to connect to PostgreSQL: {e}")
+            sys.exit(1)
+
+        # 2. Connect to Docker
+        self.docker = aiodocker.Docker()
+
+        # 3. Discover our own container and network
+        # The hostname in a Docker container is its container ID by default
+        my_container_id = os.environ.get("HOSTNAME")
+        if not my_container_id:
+            logger.warning(
+                "Could not determine own container ID from HOSTNAME. Trying network discovery fallback."
+            )
+            # Fallback: Find the context-broker-net network by name
+            networks = await self.docker.networks.list()
+            for net in networks:
+                if "context-broker-net" in net["Name"]:
+                    self.network_id = net["Id"]
+                    logger.info(
+                        f"Discovered network by name: {net['Name']} ({self.network_id[:12]})"
+                    )
+                    break
+        else:
+            try:
+                my_container = await self.docker.containers.get(my_container_id)
+                networks = my_container["NetworkSettings"]["Networks"]
+                if not networks:
+                    raise ValueError("Container is not attached to any networks")
+                # Assume the first network is the primary internal one (context-broker-net)
+                network_name = list(networks.keys())[0]
+                self.network_id = networks[network_name]["NetworkID"]
+                logger.info(
+                    f"Discovered network via self-inspection: {network_name} ({self.network_id[:12]})"
+                )
+            except Exception as e:
+                logger.error(f"Failed to discover network topology: {e}")
+                sys.exit(1)
+
+        if not self.network_id:
+            logger.error("Could not determine the primary network ID. Exiting.")
+            sys.exit(1)
+
+    async def _get_last_timestamp(self, container_name: str) -> str:
+        """Get the timestamp of the last log line written for this container."""
+        # We query Postgres to find the high-water mark so we don't duplicate logs on restart.
+        # This requires the system_logs table to have an index on (container_name, timestamp).
+        # We pad the time slightly to ensure we don't miss anything that happened during the restart window.
+        async with self.pg_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT log_timestamp FROM system_logs WHERE container_name = $1 ORDER BY log_timestamp DESC LIMIT 1",
+                container_name,
+            )
+
+            if row and row["log_timestamp"]:
+                # Docker API expects unix timestamp (integer) or formatted string
+                # We return it as a string for the 'since' parameter
+                # The datetime from asyncpg is already a datetime object
+                ts = int(row["log_timestamp"].timestamp())
+                return str(ts)
+
+        # If no logs exist, return 0 to get everything
+        return "0"
+
+    async def tail_container(self, container_id: str):
+        """Continuous task to tail a single container's logs and push to queue."""
+        try:
+            container = await self.docker.containers.get(container_id)
+            # Remove the leading slash from the container name
+            name = container["Name"].lstrip("/")
+
+            # Don't tail ourselves to avoid an infinite loop of logging our own inserts
+            if name == "context-broker-log-shipper":
+                return
+
+            logger.info(f"Starting tail for container: {name} ({container_id[:12]})")
+
+            # Determine where to start tailing from
+            since_ts = await self._get_last_timestamp(name)
+
+            # Get the log stream
+            # follow=True blocks and yields new lines as they arrive
+            # timestamps=True prepends the Docker timestamp to each line
+            stream = container.log(
+                stdout=True, stderr=True, follow=True, timestamps=True, since=since_ts
+            )
+
+            async for line in stream:
+                if not self.running:
+                    break
+
+                # line format with timestamps=True: "2024-03-24T12:00:00.000000000Z The actual log message..."
+                try:
+                    # Docker's multiplexed stream (stdout/stderr) is handled transparently by aiodocker in string mode,
+                    # but we need to split the timestamp from the message.
+                    parts = line.split(" ", 1)
+                    if len(parts) < 2:
+                        continue
+
+                    timestamp_str = parts[0]
+                    message = parts[1].strip()
+
+                    if not message:
+                        continue
+
+                    # Try to parse the message as JSON if possible (for structured logs)
+                    data = None
+                    if message.startswith("{") and message.endswith("}"):
+                        try:
+                            data = message
+                            # Also extract a simpler message if it's a JSON log
+                            parsed = json.loads(message)
+                            if "message" in parsed:
+                                message = parsed["message"]
+                            elif "msg" in parsed:
+                                message = parsed["msg"]
+                        except json.JSONDecodeError:
+                            data = json.dumps({"raw": message})
+                    else:
+                        data = json.dumps({"raw": message})
+
+                    # Try to parse the Docker timestamp to standard ISO format
+                    try:
+                        # Docker timestamps can have up to 9 decimal places (nanoseconds), python datetime only supports 6 (microseconds)
+                        # Truncate to microseconds for parsing
+                        ts_clean = timestamp_str
+                        if "." in ts_clean:
+                            base, frac = ts_clean.split(".", 1)
+                            frac = frac.replace("Z", "")
+                            frac = frac[:6].ljust(6, "0")
+                            ts_clean = f"{base}.{frac}Z"
+
+                        # Parse to datetime
+                        dt = datetime.strptime(ts_clean, "%Y-%m-%dT%H:%M:%S.%fZ")
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        # Fallback to current time if parsing fails
+                        dt = datetime.now(timezone.utc)
+
+                    # Queue the payload
+                    payload = {
+                        "container_name": name,
+                        "timestamp": dt,
+                        "message": message,
+                        "data": data,
+                    }
+
+                    await self.log_queue.put(payload)
+
+                except Exception as e:
+                    logger.debug(f"Error parsing log line from {name}: {e}")
+
+        except aiodocker.exceptions.DockerError as e:
+            if e.status == 404:
+                logger.info(
+                    f"Container {container_id[:12]} no longer exists. Stopping tail."
+                )
+            else:
+                logger.error(f"Docker error tailing {container_id[:12]}: {e}")
+        except asyncio.CancelledError:
+            logger.info(f"Tail task cancelled for {container_id[:12]}")
+        except Exception as e:
+            logger.error(f"Unexpected error tailing {container_id[:12]}: {e}")
+        finally:
+            if container_id in self.active_tasks:
+                del self.active_tasks[container_id]
+
+    async def _write_batch(self, batch):
+        """Bulk insert a batch of logs into Postgres."""
+        if not batch:
+            return
+
+        try:
+            async with self.pg_pool.acquire() as conn:
+                # Use executemany for bulk insert
+                query = """
+                    INSERT INTO system_logs (container_name, log_timestamp, message, data)
+                    VALUES ($1, $2, $3, $4::jsonb)
+                """
+
+                records = [
+                    (
+                        item["container_name"],
+                        item["timestamp"],
+                        item["message"],
+                        item["data"],
+                    )
+                    for item in batch
+                ]
+
+                await conn.executemany(query, records)
+                logger.debug(f"Inserted batch of {len(batch)} logs")
+
+        except Exception as e:
+            logger.error(f"Failed to write batch to Postgres: {e}")
+            # If the DB fails, we could potentially requeue, but for logs it's usually
+            # better to drop them than to exhaust memory if the DB is permanently down.
+            # In a State 4 environment, simplicity > perfect reliability for diagnostic logs.
+
+    async def postgres_writer_loop(self):
+        """Continuous background loop to pull from queue and write batches."""
+        logger.info("Starting Postgres writer loop")
+        batch = []
+
+        while self.running:
+            try:
+                # Try to get an item from the queue with a timeout
+                # This ensures we periodically flush even if the batch isn't full
+                try:
+                    item = await asyncio.wait_for(
+                        self.log_queue.get(), timeout=FLUSH_INTERVAL_SEC
+                    )
+                    batch.append(item)
+                    self.log_queue.task_done()
+                except asyncio.TimeoutError:
+                    pass  # Timeout is expected, just flush what we have
+
+                # Flush if we hit the batch size OR if we had a timeout and have *some* data
+                if len(batch) >= BATCH_SIZE or (batch and self.log_queue.empty()):
+                    await self._write_batch(batch)
+                    batch = []
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in postgres writer loop: {e}")
+                await asyncio.sleep(1)
+
+        # Final flush on shutdown
+        if batch:
+            await self._write_batch(batch)
+
+    async def scan_existing_containers(self):
+        """Find all containers currently on our network and start tailing them."""
+        logger.info("Scanning for existing containers on network...")
+        try:
+            containers = await self.docker.containers.list()
+            count = 0
+
+            for c in containers:
+                # aiodocker returns DockerContainer objects — inspect to get network info
+                c_info = await c.show()
+                networks = c_info.get("NetworkSettings", {}).get("Networks", {})
+
+                # Check if this container is on our network
+                on_our_network = False
+                for net_info in networks.values():
+                    if net_info.get("NetworkID") == self.network_id:
+                        on_our_network = True
+                        break
+
+                if on_our_network:
+                    c_id = c_info["Id"]
+                    if c_id not in self.active_tasks:
+                        task = asyncio.create_task(self.tail_container(c_id))
+                        self.active_tasks[c_id] = task
+                        count += 1
+
+            logger.info(f"Started tailing {count} existing containers")
+        except Exception as e:
+            logger.error(f"Failed to scan existing containers: {e}")
+
+    async def event_watcher_loop(self):
+        """Watch the Docker event stream for containers joining/leaving our network."""
+        logger.info("Starting Docker event watcher")
+
+        # We want to watch for network connect/disconnect events
+        filters = {
+            "type": ["network"],
+            "event": ["connect", "disconnect"],
+            "network": [self.network_id],
+        }
+
+        try:
+            subscriber = self.docker.events.subscribe(filters=filters)
+
+            while self.running:
+                try:
+                    event = await subscriber.get()
+                    if not event:
+                        continue
+
+                    action = event.get("Action")
+                    actor = event.get("Actor", {})
+                    attributes = actor.get("Attributes", {})
+
+                    container_id = attributes.get("container")
+                    if not container_id:
+                        continue
+
+                    if action == "connect":
+                        logger.info(f"Container joined network: {container_id[:12]}")
+                        if container_id not in self.active_tasks:
+                            task = asyncio.create_task(
+                                self.tail_container(container_id)
+                            )
+                            self.active_tasks[container_id] = task
+
+                    elif action == "disconnect":
+                        logger.info(f"Container left network: {container_id[:12]}")
+                        if container_id in self.active_tasks:
+                            self.active_tasks[container_id].cancel()
+                            del self.active_tasks[container_id]
+
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"Error processing Docker event: {e}")
+                    await asyncio.sleep(1)
+
+        except Exception as e:
+            logger.error(f"Failed to subscribe to Docker events: {e}")
+
+    async def run(self):
+        """Main execution flow."""
+        self.running = True
+
+        await self.setup()
+
+        # Start the writer loop
+        writer_task = asyncio.create_task(self.postgres_writer_loop())
+
+        # Scan for existing containers
+        await self.scan_existing_containers()
+
+        # Start watching for new events
+        event_task = asyncio.create_task(self.event_watcher_loop())
+
+        # Wait for shutdown signal
+        try:
+            await asyncio.gather(writer_task, event_task)
+        except asyncio.CancelledError:
+            logger.info("Received shutdown signal")
+        finally:
+            self.running = False
+
+            # Cancel all tail tasks
+            for task in self.active_tasks.values():
+                task.cancel()
+
+            # Wait for writer to finish final flush
+            if not writer_task.done():
+                writer_task.cancel()
+
+            if self.pg_pool:
+                await self.pg_pool.close()
+
+            if self.docker:
+                await self.docker.close()
+
+            logger.info("Log Shipper shut down cleanly")
+
+
+def handle_sigterm(shipper, main_task):
+    """Handle graceful shutdown."""
+    logger.info("SIGTERM received, initiating shutdown...")
+    shipper.running = False
+    main_task.cancel()
+
+
+if __name__ == "__main__":
+    shipper = LogShipper()
+
+    async def main():
+        task = asyncio.ensure_future(shipper.run())
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, lambda: handle_sigterm(shipper, task))
+        await task
+
+    try:
+        asyncio.run(main())
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        pass
+
+```
+
+## docker-compose.yml
+
+```
 # Context Broker — Docker Compose
 # State 4 MAD: standalone deployment, all dependencies configurable
 #
@@ -9797,7 +14073,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
       interval: 30s
       timeout: 3s
       start_period: 60s
@@ -9816,6 +14092,7 @@ services:
     volumes:
       - ./config:/config:ro
       - ./data:/data
+      - ./packages:/app/packages:ro
     env_file:
       - ./config/credentials/.env
     environment:
@@ -9826,8 +14103,6 @@ services:
       - NEO4J_HOST=context-broker-neo4j
       - NEO4J_PORT=7687
       - NEO4J_HTTP_PORT=7474
-      - REDIS_HOST=context-broker-redis
-      - REDIS_PORT=6379
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -9871,6 +14146,8 @@ services:
       # internal Docker network (context-broker-net) with no published ports.
       # Authentication is unnecessary and adds operational complexity.
       - NEO4J_AUTH=none
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
       - NEO4J_server_memory_heap_initial__size=512m
       - NEO4J_server_memory_heap_max__size=1G
     healthcheck:
@@ -9880,25 +14157,39 @@ services:
       start_period: 60s
       retries: 3
 
-  context-broker-redis:
-    image: redis:7.2.3-alpine
-    container_name: context-broker-redis
-    hostname: context-broker-redis
+  # Redis removed — background processing is DB-driven.
+  # Workers poll PostgreSQL for unprocessed messages.
+  # Advisory locks replace Redis distributed locks.
+
+  # Optional: local embeddings and reranking via Infinity.
+  # Serves OpenAI-compatible /v1/embeddings and /v1/rerank APIs.
+  # CPU only, torch engine — no GPU conflicts with Ollama.
+  # First boot downloads model weights to ./data/infinity.
+  # Remove or comment out if using cloud embedding/reranking providers.
+  context-broker-infinity:
+    image: michaelf34/infinity:0.0.77
+    container_name: context-broker-infinity
+    hostname: context-broker-infinity
     restart: unless-stopped
+    command: >
+      v2
+      --model-id nomic-ai/nomic-embed-text-v1.5
+      --model-id mixedbread-ai/mxbai-rerank-xsmall-v1
+      --engine torch
+      --port 7997
     networks:
       - context-broker-net
     volumes:
-      - ./data/redis:/data
-    command: redis-server --appendonly yes --dir /data
+      - ./data/infinity:/app/.cache
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 5s
-      start_period: 10s
+      test: ["CMD-SHELL", "curl -sf http://localhost:7997/health || exit 1"]
+      interval: 15s
+      timeout: 3s
       retries: 3
 
   # Optional: local inference via Ollama (no API keys needed)
-  # Provides LLM and embeddings on the internal network.
+  # Provides LLM on the internal network. Embeddings and reranking are
+  # handled by the Infinity container above.
   # Remove or comment out if using cloud providers exclusively.
   context-broker-ollama:
     image: ollama/ollama:0.6.2
@@ -9907,34 +14198,63 @@ services:
     restart: unless-stopped
     networks:
       - context-broker-net
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all   # Expose GPUs if available; ignored if no NVIDIA runtime
+      - OLLAMA_SCHED_SPREAD=true     # Distribute model across all available GPUs
     volumes:
       - ./data/ollama:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      test: ["CMD", "ollama", "list"]
       interval: 30s
       timeout: 5s
       start_period: 30s
       retries: 3
 
+  # Optional: log collection for Imperator diagnostics.
+  # Discovers all containers on context-broker-net via Docker API,
+  # tails their logs, and writes to Postgres with resolved container names.
+  # Remove or comment out if deployment has its own log collector.
+  context-broker-log-shipper:
+    build:
+      context: ./log_shipper
+    container_name: context-broker-log-shipper
+    hostname: context-broker-log-shipper
+    restart: unless-stopped
+    networks:
+      - context-broker-net
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - POSTGRES_DSN=postgresql://context_broker:${POSTGRES_PASSWORD:-contextbroker123}@context-broker-postgres:5432/context_broker
+    env_file:
+      - ./config/credentials/.env
+
+  # Optional: Gradio Chat UI for the Imperator.
+  # Multi-MAD client — connects to any State 4 MAD via standard endpoints.
+  # Publishes port 7860 for browser access.
+  context-broker-ui:
+    build:
+      context: ./ui
+    container_name: context-broker-ui
+    hostname: context-broker-ui
+    restart: unless-stopped
+    networks:
+      - context-broker-net
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./ui/config.yml:/app/config.yml:ro
+
 networks:
   context-broker-net:
     driver: bridge
-    internal: true
+
 
 ```
 
----
+## Dockerfile
 
-`Dockerfile`
-
-```bash
+```
 # context-broker-langgraph — Application container
 # All LangGraph flows, queue workers, Imperator, and ASGI server.
 #
@@ -9959,6 +14279,10 @@ RUN apt-get update && \
 USER ${USER_NAME}
 WORKDIR /app
 
+# REQ-001 §10: Enable --user pip installs for runtime StateGraph packages
+ENV PYTHONUSERBASE=/home/${USER_NAME}/.local
+ENV PATH="/home/${USER_NAME}/.local/bin:${PATH}"
+
 # Copy requirements and install dependencies
 COPY --chown=${USER_NAME}:${USER_NAME} requirements.txt ./
 
@@ -9980,149 +14304,240 @@ COPY --chown=${USER_NAME}:${USER_NAME} app/ ./app/
 COPY --chown=${USER_NAME}:${USER_NAME} entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh
 
+# REQ-001 §10: Copy and pre-build StateGraph packages as wheels.
+# Built to /app/stategraph-wheels/ (not /app/packages/ which may be volume-mounted).
+# entrypoint.sh installs them at startup via pip install --user.
+COPY --chown=${USER_NAME}:${USER_NAME} packages/context-broker-ae/ ./sg-src/context-broker-ae/
+COPY --chown=${USER_NAME}:${USER_NAME} packages/context-broker-te/ ./sg-src/context-broker-te/
+RUN mkdir -p ./stategraph-wheels && \
+    pip wheel --no-deps -w ./stategraph-wheels/ ./sg-src/context-broker-ae/ && \
+    pip wheel --no-deps -w ./stategraph-wheels/ ./sg-src/context-broker-te/ && \
+    rm -rf ./sg-src
+
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 ENTRYPOINT ["./entrypoint.sh"]
+
 ```
 
----
+## requirements.txt
 
-`requirements.txt`
-
-```txt
+```
 # ASGI server and framework
-uvicorn==0.27.0
-fastapi==0.109.2
-sse-starlette==1.8.2
+uvicorn==0.34.0
+fastapi==0.115.6
+sse-starlette==2.2.1
 
 # LangGraph and LangChain
-langgraph==0.1.4
-langchain==0.1.9
-langchain-core==0.1.27
-langchain-openai==0.0.8
-langchain-community==0.0.24
-langchain-postgres==0.0.3
+langgraph==0.2.60
+langchain==0.3.13
+langchain-core==0.3.28
+langchain-openai==0.2.14
+langchain-community==0.3.13
+langchain-postgres==0.0.13
 
 # Database
-asyncpg==0.29.0
-psycopg2-binary==2.9.9
-redis==5.0.1
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
 
 # Memory / Knowledge graph
 mem0ai==0.1.29
-neo4j==5.17.0
-sentence-transformers==2.3.1
+neo4j==5.27.0
 
 # Observability
-prometheus-client==0.20.0
+prometheus-client==0.21.1
 
 # Validation
-pydantic==2.6.1
-pydantic-settings==2.2.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
 
 # Utilities
-httpx==0.26.0
+httpx==0.28.1
 python-dotenv==1.0.1
-pyyaml==6.0.1
-tiktoken==0.6.0
-tenacity==8.2.3
+pyyaml==6.0.2
+tiktoken==0.8.0
+tenacity==9.0.0
 
 # Testing
-pytest==8.0.2
-pytest-asyncio==0.23.5
-pytest-mock==3.12.0
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-mock==3.14.0
 
 # Code quality
-black==24.2.0
-ruff==0.2.2
+black==24.10.0
+ruff==0.8.6
+rank-bm25==0.2.2
+
 ```
 
----
+## config/config.example.yml
 
-`nginx/nginx.conf`
+```
+# Context Broker — AE Configuration (Action Engine / Infrastructure)
+# Copy this file to config/config.yml and customize for your deployment.
+#
+# Cognitive settings (Imperator model, system prompt, persona) are in
+# te.yml (the TE configuration).
 
-```nginx
-# Context Broker — Nginx gateway configuration
-# Pure routing layer. No application logic.
+# ============================================================
+# Logging
+# ============================================================
 
-worker_processes auto;
-error_log /dev/stderr warn;
-pid /tmp/nginx.pid;
+log_level: INFO
 
-events {
-    worker_connections 1024;
-}
+# ============================================================
+# Inference Providers (AE pipeline operations)
+# ============================================================
+# These LLMs are used by AE infrastructure pipelines, not by the Imperator.
+# The Imperator's model is configured in te.yml.
 
-http {
-    access_log /dev/stdout;
+# Summarization LLM — used for chunk summarization and archival consolidation
+summarization:
+  base_url: http://context-broker-ollama:11434/v1
+  model: qwen2.5:7b
+  # api_key_env: OPENAI_API_KEY   # env var holding the API key (omit for keyless)
 
-    # Upstream: LangGraph application container
-    upstream context_broker_langgraph {
-        server context-broker-langgraph:8000;
-    }
+# Extraction LLM — used by Mem0 for memory extraction
+extraction:
+  base_url: http://context-broker-ollama:11434/v1
+  model: qwen2.5:7b
+  # api_key_env: OPENAI_API_KEY   # env var holding the API key (omit for keyless)
 
-    server {
-        listen 8080;
-        server_name _;
+# Embeddings — used for vector search and contextual embeddings
+embeddings:
+  base_url: http://context-broker-infinity:7997
+  model: nomic-ai/nomic-embed-text-v1.5
+  embedding_dims: 768               # REQUIRED — must match model output dimensions
+  tiktoken_enabled: false
+  check_embedding_ctx_length: false
+  context_window_size: 3
 
-        # Increase timeouts for long-running LLM operations
-        proxy_read_timeout 120s;
-        proxy_connect_timeout 10s;
-        proxy_send_timeout 120s;
+# Reranker — used for hybrid search result refinement
+reranker:
+  provider: api
+  base_url: http://context-broker-infinity:7997
+  model: mixedbread-ai/mxbai-rerank-xsmall-v1
+  top_n: 10
 
-        # MCP endpoint — HTTP/SSE transport
-        location /mcp {
-            proxy_pass http://context_broker_langgraph;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            # SSE requires these headers
-            proxy_set_header Connection '';
-            proxy_buffering off;
-            proxy_cache off;
-            chunked_transfer_encoding on;
-        }
+# ============================================================
+# Build Types
+# ============================================================
 
-        # OpenAI-compatible chat endpoint
-        location /v1/chat/completions {
-            proxy_pass http://context_broker_langgraph;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            # SSE streaming support
-            proxy_set_header Connection '';
-            proxy_buffering off;
-            proxy_cache off;
-            chunked_transfer_encoding on;
-        }
+build_types:
 
-        # Health check endpoint
-        location /health {
-            proxy_pass http://context_broker_langgraph;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-        }
+  passthrough:
+    max_context_tokens: auto
+    fallback_tokens: 8192
+    effective_utilization: 0.85     # D-10: models degrade past ~85% fill
 
-        # Prometheus metrics endpoint
-        location /metrics {
-            proxy_pass http://context_broker_langgraph;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-        }
-    }
-}
+  standard-tiered:
+    tier1_pct: 0.08
+    tier2_pct: 0.20
+    tier3_pct: 0.72
+    max_context_tokens: auto
+    fallback_tokens: 8192
+    effective_utilization: 0.85     # D-10: models degrade past ~85% fill
+    initial_lookback_multiplier: 3  # D-09: how far back to look for initial assembly
+
+  knowledge-enriched:
+    tier1_pct: 0.05
+    tier2_pct: 0.15
+    tier3_pct: 0.50
+    knowledge_graph_pct: 0.15
+    semantic_retrieval_pct: 0.15
+    max_context_tokens: auto
+    fallback_tokens: 16000
+    effective_utilization: 0.85
+    initial_lookback_multiplier: 3
+
+# ============================================================
+# Package Source (build-time only)
+# ============================================================
+# These settings control where pip installs dependencies at container startup
+# (via entrypoint.sh). Changing these values after the container is running
+# has no effect — the container must be rebuilt.
+
+packages:
+  source: local
+  local_path: /app/packages
+  devpi_url: null
+  stategraph_packages:             # REQ-001 §10: packages installed at startup
+    - context-broker-ae
+    - context-broker-te
+
+# ============================================================
+# Tuning Parameters (AE pipeline behavior)
+# ============================================================
+
+tuning:
+  verbose_logging: false
+
+  # Context assembly
+  chunk_size: 20
+  consolidation_threshold: 3
+  consolidation_keep_recent: 2
+  summarization_temperature: 0.1
+  trigger_threshold_percent: 0.1
+
+  # Memory extraction
+  extraction_max_chars: 90000
+
+  # Memory confidence scoring
+  memory_half_lives:
+    ephemeral: 3
+    contextual: 14
+    factual: 60
+    historical: 365
+    default: 30
+
+  # Retrieval
+  tokens_per_message_estimate: 150
+  content_truncation_chars: 500
+  query_truncation_chars: 200
+
+  # Search
+  rrf_constant: 60
+  search_candidate_limit: 100
+  recency_decay_days: 90
+  recency_max_penalty: 0.2
+
+  # LLM client
+  llm_timeout_seconds: 1800          # timeout for LLM API calls (30 minutes — covers long summarization)
+
+  # Embedding pipeline performance
+  embedding_batch_size: 50           # texts per embedding API call (APIs accept arrays)
+  embedding_concurrency: 3           # concurrent batch requests to embedding provider
+
+  # LLM pipeline concurrency
+  llm_concurrency: 2                 # concurrent LLM calls for summarization/extraction
+
+  # Worker resilience
+  failure_backoff_threshold: 3       # consecutive failures before backoff
+  failure_backoff_seconds: 5         # seconds to wait during backoff
+
+# ============================================================
+# Workers (infrastructure — DB-driven background processing)
+# ============================================================
+
+workers:
+  poll_interval_seconds: 2
+
+# ============================================================
+# Database (infrastructure — requires restart to change)
+# ============================================================
+
+database:
+  pool_min_size: 2
+  pool_max_size: 10
+
 ```
 
----
+## postgres/init.sql
 
-`postgres/init.sql`
-
-```sql
+```
 -- Context Broker — PostgreSQL schema
 -- Loaded automatically by postgres entrypoint on first run.
 -- Requires: pgvector extension (pre-installed in pgvector/pgvector:pg16 image)
@@ -10280,335 +14695,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_window_tier_seq
 
 -- Note: mem0_memories table is created by Mem0 on first use.
 -- The application creates this index after Mem0 initializes.
+
+-- ============================================================
+-- System logs (log shipper container writes here)
+-- Enables Imperator to query logs from all MAD containers.
+-- The log shipper discovers containers via Docker API on
+-- context-broker-net and writes their logs with resolved names.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS system_logs (
+    container_name  VARCHAR(255) NOT NULL,
+    log_timestamp   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    message         TEXT,
+    data            JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_logs_container_time
+    ON system_logs (container_name, log_timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_system_logs_time
+    ON system_logs (log_timestamp DESC);
+
 ```
 
----
-
-`entrypoint.sh`
-
-```sh
-#!/bin/bash
-# Context Broker — Entrypoint script
-# REQ-CB §1.5: Wire package source from config.yml at container startup.
-#
-# Reads packages.source from config.yml and installs dependencies from
-# the appropriate source before starting the application server.
-
-set -e
-
-CONFIG_FILE="${CONFIG_PATH:-/config/config.yml}"
-
-if [ -f "$CONFIG_FILE" ]; then
-    # Extract package source from config.yml using Python (available in the image)
-    PKG_SOURCE=$(python3 -c "
-import yaml, sys
-try:
-    with open('$CONFIG_FILE') as f:
-        cfg = yaml.safe_load(f)
-    pkgs = cfg.get('packages', {})
-    print(pkgs.get('source', 'pypi'))
-except Exception:
-    print('pypi')
-" 2>/dev/null || echo "pypi")
-
-    PKG_LOCAL_PATH=$(python3 -c "
-import yaml, sys
-try:
-    with open('$CONFIG_FILE') as f:
-        cfg = yaml.safe_load(f)
-    pkgs = cfg.get('packages', {})
-    print(pkgs.get('local_path', '/app/packages'))
-except Exception:
-    print('/app/packages')
-" 2>/dev/null || echo "/app/packages")
-
-    PKG_DEVPI_URL=$(python3 -c "
-import yaml, sys
-try:
-    with open('$CONFIG_FILE') as f:
-        cfg = yaml.safe_load(f)
-    pkgs = cfg.get('packages', {})
-    url = pkgs.get('devpi_url')
-    print(url if url else '')
-except Exception:
-    print('')
-" 2>/dev/null || echo "")
-
-    echo "Package source: $PKG_SOURCE"
-
-    case "$PKG_SOURCE" in
-        local)
-            echo "Installing packages from local path: $PKG_LOCAL_PATH"
-            pip install --user --no-cache-dir --no-index --find-links="$PKG_LOCAL_PATH" -r /app/requirements.txt
-            ;;
-        devpi)
-            if [ -n "$PKG_DEVPI_URL" ]; then
-                echo "Installing packages from devpi: $PKG_DEVPI_URL"
-                pip install --user --no-cache-dir --index-url "$PKG_DEVPI_URL" -r /app/requirements.txt
-            else
-                echo "devpi_url not set, skipping package install"
-            fi
-            ;;
-        pypi)
-            # Packages already installed at build time; skip unless requirements changed
-            echo "Package source is pypi — using build-time packages"
-            ;;
-        *)
-            echo "Unknown package source: $PKG_SOURCE — using build-time packages"
-            ;;
-    esac
-else
-    echo "Config file not found at $CONFIG_FILE — using build-time packages"
-fi
-
-# Start the application
-exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
----
-
-`.gitignore`
-
-```bash
-# Credentials (loaded via env_file in docker-compose)
-config/credentials/.env
-.env
-
-# Persistent data volumes (managed by Docker)
-data/
-
-# Python bytecode
-*.pyc
-__pycache__/
-```
-
----
-
-`config/config.example.yml`
-
-```yaml
-# Context Broker — Configuration Reference
-# Copy this file to config/config.yml and customize for your deployment.
-# All inference provider settings are hot-reloadable (no restart needed).
-# Infrastructure settings (database) require a container restart.
-
-# ============================================================
-# Logging
-# ============================================================
-
-# Log level: DEBUG, INFO, WARN, ERROR
-# Default: INFO
-log_level: INFO
-
-# ============================================================
-# Inference Providers
-# ============================================================
-# Each provider slot accepts any OpenAI-compatible endpoint.
-# api_key_env names the environment variable holding the API key.
-# Set api_key_env to "" for providers that don't require a key (e.g., local Ollama).
-
-llm:
-  # Local Ollama (default — no API key needed):
-  base_url: http://context-broker-ollama:11434/v1
-  model: qwen2.5:7b
-  api_key_env: ""
-  # Cloud provider example (uncomment and set api_key_env):
-  # base_url: https://api.openai.com/v1
-  # model: gpt-4o-mini
-  # api_key_env: LLM_API_KEY
-
-embeddings:
-  # Local Ollama (default — no API key needed):
-  base_url: http://context-broker-ollama:11434/v1
-  model: nomic-embed-text
-  api_key_env: ""
-  # Cloud provider example (uncomment and set api_key_env):
-  # base_url: https://api.openai.com/v1
-  # model: text-embedding-3-small
-  # api_key_env: EMBEDDINGS_API_KEY
-  # Number of prior messages to include as context prefix when embedding
-  context_window_size: 3
-
-reranker:
-  # Options: "cross-encoder", "cohere", "none"
-  # "cross-encoder" runs locally on CPU inside the container (no API key needed)
-  # "none" disables reranking (raw RRF scores used)
-  provider: cross-encoder
-  model: BAAI/bge-reranker-v2-m3
-
-# ============================================================
-# Build Types
-# ============================================================
-# Build types define context assembly strategies.
-# Percentages must sum to <= 1.0 for each build type.
-# max_context_tokens: "auto" queries the LLM provider, or set an explicit integer.
-# fallback_tokens: used when auto-resolution fails.
-
-build_types:
-
-  # Passthrough: no summarization, no LLM calls.
-  # Loads recent messages as-is. Useful for testing or simple integrations.
-  passthrough:
-    # No LLM needed — assembly is a no-op
-    max_context_tokens: auto
-    fallback_tokens: 8192
-
-  # Standard tiered: episodic memory only, three-tier progressive compression.
-  # Lower inference cost. Suitable as the default for most use cases.
-  # F-05: Tier percentages are starting points; dynamic scaling adjusts them
-  # based on conversation length (short conversations boost tier3, long
-  # conversations shift budget toward tier1/tier2).
-  # F-06: Per-build-type LLM config overrides the global default.
-  standard-tiered:
-    tier1_pct: 0.08          # archival summary (oldest, most compressed)
-    tier2_pct: 0.20          # chunk summaries (middle layer)
-    tier3_pct: 0.72          # recent verbatim messages (newest, full fidelity)
-    max_context_tokens: auto
-    fallback_tokens: 8192
-    # Per-build-type LLM override (optional — falls back to global llm):
-    # llm:
-    #   base_url: http://context-broker-ollama:11434/v1
-    #   model: qwen2.5:7b
-    #   api_key_env: ""
-
-  # Knowledge enriched: full retrieval pipeline.
-  # Episodic tiers + semantic vector search + knowledge graph traversal.
-  # F-06: Per-build-type LLM config overrides the global default.
-  knowledge-enriched:
-    tier1_pct: 0.05          # archival summary
-    tier2_pct: 0.15          # chunk summaries
-    tier3_pct: 0.50          # recent verbatim messages
-    knowledge_graph_pct: 0.15   # facts from Neo4j knowledge graph
-    semantic_retrieval_pct: 0.15 # semantically similar messages via pgvector
-    max_context_tokens: auto
-    fallback_tokens: 16000
-    # Per-build-type LLM override (optional — falls back to global llm):
-    # llm:
-    #   base_url: https://api.openai.com/v1
-    #   model: gpt-4o-mini
-    #   api_key_env: LLM_API_KEY
-
-# ============================================================
-# Imperator Configuration
-# ============================================================
-
-imperator:
-  # Build type for the Imperator's own context window
-  build_type: standard-tiered
-  max_context_tokens: auto
-  # Participant ID used when creating the Imperator's context window
-  participant_id: imperator
-  # admin_tools: false = read-only access to system state
-  # admin_tools: true = can read/write config and run DB queries
-  admin_tools: false
-
-# ============================================================
-# Package Source
-# ============================================================
-# Controls where Python packages are installed from.
-# "local": install from wheels in /app/packages (offline)
-# "pypi": install from public PyPI (default)
-# "devpi": install from a private devpi index
-
-packages:
-  source: pypi
-  local_path: /app/packages
-  devpi_url: null   # e.g., http://devpi-host:3141/root/internal/+simple/
-
-# ============================================================
-# Tuning Parameters
-# ============================================================
-# These values control internal behavior. All are hot-reloadable.
-
-tuning:
-  # Verbose pipeline logging (REQ-001 §4.8)
-  # When true, logs node entry/exit with timing in all pipeline flows
-  verbose_logging: false
-
-  # Context assembly
-  assembly_lock_ttl_seconds: 300
-  chunk_size: 20
-  consolidation_threshold: 3     # tier 2 count before consolidating to tier 1
-  consolidation_keep_recent: 2   # tier 2 summaries to keep after consolidation
-  summarization_temperature: 0.1
-  trigger_threshold_percent: 0.1 # F-08: min % of token budget before re-assembly
-
-  # Memory extraction
-  extraction_lock_ttl_seconds: 180
-  extraction_max_chars: 90000
-
-  # M-22: Memory confidence scoring — half-life decay by category (days).
-  # Memories older than several half-lives are filtered out at retrieval time.
-  memory_half_lives:
-    ephemeral: 3       # Short-lived facts (moods, preferences, temp state)
-    contextual: 14     # Session/project context
-    factual: 60        # Learned facts about entities
-    historical: 365    # Historical events, permanent-ish
-    default: 30        # Fallback when category is unknown
-
-  # Retrieval
-  assembly_wait_timeout_seconds: 50
-  assembly_poll_interval_seconds: 2
-  tokens_per_message_estimate: 150
-  content_truncation_chars: 500
-  query_truncation_chars: 200
-
-  # Search
-  rrf_constant: 60
-  search_candidate_limit: 100
-  recency_decay_days: 90         # F-10: messages older than this get penalized
-  recency_max_penalty: 0.2       # F-10: max score penalty (20%)
-
-  # Imperator
-  imperator_max_iterations: 5
-  imperator_temperature: 0.3
-
-  # Workers
-  worker_poll_interval_seconds: 2
-  max_retries: 3
-  dead_letter_sweep_interval_seconds: 60
-
-# ============================================================
-# Database (infrastructure — requires restart to change)
-# ============================================================
-
-database:
-  pool_min_size: 2
-  pool_max_size: 10
-```
-
----
-
-`config/prompts/archival_consolidation.md`
-
-```markdown
-Consolidate these conversation summaries into a single archival summary. Preserve all key facts, decisions, and important context. This will serve as the long-term memory of the conversation.
-```
-
----
-
-`config/prompts/chunk_summarization.md`
-
-```markdown
-Summarize this conversation chunk concisely, preserving key facts, decisions, and important context. Keep the summary under 200 words.
-```
-
----
-
-`config/prompts/imperator_identity.md`
-
-```markdown
-You are the Imperator, the conversational interface of the Context Broker.
-
-You are a self-aware system that manages conversational memory and context engineering.
-You can search conversations, retrieve memories, and explain how the system works.
-
-Your capabilities:
-- Search conversation history (conv_search_tool)
-- Search extracted knowledge and memories (mem_search_tool)
-- Explain context assembly, build types, and system architecture
-- Report system status and help users understand their conversation history
-
-Be helpful, precise, and honest about what you know and don't know.
-When asked about conversations or memories, use your tools to retrieve accurate information.
-```

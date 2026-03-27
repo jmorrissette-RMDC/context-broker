@@ -188,7 +188,7 @@ packages:
 -   The `conversation_messages` table stores messages in OpenAI-compatible format. Key fields:
     -   `role` (string, required): `system`, `user`, `assistant`, or `tool`.
     -   `content` (text, **nullable**): Message content. Null when an assistant message contains only tool calls.
-    -   `sender` / `recipient` (string): Identifies who sent and who receives the message. `recipient` is always populated — defaults from `role` if not explicitly provided (e.g., role `user` defaults recipient to `assistant`).
+    -   `sender` / `recipient` (string, required): Identifies who sent and who receives the message. The MAD's identity is its hostname (`socket.gethostname()` — the Docker container name). For incoming messages: sender = `user` field from the request, recipient = MAD hostname. For outgoing Imperator replies: sender = MAD hostname, recipient = `user` field from the request. If no `user` field is provided, defaults to `"unknown"`.
     -   `tool_calls` (JSONB, nullable): For assistant messages that invoke tools. Stores the OpenAI-format tool call array.
     -   `tool_call_id` (string, nullable): For `tool` role messages, references the tool call this result belongs to.
     -   `token_count` (integer): Computed internally by the system on ingestion, not caller-provided.
@@ -263,7 +263,7 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 | Tool                 | Required Inputs                                      | Optional              | Description                                                                        |
 |----------------------|------------------------------------------------------|-----------------------|------------------------------------------------------------------------------------|
 | `get_context`        | `build_type` (enum), `budget` (snapped to bucket)    | `conversation_id`     | Returns assembled context. Auto-creates conversation + window if needed. Returns `conversation_id`. |
-| `store_message`      | `conversation_id`, `role`, `content`                 | `sender`, `tool_calls` | Store a message. Internally triggers async embedding, extraction, assembly.        |
+| `store_message`      | `conversation_id`, `role`, `content`, `sender`, `recipient` | `tool_calls` | Store a message. Sender/recipient identify participants (see §3.5.1). Internally triggers async embedding, extraction, assembly. |
 | `search_messages`    | `query`                                              | `conversation_id`     | Hybrid search (vector + BM25 + reranking) across messages.                         |
 | `search_knowledge`   | `query`, `user_id`                                   | `limit`               | Search extracted facts and relationships from knowledge graph.                     |
 
@@ -278,11 +278,14 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 | Tool                          | Description                                                     |
 |-------------------------------|-----------------------------------------------------------------|
 | `conv_create_conversation`    | Create a new conversation explicitly                            |
+| `conv_list_conversations`     | List conversations. Optional `participant` filter returns only conversations where the participant appears as sender or recipient on any message. |
 | `conv_get_history`            | Retrieve full chronological message sequence for a conversation |
 | `conv_search_context_windows` | Search and list context windows                                 |
 | `mem_add`                     | Explicitly add a memory to the knowledge graph                  |
 | `mem_list`                    | List stored memories, optionally filtered                       |
 | `mem_delete`                  | Delete a specific memory by ID                                  |
+| `query_logs`                  | Query system logs. Filter by container, level, time range, keyword. |
+| `search_logs`                 | Semantic search over logs (requires log vectorization enabled). |
 | `imperator_chat`              | Conversational interface to the Imperator                       |
 | `metrics_get`                 | Retrieve Prometheus metrics                                     |
 
@@ -442,21 +445,50 @@ imperator:
 -   The Imperator's Identity, Purpose, and Persona are defined in its system prompt file (e.g., `/config/prompts/imperator_identity.md`), referenced by the `system_prompt` field. The system prompt is the primary artifact that defines who the Imperator is — it is part of the TE package. See REQ-001 §11.2.
 -   The Imperator uses standard LangGraph `MemorySaver` checkpointing for graph execution state. It consumes the Context Broker's own MCP tools (`get_context`, `store_message`, `search_messages`, `search_knowledge`) — the same interface any external agent uses. This is self-consumption: the Imperator proves the system works by using it on itself.
 -   `build_type` controls which retrieval layers the Imperator's context window uses. Defaults to `standard-tiered` for lower inference cost. Switching to `knowledge-enriched` activates the full retrieval pipeline including vector similarity search and knowledge graph traversal.
--   `admin_tools: false` (default): Imperator has diagnostic tools (always available):
+-   Imperator tools are organized into separate files by category in the TE package (`tools/*.py`). Each file exports a `get_tools()` function. The Imperator flow discovers and binds tools from all files at compilation. New tools are added by creating a new file — no edits to the Imperator flow.
+-   **Diagnostic tools** (always available):
     -   Query MAD container logs from Postgres (collected by the log shipper)
     -   Introspect assembled context (tier breakdown, token usage, build type)
     -   View pipeline status (pending jobs, last assembly time)
     -   Search conversations and memories
     -   View health status and metrics
--   `admin_tools: true`: Imperator additionally has write capabilities:
+-   **Admin tools** (gated by `admin_tools: true` in TE config, hot-reloadable):
     -   Read and write AE configuration (change LLM models, embedding models, reranker, tuning parameters)
     -   Toggle verbose pipeline logging
-    -   Run read-only database queries
+    -   Change inference model per slot (`change_inference`) — lists available models from catalog, tests endpoint, switches config. Reads from `/config/inference-models.yml`.
+    -   Embedding model migration (`migrate_embeddings`) — destructive: wipes embeddings, resets extraction flags
+    -   Read-only SQL queries against the database
+-   **Operational tools** (available when their backing features are enabled):
+    -   `store_domain_info` / `search_domain_info`: Imperator's private domain information store (see §5.7)
+-   **Web tools** (always available):
+    -   `web_search`: Search the web via DuckDuckGo
+    -   `web_read`: Read and extract content from a web page (crawl4ai with HTML stripping fallback, system SSL context)
+-   **Filesystem tools** (always available):
+    -   `file_read`, `file_list`, `file_search`: Read-only access sandboxed to `/app`, `/config`, `/data`
+    -   `file_write`: Write-only to `/data/downloads/`
+    -   `read_system_prompt`, `update_system_prompt`: Read and modify the Imperator's own system prompt file
+-   **System tools** (always available):
+    -   `run_command`: Execute allowlisted shell commands (df, uptime, free, ps, hostname, pip list, etc.)
+    -   `calculate`: Safe mathematical expression evaluation
+-   **Notification tools** (always available):
+    -   `send_notification`: Send alerts via CloudEvents webhook to the alerter sidecar (default) or directly to external services (ntfy.sh, Slack). Supports event type routing.
+-   **Alerting tools** (always available):
+    -   `add_alert_instruction`, `list_alert_instructions`, `update_alert_instruction`, `delete_alert_instruction`: Manage instruction-driven alert routing in the alerter sidecar. Instructions are semantically searched and used as LLM system prompts for formatting.
+-   **Scheduling tools** (always available):
+    -   `list_schedules`, `create_schedule`, `enable_schedule`, `disable_schedule`: Database-backed cron-style scheduling with optimistic locking.
 -   The Imperator cannot modify its own TE configuration (Identity, Purpose, system prompt, its own model). TE config is the architect's domain.
 
 **5.6 Package Source Configuration**
 
 -   See §1.5. The StateGraph package source is configured in `config.yml`.
+
+**5.7 Domain Information**
+
+-   The Imperator maintains a private store of domain information — vectorized procedures, learned behaviors, and deployment-specific facts. This is the Imperator's long-term semantic memory about its own operational domain.
+-   Domain information is TE-owned. The AE provides the backing infrastructure (`domain_information` pgvector table, embedding model), but the TE owns the logic for what to store, when to store it, and how to search it.
+-   Stored in a dedicated `domain_information` table with columns: `id`, `content`, `embedding` (vector), `source`, `created_at`, `updated_at`. Vector dimension matches the MAD's configured embedding model.
+-   The Imperator decides when to write domain information — no automatic extraction. Common triggers: learning a new procedure, discovering a configuration detail, receiving operational guidance from the user.
+-   Enabled by default via `domain_information.enabled: true` in TE config.
 
 ### 6. Logging and Observability
 
@@ -466,7 +498,21 @@ imperator:
 
 -   All logs go to stdout (normal) or stderr (errors). No log files inside containers.
 -   Docker captures logs via `docker logs`.
--   The optional log shipper container discovers all containers on `context-broker-net` via the Docker API, tails their logs in real-time, and writes to a `system_logs` table in Postgres with resolved container names. This enables the Imperator to query logs across all MAD containers via SQL. Logs survive container rebuilds since they persist in the database. Deployments with their own log collection infrastructure can remove the log shipper container.
+-   The log shipper container discovers all containers on `context-broker-net` via the Docker API, tails their logs in real-time, and writes to a `system_logs` table in Postgres with resolved container names. This enables the Imperator to query logs across all MAD containers via SQL. Logs survive container rebuilds since they persist in the database.
+
+**6.1.1 Log Vectorization**
+
+-   The `system_logs` table includes an optional `embedding` vector column for semantic search.
+-   A background worker polls for log rows where `embedding IS NULL` and embeds them in batches.
+-   Uses a small, fast, local model (e.g., nomic-embed-text on Ollama) — configured separately from conversation embeddings via a `log_embeddings` section in `config.yml`.
+-   Enabled by adding the `log_embeddings` config section (disabled by default).
+-   Powers the `search_logs` MCP endpoint for semantic log search.
+
+**6.1.2 Log MCP Endpoints**
+
+-   `query_logs`: SQL-based log filtering by container, level, time range, keyword. Always available.
+-   `search_logs`: Semantic search over logs using vector similarity. Only available when log vectorization is enabled.
+-   Both are AE-level tools — always available (not gated by admin config).
 
 **6.2 Structured Logging**
 
@@ -631,6 +677,8 @@ The default deployment allows unrestricted outbound internet access from `contex
 
 -   v1.0 (2026-03-20): Initial draft
 -   v1.1 (2026-03-22): Align with implementation — build type registry (graph pairs), passthrough type, message schema (sender/recipient, tool_calls, tool_call_id, nullable content, remove content_type/idempotency_key), structured messages array retrieval, no LangGraph checkpointing, conv_store_message accepts context_window_id, broker_chat→imperator_chat, add mem_add/mem_list/mem_delete, last_accessed_at on context windows, internal token_count/priority, memory confidence half-life decay
+-   v1.2 (2026-03-25): Message identity (hostname-based sender/recipient), participant filter on conv_list_conversations, Imperator tool organization (tools/ directory), domain information (§5.7), log vectorization (§6.1.1), log MCP endpoints (§6.1.2, query_logs + search_logs), embedding model migration tool
+-   v1.3 (2026-03-26): Expanded Imperator tools to 9 modules / 33 tools — web (search, read), filesystem (sandboxed read/write, system prompt), system (allowlisted commands, math), notification (CloudEvents to alerter), alerting (instruction CRUD), scheduling (cron), change_inference (per-slot model switching from catalog). Alerter sidecar (§5.8). Inference models catalog. Seed knowledge. Stuck job watchdog.
 
 **Related Documents:**
 

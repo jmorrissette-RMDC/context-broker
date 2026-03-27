@@ -469,22 +469,70 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 
 | ID | Round | Reviewer | Severity | Description | File(s) | Status | Notes |
 |----|-------|----------|----------|-------------|---------|--------|-------|
-| G3-01 | G3 | Opus | minor | `black --check` fails on 12 files — formatting violations | multiple | OPEN | REQ-001 §1.2 requires black formatting. 12 files need reformatting. |
-| G3-02 | G3 | Opus | minor | `ruff check` has 2 violations — unused import, import order | `base_contract.py`, `mcp.py` | OPEN | REQ-001 §1.3 requires ruff compliance. Unused import in base_contract.py, import order in mcp.py. |
-| G3-03 | G3 | Opus | minor | Dead code: `app/workers/arq_worker.py` still exists | `app/workers/arq_worker.py` | OPEN | Legacy Redis worker. Redis was removed — this file is dead code. Should be deleted. |
-| G3-04 | G3 | Opus | minor | Missing `embedding_dims` startup validation | `app/config.py`, `app/main.py` | OPEN | Config should fail fast at startup if embedding_dims not set. Currently only validated at embedding time. |
+| G3-01 | G3 | Opus | minor | `black --check` fails on files — formatting violations | multiple | FIXED | Ran `black .` — 41 files reformatted. All pass `black --check` now. |
+| G3-02 | G3 | Opus | minor | `ruff check` violations — unused imports, import order, unused vars | multiple | FIXED | Ran `ruff check --fix` (42 auto-fixes) + manual fixes for remaining 18. 0 violations. Also fixed: test ordering issues with mem0 singleton, Redis references in static checks and lock tests. |
+| G3-03 | G3 | Opus | minor | Dead code: `app/workers/arq_worker.py` still exists | `app/workers/arq_worker.py` | FIXED | Deleted. No code references (only review docs). |
+| G3-04 | G3 | Opus | minor | Missing `embedding_dims` startup validation | `app/main.py` | FIXED | Added fail-fast check in lifespan: `RuntimeError` if `embeddings.embedding_dims` not set. |
+
+### Code Review (2026-03-26) — GPT-5.4, Grok-4.2, Gemini-3.1-Pro
+
+| ID | Round | Reviewer | Severity | Description | File(s) | Status | Notes |
+|----|-------|----------|----------|-------------|---------|--------|-------|
+| CR-01 | R1 | Grok | major | Non-atomic conv_delete — 4 DELETEs without transaction | `tool_dispatch.py` | FIXED | Wrapped in `async with conn.transaction()`. |
+| CR-02 | R1 | Grok | major | Scheduler race — in-memory last_fired, no DB coordination | `scheduler.py` | FIXED | Added `last_fired_at` column (migration 020), optimistic locking UPDATE. |
+| CR-03 | R1 | Gemini | blocker | Poison pill in embedding worker — failed batch re-fetched forever | `db_worker.py` | FIXED | After 5 consecutive failures, mark with zero-vector. Log worker deletes unembeddable entries. |
+| CR-04 | R1 | GPT+Gemini | major | Context window ON CONFLICT mismatch with migration 013 | `conversation_ops_flow.py` | FIXED | Changed to `(conversation_id, build_type, max_token_budget)`. |
+| CR-05 | R1 | GPT+Gemini | major | domain_memories table doesn't exist on fresh deploy | `operational.py` | FIXED | Added `table_exists` check before querying. |
+| CR-06 | R1 | Gemini | major | Assembly worker no ORDER BY — starvation risk | `db_worker.py` | FIXED | Added `ORDER BY cw.last_assembled_at ASC NULLS FIRST`. |
+| CR-07 | R1 | GPT | major | `hash()` for advisory locks is process-randomized | multiple | FIXED | Created `app/utils.py` with `stable_lock_id()` using SHA-256. Replaced all 7 occurrences. |
+| CR-08 | R1 | Gemini | major | Imperator agent_node re-executes get_context on every ReAct iteration | `imperator_flow.py` | FIXED | Return SystemMessage in first call so `add_messages` persists it. |
+| CR-09 | R1 | GPT | blocker | asyncpg.Pool direct calls without acquire() | multiple | FALSE_POSITIVE | `asyncpg.Pool` supports direct `execute()`, `fetch()`, `fetchval()`, `fetchrow()`. Confirmed via API inspection. |
+
+### Extraction Pipeline (2026-03-26)
+
+| ID | Round | Reviewer | Severity | Description | File(s) | Status | Notes |
+|----|-------|----------|----------|-------------|---------|--------|-------|
+| EXT-01 | Post | — | blocker | Extraction throughput: 200 msgs in 12 hours with GPT-4o-mini | `memory_extraction.py` | FIXED | Root cause: oversized messages truncated but never marked extracted → same message re-fetched every cycle. Fixed: chunk large messages, mark all selected as fully extracted. |
+| EXT-02 | Post | — | major | `_clean_for_extraction` missing — raw markdown/code sent to LLM | `memory_extraction.py` | FIXED | Added text cleaning: strips code blocks, file paths, URLs, markdown formatting before extraction. |
+| EXT-03 | Post | — | major | `extraction_max_chars` default 90K — too large for LLM | `memory_extraction.py` | FIXED | Reduced to 8K. Configurable. |
+| EXT-04 | Post | — | note | Gemini JSON extraction via OpenAI endpoint unreliable | `mem0_client.py` | NOTE | OpenAI-compatible endpoint drops `response_format` enforcement. Native Gemini provider in Mem0 1.0.7 would fix it but Mem0 upgrade blocked. Use GPT-4o-mini or Ollama for extraction. |
+
+### Compliance Audit (2026-03-26)
+
+| ID | Round | Reviewer | Severity | Description | File(s) | Status | Notes |
+|----|-------|----------|----------|-------------|---------|--------|-------|
+| CA-01 | Audit | Opus | major | 5 blanket `except Exception` in worker polling loops (REQ-001 §4.5) | `db_worker.py` (4 loops), `scheduler.py` (1 loop) | EXCEPTION | Worker loops must not crash on unexpected errors — crashing loses the worker, DB retries naturally. Specific exceptions caught first, blanket is safety net only. Exception registered as EX-CB-001. |
+| CA-02 | Audit | Opus | minor | Log shipper and UI Dockerfiles use `python:3.12-slim` — not pinned to patch version (REQ-002 §1.4) | `log_shipper/Dockerfile`, `ui/Dockerfile` | FIXED | Pinned both to `python:3.12.1-slim`. |
+| CA-03 | Audit | Opus | minor | Log shipper Dockerfile missing HEALTHCHECK directive (REQ-002 §1.5) | `log_shipper/Dockerfile` | FIXED | Added `HEALTHCHECK` using `kill -0 1` (no HTTP endpoint available). |
+| PG-43 | Post | — | major | Imperator crashes if its conversation is deleted from DB at runtime | `app/imperator/state_manager.py` | FIXED | `get_conversation_id()` now verifies conversation exists before returning. If deleted, creates a new one and updates state file. |
+
+### Deployment Verification (2026-03-26)
+
+| ID | Round | Reviewer | Severity | Description | File(s) | Status | Notes |
+|----|-------|----------|----------|-------------|---------|--------|-------|
+| DV-01 | Deploy | Opus | minor | Nginx returns 502 after langgraph container recreated — caches upstream DNS at startup | `docker-compose.yml` | FIXED | Deploy command now includes `docker restart context-broker` after `docker compose up -d`. Documented in plan. |
+| DV-02 | Deploy | Opus | minor | web_read crawl4ai fallback only catches ImportError — runtime errors (missing browser binary) bypass fallback | `tools/web.py` | FIXED | Broadened except clause to catch all exceptions from crawl4ai, falling through to HTML stripping. |
+| DV-03 | Deploy | Opus | minor | httpx uses certifi bundle instead of OS certificate store — some HTTPS sites fail with cert errors | `tools/web.py` | FIXED | httpx.AsyncClient now uses `verify=ssl.create_default_context()` to use the system trust store. |
+| DV-04 | Deploy | Opus | major | Imperator intermittently returns empty content — Gemini 2.5 Flash returns valid but empty completions (content="" with no tool_calls) | `imperator_flow.py` | FIXED | Root cause: Gemini occasionally returns empty completions (~1 in 10-15 requests). Fix: agent_node retries up to 2 times on empty response before accepting. Also added max_iterations_fallback graph node and empty response guard in store_assistant_message. Verified: 20/20 requests return valid content, retry fires when needed. |
+| DV-05 | Deploy | Opus | major | Config mounted read-only — admin tools (config_write, migrate_embeddings) fail with PermissionError | `docker-compose.yml` | FIXED | Changed `./config:/config:ro` to `./config:/config` (rw). Also chmod 666 on config files for container UID 1001 access. |
+| DV-06 | Deploy | Opus | major | migrate_embeddings does not ALTER vector columns — wipes data but leaves untyped columns, preventing HNSW indexing | `tools/admin.py` | FIXED | Added ALTER TABLE for conversation_messages and domain_information after wipe. Creates HNSW indexes after ALTER. |
+| DV-07 | Deploy | Opus | blocker | No HNSW indexes on any vector column — all vector searches were sequential scans | postgres | FIXED | Created HNSW indexes on conversation_messages, system_logs, domain_information. Columns typed to vector(1024), vector(256), vector(1024). |
+| DV-08 | Deploy | Opus | major | Conversation embeddings at 3072 dims — exceeds pgvector HNSW limit of 2000 for float32 | config | FIXED | Switched to MRL (Matryoshka) truncation: conversation embeddings 1024 dims, log embeddings 256 dims. LangChain dimensions parameter passed through to API. |
+| DV-09 | Deploy | Opus | major | get_embeddings_model does not pass dimensions parameter to OpenAIEmbeddings — MRL truncation impossible | `app/config.py` | FIXED | Added `kwargs["dimensions"] = int(dims)` when embedding_dims configured. |
+| DV-10 | Deploy | Opus | minor | admin_tools: false on irina entire session — admin tools never tested live | `config/te.yml` | FIXED | Enabled admin_tools: true. Live-tested migrate_embeddings successfully. |
 
 ---
 
 ## Summary
 
-Updated 2026-03-25. 59/59 tests PASS. Gate 3 audit: 43/47 requirements passing, 4 findings (all minor).
+Updated 2026-03-26. 404 unit tests PASS. Compliance audit + deployment verification: 7 findings (1 EXCEPTION, 6 FIXED).
 
 | Status | Count |
 |--------|-------|
-| OPEN | 4 (G3-01 through G3-04) |
-| FIXED | 230 |
+| OPEN | 0 |
+| FIXED | 261 |
 | WONTFIX | 36 |
-| FALSE_POSITIVE | 1 |
+| FALSE_POSITIVE | 2 |
 | REMOVED | 1 |
-| NOTE | 5 |
+| NOTE | 6 |
+| EXCEPTION | 1 |

@@ -1,6 +1,6 @@
 # Provider Capabilities Matrix
 
-**Date:** 2026-03-23
+**Date:** 2026-03-26
 **Purpose:** Reference for which inference providers support which capabilities, and what protocols they use. Informs configuration and testing.
 
 ## Capability Matrix
@@ -57,6 +57,25 @@
 4. **Minimum viable deployment:** Ollama (LLM) + Infinity (embeddings + reranking). Free, local, no API keys.
 
 5. **Full-featured deployment:** Cloud LLM (OpenAI/Anthropic) + cloud embeddings (OpenAI/Voyage) + cloud reranking (Together/Cohere/Jina). Or keep Infinity local for embeddings/reranking to avoid per-call costs.
+
+## Known Limitations
+
+### Gemini JSON Extraction (EXT-04)
+Google Gemini's OpenAI-compatible endpoint does not enforce `response_format: json_object`. When used for extraction (via Mem0), the LLM may return non-JSON responses that fail parsing. The native Gemini API supports JSON enforcement, but Mem0 0.1.29 only supports the OpenAI-compatible endpoint. **Workaround:** Use GPT-4o-mini, xAI, or Ollama for extraction. Gemini works fine for the Imperator and summarization.
+
+### Anthropic Extraction
+Anthropic's OpenAI-compatible endpoint does not support `response_format` at all. Not usable for extraction. Works for Imperator conversation.
+
+### Local Out-of-Box Verification
+Verified working without any API keys:
+- **Imperator:** Ollama qwen2.5:7b (conversation + tool calling)
+- **Summarization:** Ollama qwen2.5:7b
+- **Extraction:** Ollama qwen2.5:7b (valid JSON via `response_format: json_object`)
+- **Embeddings:** Infinity nomic-ai/nomic-embed-text-v1.5 (768 dims)
+- **Reranking:** Infinity mixedbread-ai/mxbai-rerank-xsmall-v1
+
+### Inference Models Catalog
+A curated model catalog is shipped at `/config/inference-models.yml`. The `change_inference` Imperator tool reads this catalog to list available models per slot and switch between them. The catalog includes flagship and cost-effective options per provider, with extraction restricted to providers with verified JSON mode enforcement.
 
 ## Testing Requirements
 

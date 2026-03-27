@@ -53,6 +53,7 @@ The gateway resides on both the external host-exposed network and the internal `
 | `context-broker-infinity` (optional) | Local embeddings and reranking via OpenAI-compatible `/v1/embeddings` and `/v1/rerank` APIs. No API keys needed. Remove if using cloud providers. | `michaelf34/infinity` |
 | `context-broker-ollama` (optional) | Local LLM inference via OpenAI-compatible API. No API keys needed. Remove if using cloud providers. | `ollama/ollama` |
 | `context-broker-log-shipper` (optional) | Discovers containers on context-broker-net via Docker API, tails logs, writes to Postgres `system_logs` table with resolved names. Remove if deployment has its own log collector. | Custom (Python) |
+| `context-broker-alerter` (optional) | Instruction-driven webhook relay. Receives CloudEvents from `send_notification`, searches `alert_instructions` table by semantic similarity, formats via LLM, fans out to channels (Slack, Discord, ntfy, SMTP, Twilio SMS, webhook). Remove if using direct webhook integration. | Custom (Python) |
 
 The Infinity container serves embeddings and reranking on the internal network using the Infinity inference engine. It loads configured models at startup (first boot downloads weights) and exposes standard OpenAI-compatible endpoints. The LangGraph container calls it the same way it calls any cloud embedding or reranking provider.
 
@@ -103,7 +104,8 @@ The system relies on eventual consistency across three distinct datastores. Post
 
 - **PostgreSQL (`context-broker-postgres`):**
   - Uses the `pgvector` extension.
-  - **Tables:** `conversations`, `conversation_messages` (OpenAI-format fields: `role`, `content` (nullable), `sender`, `recipient`, `tool_calls` (JSONB), `tool_call_id`, `token_count`, `priority`; includes `vector` and `tsvector` columns for hybrid search), `context_windows` (scoped to participant-conversation pairs; includes `last_accessed_at` for dormant window detection), `conversation_summaries`. Embeddings dimensions are configuration-dependent.
+  - **Tables:** `conversations`, `conversation_messages` (OpenAI-format fields: `role`, `content` (nullable), `sender`, `recipient`, `tool_calls` (JSONB), `tool_call_id`, `token_count`, `priority`; includes `vector` and `tsvector` columns for hybrid search), `context_windows` (scoped to participant-conversation pairs; includes `last_accessed_at` for dormant window detection), `conversation_summaries`, `domain_information` (TE-owned: Imperator's learned facts with pgvector embeddings), `system_logs` (with optional `embedding` vector column for semantic log search). Embeddings dimensions are configuration-dependent.
+  - **Message Identity:** `sender` and `recipient` use the MAD's hostname (`socket.gethostname()`) as identity. Incoming messages: sender = `user` field from request, recipient = MAD hostname. Outgoing Imperator replies: sender = MAD hostname, recipient = `user` field. Enables participant-based conversation filtering (`conv_list_conversations` with `participant` parameter).
   - Maintains schema versioning for automated migrations on boot. Schema migrations are strictly forward-only and non-destructive. The application will refuse to start if a migration cannot be safely applied without data loss.
 - **Neo4j (`context-broker-neo4j`):**
   - Accessed exclusively via Mem0 APIs.
@@ -120,12 +122,12 @@ The Nginx gateway (`context-broker`) routes external traffic to the LangGraph co
 
 ### 6.1 MCP Interface (HTTP/SSE)
 Programmatic access for agents, running on `/mcp`. Exposes core capabilities as tools:
-- `conv_create_conversation`, `conv_store_message` (accepts `context_window_id` or `conversation_id`), `conv_retrieve_context`
-- `conv_create_context_window`, `conv_get_history`
-- `conv_search`, `conv_search_messages`, `conv_search_context_windows`
-- `mem_search`, `mem_get_context`, `mem_add`, `mem_list`, `mem_delete`
+- `get_context`, `store_message`, `search_messages`, `search_knowledge` (core tools)
+- `conv_create_conversation`, `conv_list_conversations` (with `participant` filter), `conv_get_history`, `conv_search_context_windows`
+- `mem_add`, `mem_list`, `mem_delete`
+- `query_logs` (SQL-based log filtering), `search_logs` (semantic log search, requires log vectorization)
 - `imperator_chat`
-- `metrics_get`
+- `metrics_get`, `install_stategraph`
 
 ### 6.2 OpenAI-Compatible Chat
 Running on `/v1/chat/completions`. Allows any standard chat UI (e.g., Chatbot UI) to interact with the Imperator agent. The endpoint parses the standard OpenAI payload, invokes the Imperator StateGraph, and streams back standard OpenAI SSE tokens (`data: {"choices": ...}`).
@@ -187,6 +189,7 @@ Background processing is driven by database state, not external queues. The data
 - **Extraction Worker:** Polls `SELECT FROM conversation_messages WHERE memory_extracted IS NOT TRUE ORDER BY priority DESC`. Sends message batches to Mem0 for knowledge extraction into the Neo4j graph. Marks messages as extracted after successful processing.
 - **Assembly Worker:** Triggered after embedding batches complete. Checks context windows where new tokens have accumulated since last assembly and runs the build-type-specific assembly graph.
 - **Concurrency & Locking:** PostgreSQL advisory locks prevent concurrent context assemblies on the same context window.
+- **Log Embedding Worker:** Polls `SELECT FROM system_logs WHERE embedding IS NULL`. Embeds log entries in batches using a separate, local embedding model (e.g., nomic-embed-text on Ollama). Configured independently from conversation embeddings via `log_embeddings` in `config.yml`. Disabled by default.
 - **Retry:** Workers naturally retry on the next poll cycle — unprocessed messages remain in the query results until successfully processed. No dead-letter handling needed.
 
 ## 10. Imperator Design
@@ -201,8 +204,16 @@ The Imperator is the Context Broker's TE — the cognitive agent that owns the s
 - **Configurable Context:** The Imperator has its own configurable `build_type` and token budget. Budget is snapped to standard buckets for efficient window sharing.
 - **Persistent Continuity:** Stores its `conversation_id` in `/data/imperator_state.json`. On reboot, resumes the same conversation. If the state file is missing or the conversation no longer exists, creates a new one automatically.
 - **Standalone Operation:** Without a Context Broker endpoint configured, the Imperator operates with `MemorySaver` only — basic but functional. The Context Broker is an upgrade (curated context assembly, knowledge extraction, semantic search), not a dependency.
-- **Diagnostic Capabilities (always available):** The Imperator can query MAD container logs from Postgres (collected by the log shipper), introspect assembled context (tier breakdown, token usage, build type), and view pipeline status (pending jobs, last assembly time). These are read-only diagnostic tools that help the Imperator observe and explain its own system's behavior.
-- **Admin Capabilities (gated by `admin_tools: true`):** Read and write AE configuration (change LLM models, embedding models, reranker, tuning parameters), toggle verbose pipeline logging, and execute read-only database queries. The Imperator can manage the infrastructure it runs on but cannot modify its own TE configuration (Identity, Purpose, system prompt, its own model) — that is the architect's domain.
+- **Tool Organization:** Tools are split into 9 modules in the TE package (`tools/*.py`). Each file exports a `get_tools()` function. The Imperator flow discovers and binds tools from all files at compilation. New tools are added by creating a file — no edits to the Imperator flow. 33 tools total across 9 modules.
+- **Diagnostic Tools (always available):** Query MAD container logs, introspect assembled context (tier breakdown, token usage, build type), view pipeline status (pending jobs, last assembly time), health check. Read-only observation of the system.
+- **Admin Tools (gated by `admin_tools: true`, hot-reloadable):** Read/write AE configuration, toggle verbose pipeline logging, change inference model per slot (`change_inference` reads from `/config/inference-models.yml` catalog), embedding model migration, read-only SQL queries. The Imperator can manage the infrastructure it runs on but cannot modify its own TE configuration — that is the architect's domain.
+- **Operational Tools:** `store_domain_info` and `search_domain_info` for the Imperator's private domain information store (pgvector). The Imperator decides what operational knowledge to retain across conversations. Available when `domain_information.enabled: true` in TE config. Seeded with 14 operational articles on first startup.
+- **Web Tools (always available):** `web_search` (DuckDuckGo), `web_read` (crawl4ai with HTML fallback, system SSL context). Enables the Imperator to research documentation and external information.
+- **Filesystem Tools (always available):** Read-only access to `/app`, `/config`, `/data` (file_read, file_list, file_search). Write to `/data/downloads/` only. Read and update the Imperator's own system prompt file.
+- **System Tools (always available):** Execute allowlisted shell commands (run_command), safe math evaluation (calculate).
+- **Notification Tools (always available):** `send_notification` sends CloudEvents webhooks to the alerter sidecar (default) or directly to external services.
+- **Alerting Tools (always available):** Manage instruction-driven alert routing in the alerter sidecar. Instructions are stored with vector embeddings, semantically searched when alerts arrive, and used as LLM system prompts for formatting. The Imperator teaches the alerter how to handle different event types by adding instructions.
+- **Scheduling Tools (always available):** Database-backed cron-style scheduling with optimistic locking for safe multi-worker coordination.
 
 ## 11. Resilience and Observability
 

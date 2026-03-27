@@ -40,3 +40,32 @@ Historical record of all development actions from initial extraction through dep
 | 2026-03-23 | 11 | Fixed healthcheck false negatives | Ollama: bash TCP trick unreliable, changed to `ollama list`. Gateway: Alpine wget resolves localhost to IPv6, changed to 127.0.0.1. All 7 containers healthy. |
 | 2026-03-23 | 11 | Phase 1 cross-provider direct API checks | 8 passed (5 LLM + 3 embedding). Together rerank requires dedicated endpoint (skipped). |
 | 2026-03-23 | 11 | REQ-001/002 gap analysis | Found 4 missing requirements in REQ-001 (AE/TE separation, dynamic loading, Imperator, TE package structure) + base contract. REQ-002 missing TE config separation. Updated all requirements docs + Context Broker REQ/HLD. |
+| 2026-03-24 | 12 | Dynamic StateGraph loading | Bootstrap kernel + AE package (context-broker-ae) + TE package (context-broker-te). Entry_points discovery, install_stategraph() tool, base contract, migration 015. 292 tests passing. |
+| 2026-03-24 | 12 | Package extraction finalized | Old flow files removed from app/flows/, test imports updated. Wheels built: context_broker_ae-0.1.0, context_broker_te-0.1.0. |
+| 2026-03-24 | 13 | Deployed to irina | AE + TE packages registered, 8 containers healthy, migration 015 applied. |
+| 2026-03-24 | 14 | Credentials + hot-reload fixes | PG-39 (creds from mounted file), PG-40 (mtime-based config), PG-42 (5 provider keys provisioned). |
+| 2026-03-24 | 15 | Component tests 28/28 PASS | Groups A-G against irina with Gemini 2.5 Flash. Hot-reload verified live. |
+| 2026-03-24 | 16 | Cross-provider full pipeline 3/3 PASS | Google, OpenAI, Ollama — full pipeline through CB with hot-reload. State 4 validated. |
+| 2026-03-24 | 17 | Knowledge extraction fixes | PG-43/44/45/46/47/49/50/51/53. Rogers monkey-patches, embedding dims, retry backoff. |
+| 2026-03-24 | 18 | Integration test scripts + initial run | Phase 1: 10,099 msgs PASS. Phase 2: 10/10. Phase 3: 9/9. Phase 4a: 3/4. Phase 4b: PASS. |
+| 2026-03-25 | 19 | Redis removed | DB-driven workers (embedding, extraction, assembly poll loops). Postgres advisory locks. 8→7 containers. Message pipeline simplified: store→END. |
+| 2026-03-25 | 19 | embedding_dims required | No hardcoded dimension map. Config must specify. |
+| 2026-03-25 | 20 | Final clean test run 59/59 PASS | Component 28/28, Cross-provider 3/3, Phase 1 5/5, Phase 2 10/10, Phase 3 9/9, Phase 4a 4/4. |
+| 2026-03-25 | 21 | Gate 3 audit | 43/47 requirements passing, 4 minor findings (black, ruff, dead arq_worker.py, embedding_dims validation). |
+| 2026-03-25 | 21 | Gate 3 findings fixed | black (41 files), ruff (60 violations), deleted arq_worker.py, added embedding_dims startup check. Also: Redis test cleanup, mem0 singleton ordering, lock test rewrites. 266 unit tests PASS. |
+| 2026-03-25 | 22 | Core/optional service docs | REQ + HLD for core services (postgres, neo4j, log shipper, log vectorization, log MCP, domain info, domain knowledge, imperator tools) and optional services (Gradio UI, local inference). |
+| 2026-03-25 | 23 | Tool organization | Split imperator_flow.py tools into tools/diagnostic.py, tools/admin.py, tools/operational.py, tools/scheduling.py. Discovery via get_tools(). |
+| 2026-03-25 | 23 | Sender/recipient + caller identity | Hostname as MAD identity, resolve_caller() for both OpenAI and MCP paths, _request_user through config. |
+| 2026-03-25 | 23 | Participant filter | conv_list_conversations with optional participant parameter. conv_delete_conversation added. |
+| 2026-03-25 | 23 | Log MCP + vectorization | query_logs and search_logs MCP tools. Log embedding worker. Migrations 017 (system_logs embedding), 018 (domain_information table). |
+| 2026-03-25 | 23 | Domain info + knowledge | store_domain_info, search_domain_info, extract_domain_knowledge, search_domain_knowledge tools. domain_mem0.py for separate Mem0 instance. |
+| 2026-03-25 | 23 | Scheduler | Migration 019 (schedules + schedule_history tables), scheduler_worker, scheduling tools (list/create/enable/disable). Migration 020 (last_fired_at for DB coordination). |
+| 2026-03-25 | 23 | Embedding migration tool | migrate_embeddings admin tool with dry run + confirm modes. |
+| 2026-03-25 | 23 | Gradio Chat UI | context-broker-ui container. Multi-MAD, participant filter, chat streaming, artifacts panel, conversation CRUD, log viewer. |
+| 2026-03-25 | 23 | Test plan updated | 43 new traceability matrix entries (T-13 through T-22). 48 new unit tests (314 total). |
+| 2026-03-26 | 24 | Code review (3 reviewers) | GPT-5.4, Grok-4.2, Gemini-3.1-Pro. 0 blockers, 8 real findings fixed: atomic delete, scheduler race (DB last_fired_at), poison pill (zero-vector), ON CONFLICT mismatch, domain_memories table guard, assembly ORDER BY, stable_lock_id (SHA-256), SystemMessage persistence in ReAct loop. GPT-5.4's 14 "asyncpg.Pool" blockers confirmed FALSE POSITIVE. |
+| 2026-03-26 | 25 | New tool modules | tools/web.py (web_search, web_read), tools/filesystem.py (file_read/list/search/write, read/update_system_prompt), tools/system.py (run_command, calculate), tools/notify.py (send_notification). 29 total tools. |
+| 2026-03-26 | 25 | Extraction pipeline fix | _clean_for_extraction strips code/markdown/paths before LLM. _chunk_text splits oversized messages. All selected messages marked as extracted (no poison pills). Default max_chars reduced to 8K. |
+| 2026-03-26 | 25 | Mem0 upgrade attempted + reverted | Mem0 1.0.7 has native Gemini provider but requires google-genai, langchain-neo4j, uses psycopg3, and Neo4j vector functions our version doesn't have. Reverted to 0.1.29. |
+| 2026-03-26 | 25 | Gemini JSON extraction investigated | Gemini via OpenAI-compatible endpoint doesn't enforce response_format. Native Gemini provider in Mem0 1.0.7 would fix it but blocked by upgrade. GPT-4o-mini and Ollama qwen2.5:7b both produce valid JSON. |
+| 2026-03-26 | 25 | Local extraction verified | Ollama qwen2.5:7b produces valid JSON with response_format: json_object. Confirmed with clean and messy content. Out-of-box works without API keys. |
