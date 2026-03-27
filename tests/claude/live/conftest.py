@@ -1,29 +1,30 @@
 """Session-scoped fixtures for live integration tests.
 
 Lifecycle:
-1. Deploy the test Docker Compose stack (claude-test-net, port 8081)
-2. Wait for all containers healthy
-3. Bulk load Phase 1 data (10,430 messages)
-4. Wait for pipeline completion (embeddings, extraction, assembly)
-5. Run all live tests
-6. Tear down the stack and generate ISSUES.md
+1. Run deploy.sh to stand up the test stack
+2. Bulk load Phase 1 data (10,430 messages)
+3. Wait for pipeline completion (embeddings, extraction, assembly)
+4. Run all live tests
+5. Tear down the stack via deploy.sh --down
+6. Generate ISSUES.md from issues.json
 """
 
 import json
+import subprocess
 import time
-import uuid
 
 import httpx
 import pytest
 
 from .helpers import (
     BASE_URL,
-    COMPOSE_FILE,
+    BASE_PORT,
+    COMPOSE_PROJECT,
     PHASE1_DIR,
     PROJECT_ROOT,
+    SSH_TARGET,
+    REMOTE_PROJECT_DIR,
     compose_cmd,
-    docker_exec,
-    docker_psql,
     extract_mcp_result,
     generate_issues_md,
     get_db_counts,
@@ -32,6 +33,7 @@ from .helpers import (
     wait_for_health,
     wait_for_pipeline,
     ISSUES_JSON,
+    _run_on_docker_host,
 )
 
 
@@ -52,6 +54,27 @@ def http_client():
 
 
 # ---------------------------------------------------------------------------
+# Deploy / teardown via deploy.sh
+# ---------------------------------------------------------------------------
+
+def _run_deploy_script(args: str, timeout: int = 600) -> tuple[int, str, str]:
+    """Run deploy.sh on the Docker host."""
+    script_path = f"{REMOTE_PROJECT_DIR}/deploy.sh"
+    cmd = f"cd {REMOTE_PROJECT_DIR} && bash {script_path} {args}"
+
+    if SSH_TARGET:
+        escaped = cmd.replace("\\", "\\\\").replace('"', '\\"')
+        full_cmd = f'ssh {SSH_TARGET} "{escaped}"'
+    else:
+        full_cmd = cmd
+
+    result = subprocess.run(
+        full_cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
+# ---------------------------------------------------------------------------
 # Session-scoped test stack lifecycle
 # ---------------------------------------------------------------------------
 
@@ -59,51 +82,43 @@ def http_client():
 def test_stack(http_client):
     """Deploy the test stack, load data, yield, then tear down."""
     # ------------------------------------------------------------------
-    # Step 1: Deploy
+    # Step 1: Deploy via deploy.sh
     # ------------------------------------------------------------------
-    print("\n[SETUP] Deploying Claude test stack...")
-    compose_cmd("up -d --build", timeout=600)
-
-    # ------------------------------------------------------------------
-    # Step 2: Wait for health
-    # ------------------------------------------------------------------
-    print("[SETUP] Waiting for test stack to become healthy...")
-    healthy = wait_for_health(http_client, timeout=180)
-    if not healthy:
-        logs = compose_cmd("logs --tail 50")
-        compose_cmd("down -v", timeout=60)
-        pytest.fail(f"Test stack failed to become healthy within 180s.\nLogs:\n{logs}")
-
-    print("[SETUP] Test stack healthy")
-
-    # ------------------------------------------------------------------
-    # Step 2a: Create mem0_memories stub if missing
-    # ------------------------------------------------------------------
-    # Migration 016 expects this table to exist but Mem0 creates it
-    # lazily. On a fresh DB, migrations loop forever without this stub.
-    docker_psql(
-        "CREATE TABLE IF NOT EXISTS mem0_memories ("
-        "id UUID PRIMARY KEY DEFAULT gen_random_uuid(), "
-        "memory TEXT, payload JSONB, user_id VARCHAR(255), "
-        "embedding vector)"
+    print(f"\n[SETUP] Deploying stack '{COMPOSE_PROJECT}' via deploy.sh...")
+    rc, stdout, stderr = _run_deploy_script(
+        f"{COMPOSE_PROJECT} {BASE_PORT} ./config-test",
+        timeout=600,
     )
-    # Restart langgraph so migrations can complete with the table present
-    compose_cmd("restart context-broker-langgraph", timeout=60)
-    time.sleep(10)
+
+    # Print deploy output so it's visible in pytest -s
+    if stdout:
+        for line in stdout.splitlines():
+            print(f"  {line}")
+    if stderr:
+        for line in stderr.splitlines():
+            print(f"  [stderr] {line}")
+
+    if rc != 0:
+        print(f"[SETUP] deploy.sh failed (exit {rc}), attempting teardown...")
+        _run_deploy_script(f"--down {COMPOSE_PROJECT}", timeout=60)
+        pytest.fail(
+            f"deploy.sh failed with exit code {rc}.\n"
+            f"stdout:\n{stdout}\nstderr:\n{stderr}"
+        )
+
+    print("[SETUP] Stack deployed successfully")
 
     # ------------------------------------------------------------------
-    # Step 2b: Wait for MCP readiness (Postgres middleware)
+    # Step 2: Verify MCP readiness from test runner
     # ------------------------------------------------------------------
-    # /health can return 200 while the langgraph app's Postgres middleware
-    # still returns 503. Wait until an MCP call succeeds.
-    print("[SETUP] Waiting for MCP readiness...")
+    # deploy.sh checks from the Docker host (localhost). We need to verify
+    # from the test runner machine as well (may be different host).
+    print("[SETUP] Verifying MCP readiness from test runner...")
     mcp_ready = False
-    mcp_deadline = time.time() + 120
+    mcp_deadline = time.time() + 60
     while time.time() < mcp_deadline:
         try:
-            resp = mcp_call(
-                http_client, "metrics_get", {},
-            )
+            resp = mcp_call(http_client, "metrics_get", {})
             if resp.status_code == 200:
                 mcp_ready = True
                 break
@@ -112,10 +127,13 @@ def test_stack(http_client):
         time.sleep(3)
 
     if not mcp_ready:
-        logs = compose_cmd("logs --tail 50")
-        pytest.fail(f"MCP endpoint not ready within 120s.\nLogs:\n{logs}")
+        pytest.fail(
+            f"MCP endpoint at {BASE_URL}/mcp not reachable from test runner. "
+            f"deploy.sh succeeded on the Docker host but the test runner "
+            f"cannot reach port {BASE_PORT}."
+        )
 
-    print("[SETUP] MCP endpoint ready")
+    print("[SETUP] MCP endpoint verified from test runner")
 
     # ------------------------------------------------------------------
     # Step 3: Bulk load Phase 1 data
@@ -127,6 +145,9 @@ def test_stack(http_client):
         pytest.fail(f"No conversation files found in {PHASE1_DIR}")
 
     total_messages = 0
+    load_errors = 0
+    load_start = time.time()
+
     for conv_file in conversation_files:
         print(f"[SETUP] Loading {conv_file.name}...")
         messages = json.loads(conv_file.read_text(encoding="utf-8"))
@@ -141,7 +162,17 @@ def test_stack(http_client):
                 "user_id": "test-runner",
             },
         )
-        assert resp.status_code == 200, f"Failed to create conversation: {resp.text}"
+        if resp.status_code != 200:
+            log_issue(
+                "setup_bulk_load",
+                "error",
+                "data-loading",
+                f"Failed to create conversation for {conv_file.name}",
+                "200",
+                str(resp.status_code),
+            )
+            continue
+
         conv_id = extract_mcp_result(resp)["conversation_id"]
         loaded_conversations[conv_file.stem] = conv_id
 
@@ -158,44 +189,68 @@ def test_stack(http_client):
                 },
             )
             if resp.status_code != 200:
-                log_issue(
-                    "setup_bulk_load",
-                    "error",
-                    "data-loading",
-                    f"Failed to store message {i} in {conv_file.name}",
-                    "200",
-                    str(resp.status_code),
-                )
+                load_errors += 1
+                if load_errors <= 5:  # Log first 5 errors
+                    log_issue(
+                        "setup_bulk_load",
+                        "error",
+                        "data-loading",
+                        f"Failed to store message {i} in {conv_file.name}: HTTP {resp.status_code}",
+                        "200",
+                        str(resp.status_code),
+                    )
             total_messages += 1
 
             if total_messages % 500 == 0:
-                print(f"[SETUP] Loaded {total_messages} messages...")
+                elapsed = time.time() - load_start
+                rate = total_messages / elapsed if elapsed > 0 else 0
+                print(
+                    f"[SETUP] Loaded {total_messages} messages "
+                    f"({rate:.0f} msg/s, {load_errors} errors)..."
+                )
 
-    print(f"[SETUP] Loaded {total_messages} messages across {len(loaded_conversations)} conversations")
+    load_elapsed = time.time() - load_start
+    print(
+        f"[SETUP] Loaded {total_messages} messages across "
+        f"{len(loaded_conversations)} conversations "
+        f"in {load_elapsed:.0f}s ({load_errors} errors)"
+    )
+
+    if load_errors > total_messages * 0.1:
+        log_issue(
+            "setup_bulk_load",
+            "error",
+            "data-loading",
+            f">{10}% of messages failed to load: {load_errors}/{total_messages}",
+            "<10% errors",
+            f"{load_errors}/{total_messages}",
+        )
 
     # ------------------------------------------------------------------
     # Step 4: Wait for pipeline
     # ------------------------------------------------------------------
     print("[SETUP] Waiting for pipeline completion...")
+    pipeline_start = time.time()
     try:
         final_counts = wait_for_pipeline(http_client, total_messages)
+        pipeline_elapsed = time.time() - pipeline_start
         print(
-            f"[SETUP] Pipeline complete: "
+            f"[SETUP] Pipeline complete in {pipeline_elapsed:.0f}s: "
             f"embedded={final_counts['embedded']}, "
             f"summaries={final_counts['summaries']}, "
             f"extracted={final_counts['extracted']}"
         )
     except TimeoutError as exc:
+        pipeline_elapsed = time.time() - pipeline_start
         log_issue(
             "setup_pipeline_wait",
             "error",
             "pipeline",
-            str(exc),
+            f"Pipeline did not complete in {pipeline_elapsed:.0f}s: {exc}",
             f"{total_messages} embeddings",
             str(get_db_counts()),
         )
         print(f"[SETUP] WARNING: Pipeline did not complete: {exc}")
-        # Don't fail — tests can still run on partial data
 
     # ------------------------------------------------------------------
     # Yield to tests
@@ -211,8 +266,11 @@ def test_stack(http_client):
     print("\n[TEARDOWN] Generating issues log...")
     generate_issues_md()
 
-    print("[TEARDOWN] Tearing down Claude test stack...")
-    compose_cmd("down -v", timeout=120)
+    print(f"[TEARDOWN] Tearing down stack '{COMPOSE_PROJECT}'...")
+    rc, stdout, stderr = _run_deploy_script(f"--down {COMPOSE_PROJECT}", timeout=120)
+    if stdout:
+        for line in stdout.splitlines():
+            print(f"  {line}")
     print("[TEARDOWN] Done")
 
 
