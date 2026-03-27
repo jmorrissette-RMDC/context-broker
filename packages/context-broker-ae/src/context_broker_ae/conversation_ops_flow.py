@@ -539,9 +539,47 @@ async def find_or_create_window_node(state: GetContextState) -> dict:
 
 
 async def retrieve_context_node(state: GetContextState) -> dict:
-    """Invoke the build-type-specific retrieval graph."""
+    """Invoke the build-type-specific retrieval graph.
+
+    V2: If query is provided, store the user's message before retrieval
+    so it appears in context for the current turn. This eliminates the
+    need for a separate store_user_message call.
+    """
     if state.get("error"):
         return {}
+
+    # V2: Store user message if query provided
+    query = state.get("query")
+    if query and state.get("conversation_id"):
+        try:
+            pool = get_pg_pool()
+            conv_uuid = uuid.UUID(state["conversation_id"])
+            # Use the model config's identity or default
+            sender = "user"
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtext($1::text))",
+                        state["conversation_id"],
+                    )
+                    await conn.fetchrow(
+                        """
+                        INSERT INTO conversation_messages
+                            (conversation_id, role, sender, recipient, content,
+                             priority, token_count, sequence_number)
+                        VALUES ($1, 'user', $2, 'assistant', $3, 1, $4,
+                                (SELECT COALESCE(MAX(sequence_number), 0) + 1
+                                 FROM conversation_messages
+                                 WHERE conversation_id = $1))
+                        RETURNING id
+                        """,
+                        conv_uuid,
+                        sender,
+                        query,
+                        max(1, len(query) // 4),
+                    )
+        except Exception as exc:
+            _log.warning("V2: Failed to store user message in get_context: %s", exc)
 
     from app.flows.build_type_registry import get_retrieval_graph
 

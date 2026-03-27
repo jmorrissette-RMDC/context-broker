@@ -66,6 +66,7 @@ class ImperatorState(TypedDict):
     response_text: Optional[str]
     error: Optional[str]
     iteration_count: int
+    _user_message_stored: Optional[bool]  # V2: set by agent_node when get_context stores the user msg
 
 
 # ── Core search tools (depend on AE flow singletons) ──────────────────
@@ -308,6 +309,7 @@ async def agent_node(state: ImperatorState) -> dict:
         llm_with_tools = llm.bind_tools(active_tools)
 
     messages = list(state["messages"])
+    user_query = None  # set inside first-call block if available
 
     # First call: build cache-friendly message sequence
     has_system = any(isinstance(m, SystemMessage) for m in messages)
@@ -474,10 +476,16 @@ async def agent_node(state: ImperatorState) -> dict:
     if _first_call:
         returned_messages = [system_msg] + returned_messages
 
-    return {
+    result = {
         "messages": returned_messages,
         "iteration_count": state.get("iteration_count", 0) + 1,
     }
+
+    # V2: Flag that user message was stored by get_context
+    if _first_call and user_query and state.get("context_window_id"):
+        result["_user_message_stored"] = True
+
+    return result
 
 
 def should_continue(state: ImperatorState) -> str:
@@ -534,9 +542,17 @@ async def store_user_message(state: ImperatorState) -> dict:
     D-01: Split into separate node for MemorySaver compatibility.
     D-07: Uses dispatch_tool("store_message") — self-consumption.
     Uses hostname as recipient, user field from config as sender.
+
+    V2: Skips storage if the user message was already stored by get_context
+    (when query parameter was passed). Prevents duplicate messages.
     """
     conversation_id = state.get("context_window_id")
     if not conversation_id:
+        return {}
+
+    # V2: If get_context was called with query, the user message
+    # was already stored inside retrieve_context_node. Skip.
+    if state.get("_user_message_stored"):
         return {}
 
     user_content = None
