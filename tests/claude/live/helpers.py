@@ -26,8 +26,14 @@ PHASE1_DIR = TEST_DATA_DIR / "phase1-bulk-load"
 PHASE2_DIR = TEST_DATA_DIR / "phase2-agent-conversation"
 PHASE3_DIR = TEST_DATA_DIR / "phase3-synthetic"
 
+# Docker host — where the test stack runs. If SSH_TARGET is set, docker
+# commands are run remotely via SSH. Otherwise they run locally.
+SSH_TARGET = os.environ.get("CLAUDE_TEST_SSH", "aristotle9@192.168.1.110")
+DOCKER_HOST = os.environ.get("CLAUDE_TEST_HOST", "192.168.1.110")
+REMOTE_PROJECT_DIR = "/mnt/storage/projects/portfolio/ContextBroker"
+
 BASE_PORT = int(os.environ.get("CLAUDE_TEST_PORT", "8081"))
-BASE_URL = f"http://localhost:{BASE_PORT}"
+BASE_URL = f"http://{DOCKER_HOST}:{BASE_PORT}"
 MCP_URL = f"{BASE_URL}/mcp"
 CHAT_URL = f"{BASE_URL}/v1/chat/completions"
 HEALTH_URL = f"{BASE_URL}/health"
@@ -48,44 +54,40 @@ PIPELINE_STALL_SECONDS = 180
 # Docker Compose helpers
 # ---------------------------------------------------------------------------
 
-def compose_cmd(cmd: str, timeout: int = 120) -> str:
-    """Run a docker compose command against the test stack."""
-    full_cmd = f"docker compose -p {COMPOSE_PROJECT} -f {COMPOSE_FILE} {cmd}"
+def _run_on_docker_host(cmd: str, timeout: int = 120) -> str:
+    """Run a shell command on the Docker host (via SSH if remote)."""
+    if SSH_TARGET:
+        full_cmd = f"ssh {SSH_TARGET} '{cmd}'"
+    else:
+        full_cmd = cmd
     result = subprocess.run(
-        full_cmd, shell=True, capture_output=True, text=True,
-        timeout=timeout, cwd=str(PROJECT_ROOT),
+        full_cmd, shell=True, capture_output=True, text=True, timeout=timeout,
     )
-    if result.returncode != 0 and "down" not in cmd:
-        # Don't fail on 'down' errors (containers may not exist)
-        pass
     return result.stdout.strip()
 
 
-def _container_name(service: str) -> str:
-    """Map a service short name to its docker compose container name.
-
-    With -p claude-test, containers are named claude-test-<service>-1.
-    We use docker compose exec which takes the service name directly.
-    """
-    return service
+def compose_cmd(cmd: str, timeout: int = 120) -> str:
+    """Run a docker compose command against the test stack."""
+    remote_cmd = (
+        f"cd {REMOTE_PROJECT_DIR} && "
+        f"docker compose -p {COMPOSE_PROJECT} -f docker-compose.claude-test.yml {cmd}"
+    )
+    return _run_on_docker_host(remote_cmd, timeout=timeout)
 
 
 def docker_exec(service: str, cmd: str, timeout: int = 30) -> str:
     """Execute a command inside a running test container via compose exec."""
-    full_cmd = (
-        f"docker compose -p {COMPOSE_PROJECT} -f {COMPOSE_FILE} "
+    remote_cmd = (
+        f"cd {REMOTE_PROJECT_DIR} && "
+        f"docker compose -p {COMPOSE_PROJECT} -f docker-compose.claude-test.yml "
         f"exec -T {service} {cmd}"
     )
-    result = subprocess.run(
-        full_cmd, shell=True, capture_output=True, text=True,
-        timeout=timeout, cwd=str(PROJECT_ROOT),
-    )
-    return result.stdout.strip()
+    return _run_on_docker_host(remote_cmd, timeout=timeout)
 
 
 def docker_psql(query: str) -> str:
     """Run a psql query against the test Postgres container."""
-    escaped = query.replace('"', '\\"')
+    escaped = query.replace('"', '\\"').replace("'", "'\\''")
     return docker_exec(
         "context-broker-postgres",
         f'psql -U context_broker -d context_broker -t -c "{escaped}"',
@@ -94,15 +96,12 @@ def docker_psql(query: str) -> str:
 
 def docker_logs(service: str, lines: int = 50) -> str:
     """Get recent logs from a test container."""
-    full_cmd = (
-        f"docker compose -p {COMPOSE_PROJECT} -f {COMPOSE_FILE} "
+    remote_cmd = (
+        f"cd {REMOTE_PROJECT_DIR} && "
+        f"docker compose -p {COMPOSE_PROJECT} -f docker-compose.claude-test.yml "
         f"logs --tail {lines} {service}"
     )
-    result = subprocess.run(
-        full_cmd, shell=True, capture_output=True, text=True,
-        timeout=15, cwd=str(PROJECT_ROOT),
-    )
-    return result.stdout + result.stderr
+    return _run_on_docker_host(remote_cmd, timeout=30)
 
 
 # ---------------------------------------------------------------------------
