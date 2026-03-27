@@ -369,7 +369,16 @@ async def _migration_016(conn) -> None:
     Prevents duplicate memories with the same hash+user_id. Works with
     the PGVector.insert monkey-patch (ON CONFLICT DO NOTHING) to prevent
     transaction aborts from duplicate inserts. From Rogers (Fix 2).
+
+    The mem0_memories table is created by Mem0 on first use, not by our
+    migrations. On a fresh deploy it may not exist yet — skip gracefully.
     """
+    table_exists = await conn.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'mem0_memories')"
+    )
+    if not table_exists:
+        _log.info("Migration 016 skipped — mem0_memories table not yet created by Mem0")
+        return
     await conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_mem0_hash_user
         ON mem0_memories ((payload->>'hash'), (payload->>'user_id'))
