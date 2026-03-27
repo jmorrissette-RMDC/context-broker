@@ -521,11 +521,18 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | DV-09 | Deploy | Opus | major | get_embeddings_model does not pass dimensions parameter to OpenAIEmbeddings — MRL truncation impossible | `app/config.py` | FIXED | Added `kwargs["dimensions"] = int(dims)` when embedding_dims configured. |
 | DV-10 | Deploy | Opus | minor | admin_tools: false on irina entire session — admin tools never tested live | `config/te.yml` | FIXED | Enabled admin_tools: true. Live-tested migrate_embeddings successfully. |
 
+### Test Coverage Audit (2026-03-27)
+
+| ID | Round | Reviewer | Severity | Description | File(s) | Status | Notes |
+|----|-------|----------|----------|-------------|---------|--------|-------|
+| TA-01 | Test | Opus | major | Prometheus metrics accumulate in process memory indefinitely — no eviction, no cap. Counters only go up, histograms accumulate observations. On a long-running high-volume deployment where nobody scrapes `/metrics`, this is unbounded memory growth. The `prometheus_client` library pre-allocates fixed-size bucket arrays so growth is proportional to unique label combinations (tool names × statuses), not individual requests. With ~25 tools × 2 statuses = ~50 time series, memory is likely under 1MB even after months. However, if custom labels or high-cardinality labels are added in the future, this could become a real issue. | `app/metrics_registry.py` | OPEN | Options: (1) Deploy a Prometheus server to scrape and consume the data, making it useful instead of wasted. (2) Add a periodic reset or TTL to the metrics registry. (3) Accept the current state — bounded by label cardinality, not request volume. |
+| TA-02 | Test | Opus | major | Mem0 features (mem_add, mem_search, mem_list, mem_delete, memory extraction) do not work on a fresh deployment. Mem0 creates its own tables (`mem0_memories`) lazily on first use, but the application's migration 016 expects the table to already exist for index creation. On a fresh DB: migration 016 skips gracefully, but Mem0 itself never initializes because no code path triggers its table creation before the first `mem_add` call — and `mem_add` returns empty results without error. The knowledge extraction worker also silently fails because Mem0 is not functional. | `app/migrations.py`, `packages/context-broker-ae/src/context_broker_ae/memory/mem0_client.py` | OPEN | Root cause: Mem0's lazy initialization path is never triggered during deployment. The `get_mem0_client()` singleton creates the Mem0 Memory instance, but Mem0 only creates its tables when the first `.add()` or `.search()` call is made — and those calls fail silently when the underlying pgvector collection doesn't exist. Fix options: (1) Add a startup hook that calls `mem0.add("init", user_id="system")` to trigger table creation, then deletes the seed memory. (2) Create the tables with Mem0's exact schema in a migration. (3) Fix Mem0 upstream to auto-create tables on client instantiation. |
+
 ---
 
 ## Summary
 
-Updated 2026-03-26. 404 unit tests PASS. Compliance audit + deployment verification: 7 findings (1 EXCEPTION, 6 FIXED).
+Updated 2026-03-27. 475 tests (315 mock + 160 live). Live: 157 passed, 5 skipped (TA-02). Mock: 315 passed.
 
 | Status | Count |
 |--------|-------|
