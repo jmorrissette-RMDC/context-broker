@@ -423,8 +423,8 @@ class GetContextState(TypedDict):
     conversation_id: Optional[str]  # None = create new
     config: dict
 
-    # V2: query-driven retrieval parameters (optional, backward compatible)
-    query: Optional[str]  # user's prompt — drives semantic/KG search
+    # V2: user_prompt-driven retrieval parameters (optional, backward compatible)
+    user_prompt: Optional[str]  # user's prompt — drives semantic/KG search
     model: Optional[dict]  # caller's LLM config for distillation cache
     domain_context: Optional[str]  # caller's domain RAG results
 
@@ -541,16 +541,16 @@ async def find_or_create_window_node(state: GetContextState) -> dict:
 async def retrieve_context_node(state: GetContextState) -> dict:
     """Invoke the build-type-specific retrieval graph.
 
-    V2: If query is provided, store the user's message before retrieval
+    V2: If user_prompt is provided, store the user's message before retrieval
     so it appears in context for the current turn. This eliminates the
     need for a separate store_user_message call.
     """
     if state.get("error"):
         return {}
 
-    # V2: Store user message if query provided
-    query = state.get("query")
-    if query and state.get("conversation_id"):
+    # V2: Store user message if user_prompt provided
+    user_prompt = state.get("user_prompt")
+    if user_prompt and state.get("conversation_id"):
         try:
             pool = get_pg_pool()
             conv_uuid = uuid.UUID(state["conversation_id"])
@@ -575,8 +575,8 @@ async def retrieve_context_node(state: GetContextState) -> dict:
                         """,
                         conv_uuid,
                         sender,
-                        query,
-                        max(1, len(query) // 4),
+                        user_prompt,
+                        max(1, len(user_prompt) // 4),
                     )
         except Exception as exc:
             _log.warning("V2: Failed to store user message in get_context: %s", exc)
@@ -603,8 +603,8 @@ async def retrieve_context_node(state: GetContextState) -> dict:
             "total_tokens_used": 0,
             "warnings": [],
             "error": None,
-            # V2: pass through query-driven retrieval parameters
-            "query": state.get("query"),
+            # V2: pass through user_prompt-driven retrieval parameters
+            "user_prompt": state.get("user_prompt"),
             "model": state.get("model"),
             "domain_context": state.get("domain_context"),
         }

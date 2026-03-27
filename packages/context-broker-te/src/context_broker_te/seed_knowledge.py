@@ -37,7 +37,7 @@ SEED_ARTICLES = [
         "content": (
             "MONITORING HEALTH: I can check system health via the pipeline_status "
             "tool, which shows pending embedding, extraction, and assembly jobs. "
-            "I can also query container logs using log_query (SQL-based filtering "
+            "I can also user_prompt container logs using log_query (SQL-based filtering "
             "by container, level, time range, keyword) or search_logs (semantic "
             "search if log vectorization is enabled). The /health endpoint shows "
             "backing service connectivity (postgres, neo4j)."

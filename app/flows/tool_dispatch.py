@@ -135,7 +135,7 @@ async def _dispatch_tool_inner(
                 "warnings": [],
                 "error": None,
                 # V2: query-driven retrieval parameters
-                "query": validated.query,
+                "user_prompt": validated.user_prompt,
                 "model": validated.model,
                 "domain_context": validated.domain_context,
             }

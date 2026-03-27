@@ -55,8 +55,8 @@ class KnowledgeEnrichedRetrievalState(TypedDict):
     context_window_id: str
     config: dict
 
-    # V2: query-driven retrieval parameters (optional, backward compatible)
-    query: Optional[str]  # user's prompt — drives semantic/KG search
+    # V2: user_prompt-driven retrieval parameters (optional, backward compatible)
+    user_prompt: Optional[str]  # user's prompt — drives semantic/KG search
     model: Optional[dict]  # caller's LLM config for distillation cache
     domain_context: Optional[str]  # caller's domain RAG results
 
@@ -292,7 +292,7 @@ async def ke_load_recent_messages(state: KnowledgeEnrichedRetrievalState) -> dic
 async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -> dict:
     """Retrieve semantically similar messages via pgvector.
 
-    V2: Uses state["query"] (user's current prompt) when available.
+    V2: Uses state["user_prompt"] (user's current prompt) when available.
     Falls back to recent messages for backward compatibility.
 
     G5-22a: Semantic retrieval may surface messages already compressed into
@@ -309,10 +309,10 @@ async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -
 
     config = state["config"]
 
-    # V2: Use the user's query for semantic search when provided
-    query_text = state.get("query")
+    # V2: Use the user's user_prompt for semantic search when provided
+    query_text = state.get("user_prompt")
     if not query_text:
-        # Backward compatibility: build query from recent messages
+        # Backward compatibility: build user_prompt from recent messages
         query_trunc = get_tuning(config, "query_truncation_chars", 200)
         query_text = " ".join(
             (m.get("content") or "")[:query_trunc] for m in state["recent_messages"][-3:]
@@ -366,14 +366,14 @@ async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -
         )
         return {"semantic_messages": semantic_messages}
     except (asyncpg.PostgresError, OSError) as exc:
-        _log.warning("Semantic retrieval query failed: %s", exc)
+        _log.warning("Semantic retrieval user_prompt failed: %s", exc)
         return {"semantic_messages": []}
 
 
 async def ke_inject_knowledge_graph(state: KnowledgeEnrichedRetrievalState) -> dict:
     """Retrieve knowledge graph facts via Mem0.
 
-    V2: Uses state["query"] (user's current prompt) when available.
+    V2: Uses state["user_prompt"] (user's current prompt) when available.
     Falls back to recent messages for backward compatibility.
     """
     build_type_config = state["build_type_config"]
@@ -382,13 +382,13 @@ async def ke_inject_knowledge_graph(state: KnowledgeEnrichedRetrievalState) -> d
     if not kg_pct or kg_pct <= 0:
         return {"knowledge_graph_facts": []}
 
-    if not state.get("recent_messages") and not state.get("query"):
+    if not state.get("recent_messages") and not state.get("user_prompt"):
         return {"knowledge_graph_facts": []}
 
     config = state["config"]
 
-    # V2: Use the user's query when provided
-    search_text = state.get("query")
+    # V2: Use the user's user_prompt when provided
+    search_text = state.get("user_prompt")
     if not search_text:
         search_text = " ".join(
             (m.get("content") or "")[:500] for m in state["recent_messages"][-5:]
@@ -588,9 +588,9 @@ async def ke_distill_context(state: KnowledgeEnrichedRetrievalState) -> dict:
     (backward compatible).
     """
     model_config = state.get("model")
-    query = state.get("query")
+    user_prompt = state.get("user_prompt")
 
-    if not model_config or not query:
+    if not model_config or not user_prompt:
         # No distillation requested — pass through raw context
         return {}
 
@@ -626,7 +626,7 @@ async def ke_distill_context(state: KnowledgeEnrichedRetrievalState) -> dict:
             "You are a context distillation assistant. Given the following retrieval "
             "results, extract ONLY what is relevant to the user's current question. "
             "Be concise — summarize facts, not raw text. Skip irrelevant content.\n\n"
-            f"User's question: {query}\n\n"
+            f"User's question: {user_prompt}\n\n"
             f"Retrieved context:\n{raw_context[:20000]}\n\n"
             "Relevant summary:"
         )
@@ -660,7 +660,7 @@ async def ke_distill_context(state: KnowledgeEnrichedRetrievalState) -> dict:
 
 def ke_route_after_assembly(state: KnowledgeEnrichedRetrievalState) -> str:
     """Route: distill if model provided, otherwise end."""
-    if state.get("model") and state.get("query"):
+    if state.get("model") and state.get("user_prompt"):
         return "ke_distill_context"
     return END
 

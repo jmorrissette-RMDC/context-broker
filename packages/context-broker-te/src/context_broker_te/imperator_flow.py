@@ -384,7 +384,7 @@ async def agent_node(state: ImperatorState) -> dict:
                     "conversation_id": str(conversation_id),
                 }
                 if user_query:
-                    get_context_args["query"] = user_query
+                    get_context_args["user_prompt"] = user_query
                 if domain_context:
                     get_context_args["domain_context"] = domain_context
                 # Pass the Imperator's own model config for distillation cache

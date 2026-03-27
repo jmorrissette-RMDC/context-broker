@@ -170,7 +170,7 @@ class GetContextInput(BaseModel):
     conversation_id: Optional[UUID] = Field(
         None, description="Existing conversation ID. Omit to create a new conversation."
     )
-    query: Optional[str] = Field(
+    user_prompt: Optional[str] = Field(
         None,
         max_length=10000,
         description="User's current prompt — drives semantic search, KG retrieval, and domain knowledge lookup for enriched build type.",

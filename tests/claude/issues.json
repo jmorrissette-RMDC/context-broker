@@ -1,16 +1,16 @@
 [
   {
     "test_name": "test_mem_add_embedding_persisted",
-    "timestamp": "2026-03-27T17:21:50.030193+00:00",
+    "timestamp": "2026-03-27T19:50:07.539006+00:00",
     "severity": "error",
     "category": "mem0",
-    "description": "mem_add accepted call but stored 0 rows for user_id=live-test-embed-ed17a501 \u2014 Mem0 silently failed to persist (TA-04)",
+    "description": "mem_add accepted call but stored 0 rows for user_id=live-test-embed-ecc18009 \u2014 Mem0 silently failed to persist (TA-04)",
     "expected": ">=1 row",
     "actual": "0 rows"
   },
   {
     "test_name": "test_mem_search_finds_added_memory",
-    "timestamp": "2026-03-27T17:22:04.231039+00:00",
+    "timestamp": "2026-03-27T19:50:21.865318+00:00",
     "severity": "warning",
     "category": "mem0",
     "description": "mem_search returned no results for a just-added memory after retries; Mem0 may not be fully functional (table schema mismatch)",
@@ -19,7 +19,7 @@
   },
   {
     "test_name": "test_mem_list_returns_memories",
-    "timestamp": "2026-03-27T17:22:27.106361+00:00",
+    "timestamp": "2026-03-27T19:50:47.199409+00:00",
     "severity": "warning",
     "category": "mem0",
     "description": "Expected at least 1 memory from mem_list, got 0; Mem0 may not be fully functional (table schema mismatch)",
@@ -28,16 +28,16 @@
   },
   {
     "test_name": "test_mem_delete_removes_memory",
-    "timestamp": "2026-03-27T17:22:38.261162+00:00",
+    "timestamp": "2026-03-27T19:50:59.007208+00:00",
     "severity": "warning",
     "category": "mem0",
-    "description": "Could not determine memory_id from add result: {'status': 'added', 'result': {'results': [], 'relations': [{'source': 'live-test-del-d87ffb08', 'relationship': 'has_property', 'target': 'temporary_memory_to_be_deleted'}]}}; Mem0 may not be fully functional (table schema mismatch)",
+    "description": "Could not determine memory_id from add result: {'status': 'added', 'result': {'results': [], 'relations': [{'source': 'live-test-del-8513e356', 'relationship': 'has_temporary_memory', 'target': 'temporary_memory'}]}}; Mem0 may not be fully functional (table schema mismatch)",
     "expected": "",
     "actual": ""
   },
   {
     "test_name": "test_mem0_memories_has_entries",
-    "timestamp": "2026-03-27T17:22:45.497567+00:00",
+    "timestamp": "2026-03-27T19:51:06.359775+00:00",
     "severity": "warning",
     "category": "mem0",
     "description": "mem0_memories table is empty; extraction may not have run or Mem0 table schema mismatch prevents storage",
@@ -46,34 +46,43 @@
   },
   {
     "test_name": "test_no_pipeline_errors_in_recent_logs",
-    "timestamp": "2026-03-27T17:22:49.372781+00:00",
+    "timestamp": "2026-03-27T19:51:10.257241+00:00",
     "severity": "warning",
     "category": "pipeline",
-    "description": "Error in recent logs: claude-test-langgraph  | {\"timestamp\": \"2026-03-27T17:22:29.635340+00:00\", \"level\": \"ERROR\", \"message\": \"Extraction failed for 76667b9a-783e-4167-81c3-e70f464833a9 (attempt 3/3): Mem0 returned empty r",
+    "description": "Error in recent logs: claude-test-langgraph  | {\"timestamp\": \"2026-03-27T19:50:59.578207+00:00\", \"level\": \"ERROR\", \"message\": \"Extraction failed for 25d6537b-e409-4db1-8c5d-80f4df0f83fc (attempt 2/3): Mem0 returned empty r",
+    "expected": "",
+    "actual": ""
+  },
+  {
+    "test_name": "test_no_pipeline_errors_in_recent_logs",
+    "timestamp": "2026-03-27T19:51:10.267076+00:00",
+    "severity": "warning",
+    "category": "pipeline",
+    "description": "Error in recent logs: claude-test-langgraph  | {\"timestamp\": \"2026-03-27T19:51:06.640590+00:00\", \"level\": \"ERROR\", \"message\": \"Extraction failed for 05135193-6ea7-41fe-82c9-2bbc5bccd6df (attempt 3/3): Mem0 returned empty r",
     "expected": "",
     "actual": ""
   },
   {
     "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T17:22:50.750478+00:00",
+    "timestamp": "2026-03-27T19:51:11.565642+00:00",
     "severity": "warning",
     "category": "assembly",
-    "description": "Conversation conversation-2 (4ed21aee-2d10-4a43-b32a-db60fdddfd3d) has no summaries",
+    "description": "Conversation conversation-2 (739c08bc-9c3a-483d-ad58-e149e4dd6afe) has no summaries",
     "expected": ">0 summaries",
     "actual": "0"
   },
   {
     "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-27T17:22:51.276311+00:00",
+    "timestamp": "2026-03-27T19:51:12.025771+00:00",
     "severity": "warning",
     "category": "assembly",
-    "description": "Conversation conversation-3 (0810fc79-2104-4b8c-834a-0f2bcac29217) has no summaries",
+    "description": "Conversation conversation-3 (317f2dee-5ed3-4050-8c60-06b7f2b1f434) has no summaries",
     "expected": ">0 summaries",
     "actual": "0"
   },
   {
     "test_name": "test_tool_turn_0",
-    "timestamp": "2026-03-27T17:25:31.008679+00:00",
+    "timestamp": "2026-03-27T19:52:51.067378+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 0: expected tool 'get_context' not detected in response",
@@ -82,7 +91,7 @@
   },
   {
     "test_name": "test_tool_turn_1",
-    "timestamp": "2026-03-27T17:25:31.019021+00:00",
+    "timestamp": "2026-03-27T19:52:51.081646+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 1: expected tool 'search_messages' not detected in response",
@@ -91,7 +100,7 @@
   },
   {
     "test_name": "test_tool_turn_2",
-    "timestamp": "2026-03-27T17:25:31.029329+00:00",
+    "timestamp": "2026-03-27T19:52:51.091047+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 2: expected tool 'search_messages' not detected in response",
@@ -100,7 +109,7 @@
   },
   {
     "test_name": "test_tool_turn_3",
-    "timestamp": "2026-03-27T17:25:31.039437+00:00",
+    "timestamp": "2026-03-27T19:52:51.099660+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 3: expected tool 'search_messages' not detected in response",
@@ -109,7 +118,7 @@
   },
   {
     "test_name": "test_tool_turn_4",
-    "timestamp": "2026-03-27T17:25:31.047815+00:00",
+    "timestamp": "2026-03-27T19:52:51.108299+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 4: expected tool 'search_messages' not detected in response",
@@ -118,7 +127,7 @@
   },
   {
     "test_name": "test_tool_turn_6",
-    "timestamp": "2026-03-27T17:25:31.058097+00:00",
+    "timestamp": "2026-03-27T19:52:51.117491+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 6: expected tool 'search_messages' not detected in response",
@@ -127,7 +136,7 @@
   },
   {
     "test_name": "test_tool_turn_7",
-    "timestamp": "2026-03-27T17:25:31.066546+00:00",
+    "timestamp": "2026-03-27T19:52:51.126654+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 7: expected tool 'search_messages' not detected in response",
@@ -136,16 +145,16 @@
   },
   {
     "test_name": "test_tool_file_write",
-    "timestamp": "2026-03-27T17:26:05.037449+00:00",
+    "timestamp": "2026-03-27T19:53:39.908331+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "None of expected keywords ['written', 'created', 'saved', 'success', 'wrote'] found in response",
     "expected": "written, created, saved, success, wrote",
-    "actual": "I'm sorry, I was unable to write the file. The system returned a \"Permission denied\" error.\n\nIt appears that the application, running inside its container, does not have the necessary write permissions for the `/data/downloads` directory on the host system. You will need to adjust the directory's pe"
+    "actual": "I have sent a notification to the system administrator detailing the permission issue. They will need to correct the directory permissions on the host system.\n\nI am unable to complete your request to write the file until this infrastructure problem is resolved. Is there anything else I can help you "
   },
   {
     "test_name": "test_tool_update_system_prompt",
-    "timestamp": "2026-03-27T17:26:10.046203+00:00",
+    "timestamp": "2026-03-27T19:53:45.219976+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "update_system_prompt not found in tools/list",
@@ -153,53 +162,71 @@
     "actual": "['get_context', 'store_message', 'search_messages', 'search_knowledge', 'conv_create_conversation', 'conv_delete_conversation', 'conv_rename_conversation', 'conv_list_conversations', 'conv_store_message', 'conv_retrieve_context', 'conv_create_context_window', 'conv_search', 'conv_search_messages', 'conv_get_history', 'conv_search_context_windows', 'query_logs', 'search_logs', 'mem_search', 'mem_get_context', 'mem_add']"
   },
   {
+    "test_name": "test_tool_add_alert_instruction",
+    "timestamp": "2026-03-27T19:56:11.716109+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "None of expected keywords ['added', 'alert', 'instruction', 'created', 'test alerts'] found in response",
+    "expected": "added, alert, instruction, created, test alerts",
+    "actual": "I was unable to complete that request within the allowed number of steps. Please try again, or break the request into smaller parts."
+  },
+  {
+    "test_name": "test_tool_list_alert_instructions",
+    "timestamp": "2026-03-27T19:56:39.552271+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "None of expected keywords ['alert', 'instruction', 'test', 'no instruction', 'none'] found in response",
+    "expected": "alert, instruction, test, no instruction, none",
+    "actual": "I was unable to complete that request within the allowed number of steps. Please try again, or break the request into smaller parts."
+  },
+  {
     "test_name": "test_diagnostic_context_introspection",
-    "timestamp": "2026-03-27T17:29:41.317983+00:00",
+    "timestamp": "2026-03-27T19:57:37.632453+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "Expected keyword 'context' not found in response",
     "expected": "context",
-    "actual": "Of course. I can do that, but I will need the conversation ID.\n\nWhich conversation would you like me to inspect? If you're not sure of the ID, I can list your recent conversations for you."
+    "actual": "Of course. What is the ID of the conversation you would like me to inspect?"
+  },
+  {
+    "test_name": "test_search_imperator_design",
+    "timestamp": "2026-03-27T19:58:44.376059+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "Expected keyword 'Imperator' not found in response",
+    "expected": "Imperator",
+    "actual": "I was unable to complete that request within the allowed number of steps. Please try again, or break the request into smaller parts."
   },
   {
     "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-27T17:30:50.001005+00:00",
+    "timestamp": "2026-03-27T19:59:10.840309+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "Expected keyword 'verbose' not found in response",
     "expected": "verbose",
-    "actual": "I'm sorry, I was unable to change the setting. The system returned a \"Permission denied\" error, just as it did before.\n\nThis is a security and stability feature of the system. My role as the Tenant En"
+    "actual": "I have sent a notification detailing the permission error. An administrator will need to adjust the file permissions on the host system for me to be able to modify the configuration."
   },
   {
     "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-27T17:30:50.012670+00:00",
+    "timestamp": "2026-03-27T19:59:10.849870+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "Expected keyword 'toggle' not found in response",
     "expected": "toggle",
-    "actual": "I'm sorry, I was unable to change the setting. The system returned a \"Permission denied\" error, just as it did before.\n\nThis is a security and stability feature of the system. My role as the Tenant En"
+    "actual": "I have sent a notification detailing the permission error. An administrator will need to adjust the file permissions on the host system for me to be able to modify the configuration."
   },
   {
     "test_name": "test_verbose_logging_toggle",
-    "timestamp": "2026-03-27T17:31:03.787868+00:00",
+    "timestamp": "2026-03-27T19:59:41.434630+00:00",
     "severity": "warning",
     "category": "imperator",
     "description": "Response does not mention verbose/toggle/logging",
     "expected": "verbose or toggle or logging",
-    "actual": "i'm sorry, i was unable to change the setting. the system returned a \"permission denied\" error, just as it did before.\n\nthis is a security and stability feature of the system. my role as the tenant en"
+    "actual": "i've confirmed that i'm running as user `context-broker` (uid 1001). the attempt to write to `/config/config.yml` failed with this user, indicating a file permission issue.\n\ni have sent a notification"
   },
   {
     "test_name": "performance_report",
-    "timestamp": "2026-03-27T17:31:20.691727+00:00",
-    "severity": "warning",
-    "category": "performance",
-    "description": "conv_search_messages averages 8.6s per call",
-    "expected": "<5s",
-    "actual": "8.6s"
-  },
-  {
-    "test_name": "performance_report",
-    "timestamp": "2026-03-27T17:31:20.701464+00:00",
+    "timestamp": "2026-03-27T19:59:58.094898+00:00",
     "severity": "warning",
     "category": "performance",
     "description": "extract_memory has 100% error rate",

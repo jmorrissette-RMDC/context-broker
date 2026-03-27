@@ -327,7 +327,7 @@ async def _migration_013(conn) -> None:
 async def _migration_014(conn) -> None:
     """Migration 14: Add system_logs table for log shipper.
 
-    Enables the Imperator to query logs from all MAD containers via SQL.
+    Enables the Imperator to user_prompt logs from all MAD containers via SQL.
     The log shipper uses the Docker API to discover containers on
     context-broker-net and writes their logs with resolved names.
     """

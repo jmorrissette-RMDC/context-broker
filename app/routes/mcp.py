@@ -421,7 +421,7 @@ def _get_tool_list() -> list[dict]:
                         "format": "uuid",
                         "description": "Existing conversation ID. Omit to create a new conversation.",
                     },
-                    "query": {
+                    "user_prompt": {
                         "type": "string",
                         "description": "User's current prompt — drives semantic search, KG retrieval, and domain knowledge lookup for enriched build type.",
                     },
@@ -828,9 +828,9 @@ def _get_tool_list() -> list[dict]:
             "description": "Retrieve relevant memories formatted for prompt injection",
             "inputSchema": {
                 "type": "object",
-                "required": ["query", "user_id"],
+                "required": ["user_prompt", "user_id"],
                 "properties": {
-                    "query": {"type": "string"},
+                    "user_prompt": {"type": "string"},
                     "user_id": {"type": "string"},
                     "limit": {"type": "integer", "default": 5},
                 },
