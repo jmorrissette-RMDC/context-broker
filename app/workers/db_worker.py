@@ -76,9 +76,7 @@ async def _embedding_worker(config: dict) -> None:
 
             # Count pending for metrics (match the fetch filter)
             pending = await pool.fetchval(
-                "SELECT COUNT(*) FROM conversation_messages "
-                "WHERE embedding IS NULL AND content IS NOT NULL "
-                "AND role IN ('user', 'assistant')"
+                "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NULL AND content IS NOT NULL"
             )
             EMBEDDING_QUEUE_DEPTH.set(pending)
 
@@ -87,13 +85,11 @@ async def _embedding_worker(config: dict) -> None:
                 continue
 
             # Fetch a batch of unembedded messages
-            # Skip system/tool/rag roles — only embed user and assistant content
             rows = await pool.fetch(
                 """
                 SELECT id, conversation_id, content, sequence_number, role, sender, priority
                 FROM conversation_messages
                 WHERE embedding IS NULL AND content IS NOT NULL
-                AND role IN ('user', 'assistant')
                 ORDER BY priority DESC, created_at ASC
                 LIMIT $1
                 """,
@@ -635,48 +631,6 @@ async def _log_embedding_worker(config: dict) -> None:
             await asyncio.sleep(poll_interval)
 
 
-async def _ephemeral_cleanup_worker(config: dict) -> None:
-    """Periodically delete old system/tool/rag messages.
-
-    These messages are stored for auditability but are never loaded
-    into context. Delete them after 7 days to prevent unbounded growth.
-    """
-    _log.info("Ephemeral message cleanup worker started")
-    cleanup_interval = 3600  # check once per hour
-    retention_days = get_tuning(config, "ephemeral_message_retention_days", 7)
-
-    while True:
-        try:
-            config = await async_load_config()
-            retention_days = get_tuning(config, "ephemeral_message_retention_days", 7)
-            pool = get_pg_pool()
-
-            result = await pool.execute(
-                """
-                DELETE FROM conversation_messages
-                WHERE role IN ('system', 'tool', 'rag')
-                AND created_at < NOW() - ($1 || ' days')::INTERVAL
-                """,
-                str(retention_days),
-            )
-            # result is "DELETE N" — extract count
-            deleted = int(result.split()[-1]) if result.startswith("DELETE") else 0
-            if deleted > 0:
-                _log.info(
-                    "Ephemeral cleanup: deleted %d system/tool/rag messages older than %d days",
-                    deleted,
-                    retention_days,
-                )
-
-        except asyncio.CancelledError:
-            _log.info("Ephemeral cleanup worker cancelled")
-            raise
-        except Exception as exc:
-            _log.warning("Ephemeral cleanup error: %s", exc)
-
-        await asyncio.sleep(cleanup_interval)
-
-
 async def start_background_worker(config: dict) -> None:
     """Start all background worker loops concurrently."""
     _log.info("Background worker starting (DB-driven, no Redis)")
@@ -689,5 +643,4 @@ async def start_background_worker(config: dict) -> None:
         _assembly_worker(config),
         _log_embedding_worker(config),
         scheduler_worker(config),
-        _ephemeral_cleanup_worker(config),
     )

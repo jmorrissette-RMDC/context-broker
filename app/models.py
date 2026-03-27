@@ -31,7 +31,7 @@ class StoreMessageInput(BaseModel):
 
     context_window_id: Optional[UUID] = None
     conversation_id: Optional[UUID] = None
-    role: str = Field(..., pattern="^(user|assistant|system|tool|rag)$")
+    role: str = Field(..., pattern="^(user|assistant|system|tool)$")
 
     @model_validator(mode="after")
     def _require_at_least_one_id(self) -> "StoreMessageInput":
@@ -111,7 +111,7 @@ class SearchMessagesInput(BaseModel):
     conversation_id: Optional[UUID] = None
     limit: int = Field(10, ge=1, le=100)
     sender: Optional[str] = Field(None, max_length=255)
-    role: Optional[str] = Field(None, pattern="^(user|assistant|system|tool|rag)$")
+    role: Optional[str] = Field(None, pattern="^(user|assistant|system|tool)$")
     date_from: Optional[str] = Field(None, description="ISO-8601 date lower bound")
     date_to: Optional[str] = Field(None, description="ISO-8601 date upper bound")
 
@@ -176,7 +176,7 @@ class StoreMessageCoreInput(BaseModel):
     """Input for store_message — store a message in a conversation."""
 
     conversation_id: UUID = Field(..., description="Conversation to store message in")
-    role: str = Field(..., pattern="^(user|assistant|system|tool|rag)$")
+    role: str = Field(..., pattern="^(user|assistant|system|tool)$")
     content: Optional[str] = Field(None)
     sender: str = Field(..., min_length=1, max_length=255)
     recipient: Optional[str] = Field(None, max_length=255)

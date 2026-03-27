@@ -288,14 +288,8 @@ async def agent_node(state: ImperatorState) -> dict:
     ARCH-05: This node contains NO loop.  Flow control (tool-call vs
     final answer) is handled by the conditional edge after this node.
 
-    Cache-friendly message structure (all providers):
-      1. SystemMessage — static identity prompt (cached, never changes)
-      2. HumanMessage/AIMessage pairs — DB history (cached, prefix grows)
-      3. HumanMessage — domain RAG + user question (dynamic, small, at end)
-
-    History and RAG are NOT embedded in the SystemMessage to preserve
-    prompt caching across turns. Domain RAG results are stored with
-    role="rag" for auditability but never reloaded into context.
+    On the first call (no system prompt in messages yet), loads DB
+    history and prepends the system prompt + history context.
     """
     config = state["config"]
 
@@ -310,7 +304,7 @@ async def agent_node(state: ImperatorState) -> dict:
 
     messages = list(state["messages"])
 
-    # First call: build cache-friendly message sequence
+    # First call: prepend system prompt with DB history context
     has_system = any(isinstance(m, SystemMessage) for m in messages)
     if not has_system:
         imperator_cfg = config.get("imperator", {})
@@ -325,11 +319,7 @@ async def agent_node(state: ImperatorState) -> dict:
                 "error": f"Prompt loading failed: {exc}",
             }
 
-        # Static system message — identity only (cached by all providers)
-        system_msg = SystemMessage(content=system_content)
-
-        # Load conversation history as separate messages (cached prefix)
-        history_messages = []
+        # D-07: Load context via the get_context core tool (self-consumption).
         conversation_id = state.get("context_window_id")
         if conversation_id:
             try:
@@ -351,75 +341,23 @@ async def agent_node(state: ImperatorState) -> dict:
                     None,
                 )
                 context_messages = ctx_result.get("context", [])
-                for msg in context_messages:
-                    role = msg.get("role", "user")
-                    content = msg.get("content", "")
-                    if not content:
-                        continue
-                    if role == "assistant":
-                        history_messages.append(AIMessage(content=content))
-                    else:
-                        history_messages.append(HumanMessage(content=content))
+                if context_messages:
+                    history_lines = []
+                    for msg in context_messages:
+                        role = msg.get("role", "unknown")
+                        content = msg.get("content", "")
+                        if content:
+                            history_lines.append(f"[{role}] {content}")
+                    if history_lines:
+                        system_content += (
+                            "\n\n--- Conversation History ---\n"
+                            + "\n".join(history_lines)
+                        )
             except (ValueError, RuntimeError, OSError) as exc:
                 _log.warning("Failed to load context via get_context: %s", exc)
 
-        # Domain RAG — search for relevant operational knowledge
-        # Inject results into the last user message (cache-friendly)
-        domain_context = ""
-        user_message = None
-        for msg in reversed(messages):
-            if isinstance(msg, HumanMessage):
-                user_message = msg
-                break
-
-        if user_message:
-            try:
-                from app.database import get_pg_pool
-                from app.config import get_embeddings_model
-
-                pool = get_pg_pool()
-                emb_model = get_embeddings_model(config)
-                query_vec = await emb_model.aembed_query(user_message.content[:500])
-                vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
-
-                rows = await pool.fetch(
-                    """
-                    SELECT content, 1 - (embedding <=> $1::vector) AS similarity
-                    FROM domain_information
-                    WHERE embedding IS NOT NULL
-                    ORDER BY embedding <=> $1::vector
-                    LIMIT 3
-                    """,
-                    vec_str,
-                )
-                if rows:
-                    domain_lines = []
-                    for row in rows:
-                        sim = float(row["similarity"])
-                        if sim > 0.3:  # relevance threshold
-                            domain_lines.append(f"- {row['content']}")
-                    if domain_lines:
-                        domain_context = (
-                            "\n\nRelevant operational knowledge:\n"
-                            + "\n".join(domain_lines)
-                        )
-            except (RuntimeError, OSError, ValueError) as exc:
-                _log.debug("Domain RAG lookup skipped: %s", exc)
-
-        # If we have domain context, augment the last user message
-        if domain_context and user_message:
-            augmented_content = (
-                domain_context
-                + "\n\nUser message: " + user_message.content
-            )
-            # Replace the last HumanMessage with the augmented version
-            for i in range(len(messages) - 1, -1, -1):
-                if isinstance(messages[i], HumanMessage):
-                    messages[i] = HumanMessage(content=augmented_content)
-                    break
-
-        # Assemble: system (static) + history (cached) + current messages (dynamic)
-        messages = [system_msg] + history_messages + messages
+        system_msg = SystemMessage(content=system_content)
+        messages = [system_msg] + messages
         _first_call = True
     else:
         _first_call = False
@@ -534,41 +472,25 @@ async def max_iterations_fallback(state: ImperatorState) -> dict:
 
 
 async def store_user_message(state: ImperatorState) -> dict:
-    """Persist the user's message and any RAG context via store_message.
-
-    Stores the user message (role=user) and, if domain RAG was injected,
-    the RAG context separately (role=rag). RAG messages are stored for
-    auditability but never reloaded into context — only user/assistant
-    messages are loaded by _load_conversation_history and get_context.
+    """Persist the user's message via the store_message core tool.
 
     D-01: Split into separate node for MemorySaver compatibility.
     D-07: Uses dispatch_tool("store_message") — self-consumption.
+    Uses hostname as recipient, user field from config as sender.
     """
     conversation_id = state.get("context_window_id")
     if not conversation_id:
         return {}
 
-    # Find the last HumanMessage (may be augmented with RAG context)
-    last_human = None
+    user_content = None
     for msg in state["messages"]:
         if isinstance(msg, HumanMessage):
-            last_human = msg
+            user_content = msg.content
 
-    if not last_human:
+    if not user_content:
         return {}
 
-    # Separate RAG context from the actual user message
-    full_content = last_human.content
-    rag_content = None
-    user_content = full_content
-
-    # Check if content was augmented with domain RAG
-    rag_marker = "\n\nUser message: "
-    if rag_marker in full_content:
-        parts = full_content.split(rag_marker, 1)
-        rag_content = parts[0].strip()
-        user_content = parts[1].strip()
-
+    # Sender is whoever sent the message to the Imperator
     user_identity = (
         state.get("config", {}).get("imperator", {}).get("_request_user", "unknown")
     )
@@ -576,7 +498,6 @@ async def store_user_message(state: ImperatorState) -> dict:
     try:
         from app.flows.tool_dispatch import dispatch_tool
 
-        # Store the user message (role=user)
         await dispatch_tool(
             "store_message",
             {
@@ -589,21 +510,6 @@ async def store_user_message(state: ImperatorState) -> dict:
             state.get("config", {}),
             None,
         )
-
-        # Store RAG context separately (role=rag) for auditability
-        if rag_content:
-            await dispatch_tool(
-                "store_message",
-                {
-                    "conversation_id": str(conversation_id),
-                    "role": "rag",
-                    "sender": _MAD_HOSTNAME,
-                    "recipient": _MAD_HOSTNAME,
-                    "content": rag_content,
-                },
-                state.get("config", {}),
-                None,
-            )
     except (ValueError, RuntimeError, OSError) as exc:
         _log.warning("Failed to store Imperator user message: %s", exc)
 

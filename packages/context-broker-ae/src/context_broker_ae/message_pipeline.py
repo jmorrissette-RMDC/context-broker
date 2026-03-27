@@ -30,7 +30,6 @@ _ROLE_PRIORITY = {
     "assistant": 2,
     "system": 3,
     "tool": 4,
-    "rag": 0,  # lowest priority — ephemeral context injection
 }
 
 
@@ -122,8 +121,6 @@ async def store_message(state: MessagePipelineState) -> dict:
         elif state["role"] == "system":
             recipient = "all"
         elif state["role"] == "tool":
-            recipient = "assistant"
-        elif state["role"] == "rag":
             recipient = "assistant"
         else:
             recipient = "all"
