@@ -1,0 +1,15 @@
+# Context Broker — TE Configuration for Claude Test Stack
+# NOMINAL: Gemini 2.5 Pro for Imperator
+
+imperator:
+  base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  model: gemini-2.5-pro
+  api_key_env: GOOGLE_API_KEY
+
+  system_prompt: imperator_identity
+  build_type: standard-tiered
+  max_context_tokens: auto
+  participant_id: imperator
+  admin_tools: true
+  max_iterations: 5
+  temperature: 0.3
