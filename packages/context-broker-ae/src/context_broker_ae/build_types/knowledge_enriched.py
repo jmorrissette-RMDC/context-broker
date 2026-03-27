@@ -577,6 +577,94 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
     }
 
 
+async def ke_distill_context(state: KnowledgeEnrichedRetrievalState) -> dict:
+    """V2: Distill raw retrieval results into a concise summary using the caller's LLM.
+
+    When state["model"] is provided, calls the caller's LLM model to summarize
+    what is relevant from the assembled context. This shares the caller's prompt
+    cache (same model = same cache prefix).
+
+    When model is not provided, passes through the raw context unchanged
+    (backward compatible).
+    """
+    model_config = state.get("model")
+    query = state.get("query")
+
+    if not model_config or not query:
+        # No distillation requested — pass through raw context
+        return {}
+
+    context_messages = state.get("context_messages", [])
+    if not context_messages:
+        return {}
+
+    # Build the raw context text for the distillation prompt
+    raw_context_parts = []
+    for msg in context_messages:
+        content = msg.get("content", "")
+        if content:
+            raw_context_parts.append(content)
+
+    raw_context = "\n\n".join(raw_context_parts)
+    if not raw_context.strip():
+        return {}
+
+    # Call the caller's LLM for distillation
+    try:
+        from langchain_openai import ChatOpenAI
+        from app.config import get_api_key
+
+        api_key = get_api_key(model_config)
+        llm = ChatOpenAI(
+            base_url=model_config.get("base_url"),
+            model=model_config.get("model", "gpt-4o-mini"),
+            api_key=api_key or "not-needed",
+            timeout=60,
+        )
+
+        distillation_prompt = (
+            "You are a context distillation assistant. Given the following retrieval "
+            "results, extract ONLY what is relevant to the user's current question. "
+            "Be concise — summarize facts, not raw text. Skip irrelevant content.\n\n"
+            f"User's question: {query}\n\n"
+            f"Retrieved context:\n{raw_context[:20000]}\n\n"
+            "Relevant summary:"
+        )
+
+        response = await llm.ainvoke(distillation_prompt)
+        distilled = response.content.strip()
+
+        if distilled:
+            _log.info(
+                "Context distillation: %d chars → %d chars for window=%s",
+                len(raw_context),
+                len(distilled),
+                state["context_window_id"],
+            )
+            # Replace context_messages with the distilled version
+            return {
+                "context_messages": [
+                    {"role": "assistant", "content": distilled}
+                ],
+                "total_tokens_used": max(1, len(distilled) // 4),
+            }
+
+    except (RuntimeError, OSError, ValueError, Exception) as exc:
+        _log.warning(
+            "Context distillation failed (returning raw context): %s", exc
+        )
+
+    # Fallback: return raw context unchanged
+    return {}
+
+
+def ke_route_after_assembly(state: KnowledgeEnrichedRetrievalState) -> str:
+    """Route: distill if model provided, otherwise end."""
+    if state.get("model") and state.get("query"):
+        return "ke_distill_context"
+    return END
+
+
 def ke_route_after_load_window(state: KnowledgeEnrichedRetrievalState) -> str:
     if state.get("error"):
         return END
@@ -619,6 +707,7 @@ def build_knowledge_enriched_retrieval():
     workflow.add_node("ke_inject_semantic_retrieval", ke_inject_semantic_retrieval)
     workflow.add_node("ke_inject_knowledge_graph", ke_inject_knowledge_graph)
     workflow.add_node("ke_assemble_context", ke_assemble_context)
+    workflow.add_node("ke_distill_context", ke_distill_context)
 
     workflow.set_entry_point("ke_load_window")
 
@@ -654,7 +743,13 @@ def build_knowledge_enriched_retrieval():
     )
 
     workflow.add_edge("ke_inject_knowledge_graph", "ke_assemble_context")
-    workflow.add_edge("ke_assemble_context", END)
+
+    workflow.add_conditional_edges(
+        "ke_assemble_context",
+        ke_route_after_assembly,
+        {"ke_distill_context": "ke_distill_context", END: END},
+    )
+    workflow.add_edge("ke_distill_context", END)
 
     return workflow.compile()
 
