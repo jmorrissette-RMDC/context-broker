@@ -178,15 +178,28 @@ def chat_call(
         "messages": messages,
         "stream": stream,
     }
-    resp = client.post("/v1/chat/completions", json=payload, timeout=timeout)
-    if resp.status_code == 500:
-        # Return a synthetic error response instead of raising
+    try:
+        resp = client.post("/v1/chat/completions", json=payload, timeout=timeout)
+    except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout) as exc:
         return {
             "choices": [
                 {
                     "message": {
                         "role": "assistant",
-                        "content": f"[Server error 500: {resp.text[:200]}]",
+                        "content": f"[Timeout: {exc}]",
+                    }
+                }
+            ],
+            "error": True,
+        }
+    if resp.status_code >= 500:
+        # Return a synthetic error response instead of raising on 5xx
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": f"[Server error {resp.status_code}: {resp.text[:200]}]",
                     }
                 }
             ],
