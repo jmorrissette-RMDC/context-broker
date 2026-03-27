@@ -1,7 +1,7 @@
 # Design: Context Retrieval v2 — Query-Driven RAG with Cache-Friendly Distillation
 
 **Date:** 2026-03-27
-**Status:** Proposed
+**Status:** Implemented
 **Author:** Jason + Claude Opus 4.6
 **Relates to:** TA-02, TA-03, TA-04, prompt caching, domain RAG
 
