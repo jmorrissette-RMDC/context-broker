@@ -145,6 +145,47 @@ class TestLogShipper:
             "Log shipper may not be running."
         )
 
+    def test_log_shipper_real_ingestion(self, http_client):
+        """Write a unique marker via an MCP call, verify it appears in system_logs.
+
+        This proves the full pipeline: container stdout -> log shipper -> Postgres.
+        The MCP call itself generates a log line in the langgraph container.
+        We search system_logs for that marker.
+        (Adopted from Codex test suite — lesson #2.)
+        """
+        import re
+        import time
+        import uuid
+
+        marker = f"claude-test-log-marker-{uuid.uuid4().hex[:12]}"
+
+        # Trigger a log line containing our marker by calling a tool
+        # with a distinctive argument that will appear in the dispatch log
+        from tests.claude.live.helpers import mcp_call
+        mcp_call(
+            http_client,
+            "conv_create_conversation",
+            {"title": marker},
+        )
+
+        # Wait for the log shipper to ingest it (polls every 1s, batch writes)
+        found = False
+        for attempt in range(15):
+            time.sleep(2)
+            result = docker_psql(
+                f"SELECT COUNT(*) FROM system_logs WHERE message LIKE '%{marker}%'"
+            ).strip()
+            match = re.search(r"(\d+)", result)
+            count = int(match.group(1)) if match else 0
+            if count > 0:
+                found = True
+                break
+
+        assert found, (
+            f"Log marker '{marker}' not found in system_logs after 30s. "
+            "Log shipper may not be ingesting from the langgraph container."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Alerter

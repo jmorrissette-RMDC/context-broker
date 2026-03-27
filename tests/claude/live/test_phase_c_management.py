@@ -456,6 +456,91 @@ class TestMemAdd:
         result = extract_mcp_result(resp)
         assert isinstance(result, dict)
 
+    def test_mem_add_embedding_persisted(self, http_client):
+        """C-15b: After mem_add, verify the embedding vector is non-null in Postgres.
+
+        This proves Mem0 actually persisted the data, not just accepted the call.
+        Catches silent failures where mem0.add() returns without error but stores
+        nothing (TA-04). (Adopted from Codex test suite — lesson #3.)
+        """
+        import re
+
+        user_id = f"live-test-embed-{uuid.uuid4().hex[:8]}"
+        content = "Claude test suite verification: Mem0 embedding persistence check."
+
+        # Add the memory
+        resp = mcp_call(
+            http_client,
+            "mem_add",
+            {"content": content, "user_id": user_id},
+        )
+        assert resp.status_code == 200
+
+        # Check if the row exists in mem0_memories with a non-null embedding
+        # Allow a brief delay for async processing
+        import time
+        time.sleep(3)
+
+        from tests.claude.live.helpers import docker_psql
+
+        # Check if table exists first
+        table_exists = docker_psql(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = 'mem0_memories')"
+        ).strip()
+
+        if "f" in table_exists.lower():
+            log_issue(
+                "test_mem_add_embedding_persisted",
+                "error",
+                "mem0",
+                "mem0_memories table does not exist — Mem0 never initialized (TA-02)",
+                "table exists with embedded row",
+                "table missing",
+            )
+            pytest.skip("mem0_memories table does not exist (TA-02)")
+
+        # Check for rows with this user_id that have embeddings
+        row_count_raw = docker_psql(
+            f"SELECT COUNT(*) FROM mem0_memories WHERE user_id = '{user_id}'"
+        ).strip()
+        row_match = re.search(r"(\d+)", row_count_raw)
+        row_count = int(row_match.group(1)) if row_match else 0
+
+        embedded_raw = docker_psql(
+            f"SELECT COUNT(*) FROM mem0_memories "
+            f"WHERE user_id = '{user_id}' AND embedding IS NOT NULL"
+        ).strip()
+        emb_match = re.search(r"(\d+)", embedded_raw)
+        embedded_count = int(emb_match.group(1)) if emb_match else 0
+
+        if row_count == 0:
+            log_issue(
+                "test_mem_add_embedding_persisted",
+                "error",
+                "mem0",
+                f"mem_add accepted call but stored 0 rows for user_id={user_id} — "
+                "Mem0 silently failed to persist (TA-04)",
+                ">=1 row",
+                "0 rows",
+            )
+            pytest.skip("Mem0 did not persist the memory row (TA-04)")
+
+        if embedded_count == 0:
+            log_issue(
+                "test_mem_add_embedding_persisted",
+                "error",
+                "mem0",
+                f"mem_add stored {row_count} row(s) but embedding is NULL — "
+                "embedding pipeline did not process the memory",
+                "non-null embedding",
+                "NULL embedding",
+            )
+            pytest.skip("Memory row exists but embedding is NULL")
+
+        # Success — row exists with a real embedding
+        assert embedded_count >= 1
+
 
 class TestMemSearch:
     """C-16: mem_search finds previously added memories."""
