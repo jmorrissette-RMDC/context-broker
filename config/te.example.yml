@@ -50,7 +50,7 @@ imperator:
   # admin_tools: false = read-only access to system state
   # admin_tools: true = can read/write config and run DB queries
   # Hot-reloadable — takes effect on next request (no restart needed).
-  admin_tools: false
+  admin_tools: true
 
   # Cognitive tuning
   max_iterations: 5
