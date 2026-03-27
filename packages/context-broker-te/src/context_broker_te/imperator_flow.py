@@ -288,8 +288,13 @@ async def agent_node(state: ImperatorState) -> dict:
     ARCH-05: This node contains NO loop.  Flow control (tool-call vs
     final answer) is handled by the conditional edge after this node.
 
-    On the first call (no system prompt in messages yet), loads DB
-    history and prepends the system prompt + history context.
+    V2 cache-friendly message structure:
+      1. SystemMessage — static identity (cached, never changes)
+      2. HumanMessage/AIMessage — conversation history (cached prefix)
+      3. HumanMessage — user's actual message (new, at end)
+
+    History loaded as separate messages (not embedded in SystemMessage)
+    to preserve prompt caching across turns.
     """
     config = state["config"]
 
@@ -304,7 +309,7 @@ async def agent_node(state: ImperatorState) -> dict:
 
     messages = list(state["messages"])
 
-    # First call: prepend system prompt with DB history context
+    # First call: build cache-friendly message sequence
     has_system = any(isinstance(m, SystemMessage) for m in messages)
     if not has_system:
         imperator_cfg = config.get("imperator", {})
@@ -319,7 +324,47 @@ async def agent_node(state: ImperatorState) -> dict:
                 "error": f"Prompt loading failed: {exc}",
             }
 
-        # D-07: Load context via the get_context core tool (self-consumption).
+        # Static system message — identity only (cached by LLM providers)
+        system_msg = SystemMessage(content=system_content)
+
+        # Extract user's query for RAG-driven retrieval
+        user_query = None
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                user_query = msg.content
+                break
+
+        # Domain RAG: search local domain knowledge for the user's query
+        domain_context = None
+        if user_query:
+            try:
+                from app.database import get_pg_pool
+                from app.config import get_embeddings_model
+
+                pool = get_pg_pool()
+                emb_model = get_embeddings_model(config)
+                query_vec = await emb_model.aembed_query(user_query[:500])
+                vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
+
+                rows = await pool.fetch(
+                    """
+                    SELECT content, 1 - (embedding <=> $1::vector) AS similarity
+                    FROM domain_information
+                    WHERE embedding IS NOT NULL
+                    ORDER BY embedding <=> $1::vector
+                    LIMIT 3
+                    """,
+                    vec_str,
+                )
+                if rows:
+                    relevant = [r["content"] for r in rows if float(r["similarity"]) > 0.3]
+                    if relevant:
+                        domain_context = "\n".join(f"- {r}" for r in relevant)
+            except (RuntimeError, OSError, ValueError) as exc:
+                _log.debug("Domain RAG lookup skipped: %s", exc)
+
+        # D-07: Load context via get_context with V2 parameters
+        history_messages = []
         conversation_id = state.get("context_window_id")
         if conversation_id:
             try:
@@ -330,34 +375,46 @@ async def agent_node(state: ImperatorState) -> dict:
                 if not isinstance(budget, int):
                     budget = 8192
 
+                # V2: Pass query, model config, and domain context
+                get_context_args = {
+                    "build_type": build_type,
+                    "budget": budget,
+                    "conversation_id": str(conversation_id),
+                }
+                if user_query:
+                    get_context_args["query"] = user_query
+                if domain_context:
+                    get_context_args["domain_context"] = domain_context
+                # Pass the Imperator's own model config for distillation cache
+                get_context_args["model"] = {
+                    "base_url": imperator_cfg.get("base_url", ""),
+                    "model": imperator_cfg.get("model", ""),
+                    "api_key_env": imperator_cfg.get("api_key_env", ""),
+                }
+
                 ctx_result = await dispatch_tool(
                     "get_context",
-                    {
-                        "build_type": build_type,
-                        "budget": budget,
-                        "conversation_id": str(conversation_id),
-                    },
+                    get_context_args,
                     config,
                     None,
                 )
                 context_messages = ctx_result.get("context", [])
-                if context_messages:
-                    history_lines = []
-                    for msg in context_messages:
-                        role = msg.get("role", "unknown")
-                        content = msg.get("content", "")
-                        if content:
-                            history_lines.append(f"[{role}] {content}")
-                    if history_lines:
-                        system_content += (
-                            "\n\n--- Conversation History ---\n"
-                            + "\n".join(history_lines)
-                        )
+
+                # V2: Load history as separate messages for prompt caching
+                for msg in context_messages:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if not content:
+                        continue
+                    if role == "assistant":
+                        history_messages.append(AIMessage(content=content))
+                    else:
+                        history_messages.append(HumanMessage(content=content))
             except (ValueError, RuntimeError, OSError) as exc:
                 _log.warning("Failed to load context via get_context: %s", exc)
 
-        system_msg = SystemMessage(content=system_content)
-        messages = [system_msg] + messages
+        # Assemble: system (static, cached) + history (cached prefix) + current messages
+        messages = [system_msg] + history_messages + messages
         _first_call = True
     else:
         _first_call = False
