@@ -73,7 +73,7 @@ packages:
     - context-broker-te
 
 tuning:
-  verbose_logging: false
+  verbose_logging: true
   chunk_size: 20
   consolidation_threshold: 3
   consolidation_keep_recent: 2
