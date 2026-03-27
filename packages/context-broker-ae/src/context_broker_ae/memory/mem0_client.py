@@ -200,6 +200,10 @@ def _build_mem0_instance(config: dict) -> object:
                 "openai_base_url": embeddings_config.get(
                     "base_url", "https://api.openai.com/v1"
                 ),
+                # MRL: pass embedding_dims to truncate to configured dimensions.
+                # Without this, the model returns full-size vectors (e.g., 3072 for
+                # gemini-embedding-001) which don't match the typed vector column.
+                "embedding_dims": _get_embedding_dims(config, embeddings_config),
             },
         ),
         vector_store=VectorStoreConfig(
