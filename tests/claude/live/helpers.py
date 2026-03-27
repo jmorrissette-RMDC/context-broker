@@ -179,6 +179,19 @@ def chat_call(
         "stream": stream,
     }
     resp = client.post("/v1/chat/completions", json=payload, timeout=timeout)
+    if resp.status_code == 500:
+        # Return a synthetic error response instead of raising
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": f"[Server error 500: {resp.text[:200]}]",
+                    }
+                }
+            ],
+            "error": True,
+        }
     resp.raise_for_status()
     result = resp.json()
     return result
