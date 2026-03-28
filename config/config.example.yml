@@ -67,9 +67,9 @@ extraction:
 #   embedding_dims: 1024
 #   api_key_env: OPENAI_API_KEY
 #
-# Nominal: Google gemini-embedding-001 (MRL → 1024 dims)
+# Nominal: Google gemini-embedding-2-preview (MRL → 1024 dims)
 #   base_url: https://generativelanguage.googleapis.com/v1beta/openai
-#   model: gemini-embedding-001
+#   model: gemini-embedding-2-preview
 #   embedding_dims: 1024
 #   api_key_env: GOOGLE_API_KEY
 #
