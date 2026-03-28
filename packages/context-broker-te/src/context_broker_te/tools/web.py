@@ -4,7 +4,9 @@ Uses duckduckgo-search for search and crawl4ai for page reading.
 Always available to the Imperator.
 """
 
+import asyncio
 import logging
+from urllib.parse import urlparse
 
 from langchain_core.tools import tool
 
@@ -26,7 +28,11 @@ async def web_search(query: str, max_results: int = 5) -> str:
         from duckduckgo_search import DDGS
 
         max_results = min(max_results, 20)
-        results = DDGS().text(query, max_results=max_results)
+        loop = asyncio.get_running_loop()
+        ddgs = DDGS()
+        results = await loop.run_in_executor(
+            None, lambda: ddgs.text(query, max_results=max_results)
+        )
         if not results:
             return "No search results found."
         lines = [f"Found {len(results)} results:"]
@@ -52,6 +58,14 @@ async def web_read(url: str, max_chars: int = 10000) -> str:
         url: URL to read.
         max_chars: Maximum characters to return (default 10000).
     """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return f"Invalid URL scheme: {parsed.scheme}. Only http and https are supported."
+    # Block private/internal IPs
+    hostname = parsed.hostname or ""
+    if hostname in ("localhost", "127.0.0.1", "0.0.0.0", "169.254.169.254") or hostname.startswith("10.") or hostname.startswith("172.") or hostname.startswith("192.168."):
+        return f"Access denied: cannot access internal/private addresses."
+
     try:
         import httpx
         import ssl

@@ -78,7 +78,7 @@ case "${1}" in
         [[ $# -lt 2 ]] && { error "Usage: $0 --down <prefix>"; exit 1; }
         PREFIX="$2"
         log "Tearing down stack: ${PREFIX}"
-        docker compose -p "${PREFIX}" -f "${COMPOSE_FILE}" down -v --remove-orphans 2>&1
+        docker compose -p "${PREFIX}" -f "${COMPOSE_FILE}" down --remove-orphans 2>&1
 
         # Clean up data directories created by containers (owned by container users).
         # Use a temporary container to remove files we can't delete as the host user.

@@ -86,7 +86,7 @@ async def db_query(sql: str) -> str:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("SET TRANSACTION READ ONLY")
-                await conn.execute("SET statement_timeout = '5000'")
+                await conn.execute("SET LOCAL statement_timeout = '5000'")
                 rows = await conn.fetch(sql)
         if not rows:
             return "No results."

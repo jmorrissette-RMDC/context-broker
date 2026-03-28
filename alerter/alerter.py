@@ -341,11 +341,11 @@ async def _fetch_log_context(ctx_config: dict) -> Optional[str]:
     try:
         rows = await _pool.fetch(
             """
-            SELECT container_name, level, message, timestamp
+            SELECT container_name, data->>'level' AS level, message, log_timestamp
             FROM system_logs
-            WHERE ($1 = '' OR level = $1)
-              AND timestamp > NOW() - ($2 || ' minutes')::INTERVAL
-            ORDER BY timestamp DESC
+            WHERE ($1 = '' OR data->>'level' = $1)
+              AND log_timestamp > NOW() - ($2 || ' minutes')::INTERVAL
+            ORDER BY log_timestamp DESC
             LIMIT $3
             """,
             level,
@@ -357,7 +357,7 @@ async def _fetch_log_context(ctx_config: dict) -> Optional[str]:
 
         lines = []
         for row in rows:
-            ts = row["timestamp"].isoformat() if row["timestamp"] else ""
+            ts = row["log_timestamp"].isoformat() if row["log_timestamp"] else ""
             lines.append(
                 f"[{ts}] [{row['container_name']}] [{row['level']}] {row['message']}"
             )

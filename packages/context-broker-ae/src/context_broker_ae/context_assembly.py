@@ -21,5 +21,4 @@ from context_broker_ae.build_types.standard_tiered import (  # noqa: F401
     release_assembly_lock,
     summarize_message_chunks,
     build_standard_tiered_assembly as build_context_assembly,
-    _atomic_lock_release,
 )

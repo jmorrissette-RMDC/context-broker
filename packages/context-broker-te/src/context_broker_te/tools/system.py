@@ -5,44 +5,36 @@ Always available to the Imperator.
 
 import logging
 import math
+import shlex
 
 from langchain_core.tools import tool
 
 _log = logging.getLogger("context_broker.tools.system")
 
-# Allowlisted commands — read-only system inspection only
-_ALLOWED_COMMANDS = {
-    "docker ps",
-    "docker stats --no-stream",
-    "df -h",
+# Allowlisted binaries — read-only system inspection only
+_ALLOWED_BINARIES = {
+    "docker",
+    "df",
     "uptime",
-    "free -h",
-    "cat /proc/loadavg",
+    "free",
+    "cat",
     "hostname",
     "whoami",
     "id",
-    "env",
-    "pip list",
-    "python --version",
+    "pip",
+    "python",
+    "ping",
+    "curl",
+    "dig",
+    "nslookup",
 }
 
-# Commands that are allowed with any arguments
-_ALLOWED_PREFIXES = [
-    "ping -c ",
-    "docker logs ",
-    "docker inspect ",
-    "curl -s ",
-    "dig ",
-    "nslookup ",
-]
 
-
-def _is_command_allowed(cmd: str) -> bool:
-    """Check if a command is in the allowlist."""
-    cmd_stripped = cmd.strip()
-    if cmd_stripped in _ALLOWED_COMMANDS:
-        return True
-    return any(cmd_stripped.startswith(prefix) for prefix in _ALLOWED_PREFIXES)
+def _is_command_allowed(args: list[str]) -> bool:
+    """Check if a parsed command's binary is in the allowlist."""
+    if not args:
+        return False
+    return args[0] in _ALLOWED_BINARIES
 
 
 @tool
@@ -55,18 +47,20 @@ async def run_command(command: str) -> str:
     Args:
         command: Shell command to execute (must be in the allowlist).
     """
-    if not _is_command_allowed(command):
-        allowed = "\n".join(
-            [f"  {c}" for c in sorted(_ALLOWED_COMMANDS)]
-            + [f"  {p}..." for p in _ALLOWED_PREFIXES]
-        )
-        return f"Command not allowed. Permitted commands:\n{allowed}"
+    try:
+        args = shlex.split(command)
+    except ValueError as exc:
+        return f"Invalid command syntax: {exc}"
+
+    if not _is_command_allowed(args):
+        allowed = "\n".join(f"  {b}" for b in sorted(_ALLOWED_BINARIES))
+        return f"Command not allowed. Permitted binaries:\n{allowed}"
 
     try:
         import asyncio
 
-        proc = await asyncio.create_subprocess_shell(
-            command,
+        proc = await asyncio.create_subprocess_exec(
+            *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
