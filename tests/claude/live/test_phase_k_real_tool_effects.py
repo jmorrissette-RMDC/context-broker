@@ -81,19 +81,19 @@ class TestFileWriteCreatesFile:
             log_issue("test_file_write", "warning", "imperator", f"Imperator did not invoke file_write: {response[:300]}")
 
         # Verify file exists on disk via docker_exec
-        ls_output = docker_exec("context-broker-app", f"ls -la {filepath}")
+        ls_output = docker_exec("context-broker-langgraph", f"ls -la {filepath}")
         assert filename in ls_output, (
             f"File not found on disk after file_write. ls output: {ls_output}"
         )
 
         # Verify content
-        cat_output = docker_exec("context-broker-app", f"cat {filepath}")
+        cat_output = docker_exec("context-broker-langgraph", f"cat {filepath}")
         assert content in cat_output, (
             f"File content mismatch. Expected '{content}', got: {cat_output[:200]}"
         )
 
         # Cleanup
-        docker_exec("context-broker-app", f"rm -f {filepath}")
+        docker_exec("context-broker-langgraph", f"rm -f {filepath}")
 
 
 # ===========================================================================
@@ -317,9 +317,12 @@ class TestConfigWriteTakesEffect:
             f"config_write did not take effect. Response: {verify_response[:300]}"
         )
 
-        # Restore
+        # Restore — sleep >1s to avoid mtime cache collision (filesystem mtime
+        # resolution is 1 second; two writes within the same second get the same
+        # mtime and the config loader returns the stale cached version)
+        time.sleep(1.5)
         _chat(http_client, "Set tuning.verbose_logging to false in the config")
-        time.sleep(1)
+        time.sleep(1.5)
 
         # Verify restored
         restore_response = _chat(
@@ -439,7 +442,7 @@ class TestSendNotificationReachesAlerter:
             return
 
         # If alerter is not running or logs don't contain it, check app logs
-        app_logs = docker_logs("context-broker-app", lines=100)
+        app_logs = docker_logs("context-broker-langgraph", lines=100)
         if tag in app_logs or "notification" in app_logs.lower():
             log_issue(
                 "test_send_notification_reaches_alerter",

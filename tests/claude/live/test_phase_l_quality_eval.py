@@ -273,8 +273,8 @@ class TestSearchRelevance:
     """L-03: Evaluate search_messages result relevance."""
 
     def test_search_relevance(self, http_client):
-        """Search for 'MAD container architecture', have Sonnet judge relevance."""
-        query = "MAD container architecture"
+        """Search for a topic present in the Phase 1 data, have Sonnet judge relevance."""
+        query = "context assembly token budget"
         resp = mcp_call(
             http_client,
             "search_messages",
@@ -309,8 +309,8 @@ class TestSearchRelevance:
             f"SEARCH RESULTS:\n```\n{results_text}\n```\n\n"
             "Evaluate on these criteria:\n"
             "1. Are the results semantically relevant to the query?\n"
-            "2. Do the results contain information about MAD architecture, "
-            "containers, or related system design topics?\n"
+            "2. Do the results contain information about context assembly, "
+            "token budgets, or related system design topics?\n"
             "3. Are the results ordered by relevance (best matches first)?\n\n"
             "Rate the relevance as exactly one of: GOOD, ACCEPTABLE, or POOR.\n"
             "Provide your reasoning, then end with: Rating: GOOD/ACCEPTABLE/POOR"
@@ -332,7 +332,7 @@ class TestKnowledgeExtractionQuality:
         resp = mcp_call(
             http_client,
             "mem_search",
-            {"query": "software architecture design patterns", "user_id": "test-runner"},
+            {"query": "software architecture design patterns", "user_id": "default"},
         )
         assert resp.status_code == 200
         result = extract_mcp_result(resp)
@@ -343,7 +343,7 @@ class TestKnowledgeExtractionQuality:
             resp2 = mcp_call(
                 http_client,
                 "search_knowledge",
-                {"query": "software architecture", "user_id": "test-runner"},
+                {"query": "software architecture", "user_id": "default"},
             )
             if resp2.status_code == 200:
                 result2 = extract_mcp_result(resp2)

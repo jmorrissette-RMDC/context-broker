@@ -336,6 +336,10 @@ async def hybrid_search_messages(state: MessageSearchState) -> dict:
     if not filter_role:
         filter_role = "user"
 
+    # TA-06: Exclude short command-like messages (e.g., "Search for X") that
+    # are stored as user messages but contain no substantive content.
+    min_content_length = 50
+
     # M-20: Build dynamic WHERE clause fragments with parameterized args.
     # CB-R3-07: Build filter list and args together, compute indices at the end.
     # This eliminates manual index tracking throughout the function.
@@ -352,6 +356,9 @@ async def hybrid_search_messages(state: MessageSearchState) -> dict:
         if filter_role:
             filters.append("role = ${}")
             args.append(filter_role)
+        if min_content_length > 0:
+            filters.append(f"length(content) > {min_content_length}")
+            # No parameter needed — literal integer in SQL
         if parsed_date_from:
             filters.append("created_at >= ${}::timestamptz")
             args.append(parsed_date_from)
