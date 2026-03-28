@@ -59,8 +59,8 @@ class ImperatorState(TypedDict):
     """State for the Imperator ReAct agent.
 
     ARCH-05: messages accumulates via add_messages reducer across
-    agent_node <-> tool_node cycles.  The graph runs fresh each
-    invocation — no checkpointer.
+    agent_node <-> tool_node cycles.  Each invocation gets a unique
+    thread_id — MemorySaver is ephemeral (ReAct loop state only).
     """
 
     messages: Annotated[list[AnyMessage], add_messages]
