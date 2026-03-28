@@ -6,6 +6,8 @@ Called once — checks if the table is empty before seeding.
 
 import logging
 
+import asyncpg
+
 _log = logging.getLogger("context_broker.te.seed_knowledge")
 
 SEED_ARTICLES = [

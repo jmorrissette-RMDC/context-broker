@@ -125,6 +125,8 @@ async def _migration_009(conn) -> None:
         "SELECT vector_dims(embedding) FROM conversation_messages WHERE embedding IS NOT NULL LIMIT 1"
     )
     if dim is not None:
+        # Validate dim is a safe integer to prevent SQL injection
+        dim = int(dim)
         # Type the column so HNSW can index it directly (no expression cast).
         # Queries use `embedding <=> $1::vector` — the index must match.
         await conn.execute(
@@ -334,6 +336,7 @@ async def _migration_014(conn) -> None:
     await conn.execute("DROP TABLE IF EXISTS system_logs")
     await conn.execute("""
         CREATE TABLE system_logs (
+            id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
             container_name  VARCHAR(255) NOT NULL,
             log_timestamp   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
             message         TEXT,

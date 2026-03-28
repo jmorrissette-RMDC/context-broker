@@ -96,19 +96,19 @@ for pkg in $SG_PACKAGES; do
             SG_WHEEL_DIR="/app/stategraph-wheels"
             if [ -d "$SG_WHEEL_DIR" ]; then
                 echo "Installing $pkg from built wheels: $SG_WHEEL_DIR"
-                pip install --user --no-cache-dir --no-index --find-links="$SG_WHEEL_DIR" "$pkg" || echo "Warning: failed to install $pkg"
+                pip install --user --no-cache-dir --no-index --find-links="$SG_WHEEL_DIR" "$pkg"
             else
                 echo "Installing $pkg from local packages: $PKG_LOCAL_PATH"
-                pip install --user --no-cache-dir --no-index --find-links="$PKG_LOCAL_PATH" "$pkg" || echo "Warning: failed to install $pkg"
+                pip install --user --no-cache-dir --no-index --find-links="$PKG_LOCAL_PATH" "$pkg"
             fi
             ;;
         devpi)
             if [ -n "$PKG_DEVPI_URL" ]; then
-                pip install --user --no-cache-dir --index-url "$PKG_DEVPI_URL" "$pkg" || echo "Warning: failed to install $pkg from devpi"
+                pip install --user --no-cache-dir --index-url "$PKG_DEVPI_URL" "$pkg"
             fi
             ;;
         pypi)
-            pip install --user --no-cache-dir "$pkg" || echo "Warning: failed to install $pkg from pypi"
+            pip install --user --no-cache-dir "$pkg"
             ;;
     esac
 done

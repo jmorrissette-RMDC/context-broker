@@ -7,6 +7,7 @@ on stored messages.
 Priority: user field from request body → reverse DNS on source IP → "unknown"
 """
 
+import asyncio
 import functools
 import logging
 import socket
@@ -17,8 +18,8 @@ _log = logging.getLogger("context_broker.routes.caller_identity")
 
 
 @functools.lru_cache(maxsize=256)
-def _reverse_dns(client_ip: str) -> str:
-    """Cached reverse DNS lookup."""
+def _reverse_dns_sync(client_ip: str) -> str:
+    """Cached reverse DNS lookup (blocking — run via executor)."""
     try:
         hostname, _, _ = socket.gethostbyaddr(client_ip)
         return hostname
@@ -27,7 +28,13 @@ def _reverse_dns(client_ip: str) -> str:
         return client_ip
 
 
-def resolve_caller(request: Request, user_field: str | None = None) -> str:
+async def _reverse_dns(client_ip: str) -> str:
+    """Non-blocking reverse DNS lookup using a thread executor."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _reverse_dns_sync, client_ip)
+
+
+async def resolve_caller(request: Request, user_field: str | None = None) -> str:
     """Resolve the caller's identity from the HTTP request.
 
     Args:
@@ -44,6 +51,6 @@ def resolve_caller(request: Request, user_field: str | None = None) -> str:
 
     # Priority 2: reverse DNS lookup on source IP (works in Docker networking)
     if request.client and request.client.host:
-        return _reverse_dns(request.client.host)
+        return await _reverse_dns(request.client.host)
 
     return "unknown"

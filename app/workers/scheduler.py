@@ -16,6 +16,8 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+import asyncpg
+
 from app.config import async_load_config, get_tuning
 from app.database import get_pg_pool
 
@@ -42,6 +44,8 @@ def _cron_is_due(cron_expr: str, now: datetime) -> bool:
             continue
         if pattern.startswith("*/"):
             divisor = int(pattern[2:])
+            if divisor == 0:
+                return False
             if field_val % divisor != 0:
                 return False
         else:
@@ -176,7 +180,7 @@ async def scheduler_worker(config: dict) -> None:
                         row["id"],
                     )
                     if full_row:
-                        asyncio.create_task(
+                        task = asyncio.create_task(
                             _fire_schedule(
                                 schedule_id,
                                 full_row["message"],
@@ -184,6 +188,7 @@ async def scheduler_worker(config: dict) -> None:
                                 config,
                             )
                         )
+                        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
             await asyncio.sleep(poll_interval)
 

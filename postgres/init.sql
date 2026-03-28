@@ -164,6 +164,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_window_tier_seq
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS system_logs (
+    id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     container_name  VARCHAR(255) NOT NULL,
     log_timestamp   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     message         TEXT,

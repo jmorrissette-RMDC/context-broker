@@ -252,7 +252,7 @@ async def mcp_tool_call(
         )
 
     # Resolve caller identity from the HTTP request for sender/recipient
-    caller = resolve_caller(request)
+    caller = await resolve_caller(request)
     config = {
         **config,
         "imperator": {

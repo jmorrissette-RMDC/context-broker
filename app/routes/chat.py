@@ -127,7 +127,7 @@ async def chat_completions(request: Request):
             lc_messages.append(cls(content=m.content))
 
     # Resolve caller identity for sender/recipient on stored messages.
-    caller = resolve_caller(request, chat_request.user)
+    caller = await resolve_caller(request, chat_request.user)
     config = {
         **config,
         "imperator": {

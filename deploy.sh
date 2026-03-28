@@ -35,7 +35,7 @@
 set -euo pipefail
 
 # Defaults
-COMPOSE_FILE="docker-compose.claude-test.yml"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 DEFAULT_PORT=8081
 HEALTH_TIMEOUT=180      # seconds to wait for /health
 MCP_TIMEOUT=120         # seconds to wait for MCP readiness

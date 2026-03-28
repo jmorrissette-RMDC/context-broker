@@ -344,6 +344,8 @@ class LogShipper:
                         logger.info("Container left network: %s", container_id[:12])
                         if container_id in self.active_tasks:
                             self.active_tasks[container_id].cancel()
+                            # Intentional: no await here — the cancelled task will
+                            # clean up in its own finally block (tail_container).
                             del self.active_tasks[container_id]
 
                 except asyncio.CancelledError:
@@ -377,6 +379,9 @@ class LogShipper:
             logger.info("Received shutdown signal")
         finally:
             self.running = False
+
+            # Brief pause to let the writer flush remaining queued logs
+            await asyncio.sleep(0.5)
 
             # Cancel all tail tasks
             for task in self.active_tasks.values():

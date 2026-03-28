@@ -42,6 +42,10 @@ RUN if [ "$PACKAGE_SOURCE" = "local" ]; then \
         pip install --no-cache-dir -r requirements.txt; \
     fi
 
+USER root
+RUN apt-get purge -y --auto-remove build-essential && rm -rf /var/lib/apt/lists/*
+USER ${USER_NAME}
+
 # Copy application code and entrypoint
 COPY --chown=${USER_NAME}:${USER_NAME} app/ ./app/
 COPY --chown=${USER_NAME}:${USER_NAME} entrypoint.sh ./entrypoint.sh
