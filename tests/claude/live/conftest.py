@@ -144,121 +144,139 @@ def test_stack(http_client):
         print("[SETUP] MCP endpoint verified from test runner")
 
     # ------------------------------------------------------------------
-    # Step 3: Bulk load Phase 1 data
+    # Step 3: Bulk load Phase 1 data (skip if already loaded)
     # ------------------------------------------------------------------
     loaded_conversations = {}
 
-    conversation_files = sorted(PHASE1_DIR.glob("conversation-*.json"))
-    if not conversation_files:
-        pytest.fail(f"No conversation files found in {PHASE1_DIR}")
-
-    total_messages = 0
-    load_errors = 0
-    load_start = time.time()
-
-    for conv_file in conversation_files:
-        print(f"[SETUP] Loading {conv_file.name}...")
-        messages = json.loads(conv_file.read_text(encoding="utf-8"))
-
-        # Create conversation
-        resp = mcp_call(
-            http_client,
-            "conv_create_conversation",
-            {
-                "title": f"claude-test-{conv_file.stem}",
-                "flow_id": "claude-test",
-                "user_id": "test-runner",
-            },
+    # Check if data is already loaded by querying message count
+    from .helpers import get_db_counts
+    existing_counts = get_db_counts()
+    if existing_counts["total"] > 1000:
+        print(
+            f"[SETUP] Data already loaded ({existing_counts['total']:,} messages) — skipping bulk load"
         )
-        if resp.status_code != 200:
+        # Recover conversation IDs from DB
+        resp = mcp_call(http_client, "conv_list_conversations", {"limit": 10})
+        if resp.status_code == 200:
+            convs = extract_mcp_result(resp).get("conversations", [])
+            for c in convs:
+                loaded_conversations[c.get("title", c["id"])] = c["id"]
+        total_messages = existing_counts["total"]
+    else:
+        conversation_files = sorted(PHASE1_DIR.glob("conversation-*.json"))
+        if not conversation_files:
+            pytest.fail(f"No conversation files found in {PHASE1_DIR}")
+
+        total_messages = 0
+        load_errors = 0
+        load_start = time.time()
+
+        for conv_file in conversation_files:
+            print(f"[SETUP] Loading {conv_file.name}...")
+            messages = json.loads(conv_file.read_text(encoding="utf-8"))
+
+            # Create conversation
+            resp = mcp_call(
+                http_client,
+                "conv_create_conversation",
+                {
+                    "title": f"claude-test-{conv_file.stem}",
+                    "flow_id": "claude-test",
+                    "user_id": "test-runner",
+                },
+            )
+            if resp.status_code != 200:
+                log_issue(
+                    "setup_bulk_load",
+                    "error",
+                    "data-loading",
+                    f"Failed to create conversation for {conv_file.name}",
+                    "200",
+                    str(resp.status_code),
+                )
+                continue
+
+            conv_id = extract_mcp_result(resp)["conversation_id"]
+            loaded_conversations[conv_file.stem] = conv_id
+
+            # Store all messages
+            for i, msg in enumerate(messages):
+                resp = mcp_call(
+                    http_client,
+                    "store_message",
+                    {
+                        "conversation_id": conv_id,
+                        "role": msg.get("role", "user"),
+                        "content": msg.get("content", ""),
+                        "sender": msg.get("sender", "unknown"),
+                    },
+                )
+                if resp.status_code != 200:
+                    load_errors += 1
+                    if load_errors <= 5:
+                        log_issue(
+                            "setup_bulk_load",
+                            "error",
+                            "data-loading",
+                            f"Failed to store message {i} in {conv_file.name}: HTTP {resp.status_code}",
+                            "200",
+                            str(resp.status_code),
+                        )
+                total_messages += 1
+
+                if total_messages % 500 == 0:
+                    elapsed = time.time() - load_start
+                    rate = total_messages / elapsed if elapsed > 0 else 0
+                    print(
+                        f"[SETUP] Loaded {total_messages} messages "
+                        f"({rate:.0f} msg/s, {load_errors} errors)..."
+                    )
+
+        load_elapsed = time.time() - load_start
+        print(
+            f"[SETUP] Loaded {total_messages} messages across "
+            f"{len(loaded_conversations)} conversations "
+            f"in {load_elapsed:.0f}s ({load_errors} errors)"
+        )
+
+        if load_errors > total_messages * 0.1:
             log_issue(
                 "setup_bulk_load",
                 "error",
                 "data-loading",
-                f"Failed to create conversation for {conv_file.name}",
-                "200",
-                str(resp.status_code),
+                f">{10}% of messages failed to load: {load_errors}/{total_messages}",
+                "<10% errors",
+                f"{load_errors}/{total_messages}",
             )
-            continue
-
-        conv_id = extract_mcp_result(resp)["conversation_id"]
-        loaded_conversations[conv_file.stem] = conv_id
-
-        # Store all messages
-        for i, msg in enumerate(messages):
-            resp = mcp_call(
-                http_client,
-                "store_message",
-                {
-                    "conversation_id": conv_id,
-                    "role": msg.get("role", "user"),
-                    "content": msg.get("content", ""),
-                    "sender": msg.get("sender", "unknown"),
-                },
-            )
-            if resp.status_code != 200:
-                load_errors += 1
-                if load_errors <= 5:  # Log first 5 errors
-                    log_issue(
-                        "setup_bulk_load",
-                        "error",
-                        "data-loading",
-                        f"Failed to store message {i} in {conv_file.name}: HTTP {resp.status_code}",
-                        "200",
-                        str(resp.status_code),
-                    )
-            total_messages += 1
-
-            if total_messages % 500 == 0:
-                elapsed = time.time() - load_start
-                rate = total_messages / elapsed if elapsed > 0 else 0
-                print(
-                    f"[SETUP] Loaded {total_messages} messages "
-                    f"({rate:.0f} msg/s, {load_errors} errors)..."
-                )
-
-    load_elapsed = time.time() - load_start
-    print(
-        f"[SETUP] Loaded {total_messages} messages across "
-        f"{len(loaded_conversations)} conversations "
-        f"in {load_elapsed:.0f}s ({load_errors} errors)"
-    )
-
-    if load_errors > total_messages * 0.1:
-        log_issue(
-            "setup_bulk_load",
-            "error",
-            "data-loading",
-            f">{10}% of messages failed to load: {load_errors}/{total_messages}",
-            "<10% errors",
-            f"{load_errors}/{total_messages}",
-        )
 
     # ------------------------------------------------------------------
-    # Step 4: Wait for pipeline
+    # Step 4: Wait for pipeline (skip if data was pre-loaded)
     # ------------------------------------------------------------------
-    print("[SETUP] Waiting for pipeline completion...")
-    pipeline_start = time.time()
-    try:
-        final_counts = wait_for_pipeline(http_client, total_messages)
-        pipeline_elapsed = time.time() - pipeline_start
-        print(
-            f"[SETUP] Pipeline complete in {pipeline_elapsed:.0f}s: "
-            f"embedded={final_counts['embedded']}, "
-            f"summaries={final_counts['summaries']}, "
-            f"extracted={final_counts['extracted']}"
-        )
-    except TimeoutError as exc:
-        pipeline_elapsed = time.time() - pipeline_start
-        log_issue(
-            "setup_pipeline_wait",
-            "error",
-            "pipeline",
-            f"Pipeline did not complete in {pipeline_elapsed:.0f}s: {exc}",
-            f"{total_messages} embeddings",
-            str(get_db_counts()),
-        )
-        print(f"[SETUP] WARNING: Pipeline did not complete: {exc}")
+    if existing_counts["total"] <= 1000:
+        print("[SETUP] Waiting for pipeline completion...")
+        pipeline_start = time.time()
+        try:
+            final_counts = wait_for_pipeline(http_client, total_messages)
+            pipeline_elapsed = time.time() - pipeline_start
+            print(
+                f"[SETUP] Pipeline complete in {pipeline_elapsed:.0f}s: "
+                f"embedded={final_counts['embedded']}, "
+                f"summaries={final_counts['summaries']}, "
+                f"extracted={final_counts['extracted']}"
+            )
+        except TimeoutError as exc:
+            pipeline_elapsed = time.time() - pipeline_start
+            log_issue(
+                "setup_pipeline_wait",
+                "error",
+                "pipeline",
+                f"Pipeline did not complete in {pipeline_elapsed:.0f}s: {exc}",
+                f"{total_messages} embeddings",
+                str(get_db_counts()),
+            )
+            print(f"[SETUP] WARNING: Pipeline did not complete: {exc}")
+    else:
+        print("[SETUP] Data pre-loaded — skipping pipeline wait")
 
     # ------------------------------------------------------------------
     # Yield to tests
