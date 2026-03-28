@@ -71,13 +71,18 @@ async def _startup() -> None:
     _config = _load_config()
     _log.info("Alerter starting")
 
-    try:
-        _pool = await asyncpg.create_pool(POSTGRES_DSN, min_size=1, max_size=3)
-        await _ensure_tables()
-        _log.info("Postgres connected")
-    except (OSError, asyncpg.PostgresError) as exc:
-        _log.warning("Postgres not available: %s", exc)
-        _pool = None
+    # Retry Postgres connection — Postgres may not be ready at container start
+    for attempt in range(10):
+        try:
+            _pool = await asyncpg.create_pool(POSTGRES_DSN, min_size=1, max_size=3)
+            await _ensure_tables()
+            _log.info("Postgres connected")
+            break
+        except (OSError, asyncpg.PostgresError) as exc:
+            _log.warning("Postgres not available (attempt %d/10): %s", attempt + 1, exc)
+            _pool = None
+            if attempt < 9:
+                await asyncio.sleep(3)
 
 
 @app.on_event("shutdown")

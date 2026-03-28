@@ -113,5 +113,9 @@ for pkg in $SG_PACKAGES; do
     esac
 done
 
+# Ensure /data subdirectories exist with correct ownership.
+# /data is a volume mount (host-owned). The app needs writable subdirs.
+mkdir -p /data/downloads 2>/dev/null || true
+
 # Start the application
 exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
