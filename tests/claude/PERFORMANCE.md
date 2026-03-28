@@ -1,6 +1,6 @@
 # Performance Report
 
-**Generated:** 2026-03-27T21:40:41.492812+00:00
+**Generated:** 2026-03-28T02:03:08.412951+00:00
 **Source:** Prometheus /metrics endpoint
 
 ---
@@ -9,55 +9,56 @@
 
 | Metric | Value |
 |--------|-------|
-| Total messages | 61,292 |
-| Embedded messages | 61,291 |
-| Summaries | 118 |
-| Extracted messages | 54,911 |
+| Total messages | 33,945 |
+| Embedded messages | 33,945 |
+| Summaries | 61 |
+| Extracted messages | 8,615 |
 
 ## Queue Depths (current)
 
 | Queue | Depth |
 |-------|-------|
-| embedding | empty |
+| embedding | **1** |
 | assembly | empty |
-| extraction | **6,398** |
+| extraction | **25,320** |
 
 ## MCP Tool Latencies
 
 | Tool | Calls | Errors | Avg (s) | p50 (s) | p90 (s) | p99 (s) | Total (s) |
 |------|-------|--------|---------|---------|---------|---------|-----------|
-| store_message | 10,494 | 1 | 0.023 | 0.05 | 0.05 | 0.50 | 241.7 |
-| mem_add | 7 | 0 | 4.021 | 5.00 | 10.00 | 10.00 | 28.1 |
-| imperator_chat | 2 | 0 | 2.972 | 5.00 | 5.00 | 5.00 | 5.9 |
-| get_context | 66 | 0 | 0.085 | 0.10 | 0.50 | 0.50 | 5.6 |
-| mem_search | 3 | 0 | 1.274 | 5.00 | 5.00 | 5.00 | 3.8 |
-| install_stategraph | 1 | 0 | 2.761 | 5.00 | 5.00 | 5.00 | 2.8 |
-| mem_get_context | 1 | 0 | 1.094 | 5.00 | 5.00 | 5.00 | 1.1 |
-| conv_search | 1 | 0 | 0.868 | 1.00 | 1.00 | 1.00 | 0.9 |
-| search_knowledge | 1 | 0 | 0.779 | 1.00 | 1.00 | 1.00 | 0.8 |
-| search_logs | 1 | 0 | 0.620 | 1.00 | 1.00 | 1.00 | 0.6 |
-| search_messages | 2 | 0 | 0.278 | 0.50 | 0.50 | 0.50 | 0.6 |
-| conv_create_conversation | 22 | 0 | 0.023 | 0.05 | 0.05 | 0.05 | 0.5 |
-| conv_search_messages | 1 | 0 | 0.358 | 0.50 | 0.50 | 0.50 | 0.4 |
-| conv_list_conversations | 13 | 0 | 0.018 | 0.05 | 0.05 | 0.10 | 0.2 |
-| conv_store_message | 7 | 0 | 0.031 | 0.05 | 0.05 | 0.05 | 0.2 |
-| mem_list | 8 | 0 | 0.027 | 0.01 | 0.50 | 0.50 | 0.2 |
-| conv_create_context_window | 4 | 0 | 0.026 | 0.05 | 0.10 | 0.10 | 0.1 |
-| conv_retrieve_context | 2 | 0 | 0.016 | 0.05 | 0.05 | 0.05 | 0.0 |
-| conv_delete_conversation | 2 | 0 | 0.011 | 0.05 | 0.05 | 0.05 | 0.0 |
-| metrics_get | 4 | 0 | 0.006 | 0.01 | 0.01 | 0.01 | 0.0 |
-| conv_get_history | 3 | 1 | 0.003 | 0.01 | 0.01 | 0.01 | 0.0 |
-| conv_search_context_windows | 2 | 0 | 0.003 | 0.01 | 0.01 | 0.01 | 0.0 |
-| query_logs | 2 | 0 | 0.003 | 0.01 | 0.01 | 0.01 | 0.0 |
-| completely_nonexistent_tool_xyz | 1 | 1 | 0.000 | 0.01 | 0.01 | 0.01 | 0.0 |
+| store_message | 34,866 | 4 | 0.026 | 0.05 | 0.05 | 0.50 | 922.1 |
+| mem_add | 38 | 0 | 4.836 | 5.00 | 10.00 | 30.00 | 183.8 |
+| imperator_chat | 7 | 0 | 6.027 | 5.00 | 30.00 | 30.00 | 42.2 |
+| get_context | 265 | 0 | 0.101 | 0.10 | 0.50 | 0.50 | 26.7 |
+| install_stategraph | 4 | 0 | 2.922 | 5.00 | 5.00 | 5.00 | 11.7 |
+| mem_search | 6 | 0 | 1.090 | 5.00 | 5.00 | 5.00 | 6.5 |
+| search_knowledge | 4 | 0 | 1.198 | 5.00 | 5.00 | 5.00 | 4.8 |
+| mem_get_context | 4 | 0 | 1.193 | 5.00 | 5.00 | 5.00 | 4.8 |
+| search_messages | 8 | 0 | 0.427 | 0.50 | 1.00 | 1.00 | 3.4 |
+| conv_create_conversation | 87 | 0 | 0.032 | 0.05 | 0.10 | 0.50 | 2.8 |
+| conv_search | 4 | 0 | 0.683 | 1.00 | 1.00 | 1.00 | 2.7 |
+| conv_search_messages | 4 | 0 | 0.499 | 0.50 | 1.00 | 1.00 | 2.0 |
+| mem_delete | 2 | 0 | 0.878 | 0.01 | 5.00 | 5.00 | 1.8 |
+| search_logs | 4 | 0 | 0.302 | 0.50 | 0.50 | 0.50 | 1.2 |
+| conv_store_message | 28 | 0 | 0.033 | 0.05 | 0.10 | 0.10 | 0.9 |
+| conv_create_context_window | 16 | 0 | 0.033 | 0.05 | 0.10 | 0.50 | 0.5 |
+| conv_list_conversations | 55 | 0 | 0.010 | 0.01 | 0.05 | 0.10 | 0.5 |
+| mem_list | 20 | 0 | 0.023 | 0.01 | 0.05 | 0.50 | 0.5 |
+| conv_retrieve_context | 8 | 0 | 0.037 | 0.05 | 0.10 | 0.10 | 0.3 |
+| metrics_get | 20 | 0 | 0.013 | 0.01 | 0.05 | 0.05 | 0.3 |
+| conv_delete_conversation | 8 | 0 | 0.030 | 0.05 | 0.05 | 0.05 | 0.2 |
+| conv_get_history | 12 | 4 | 0.008 | 0.01 | 0.05 | 0.05 | 0.1 |
+| conv_search_context_windows | 8 | 0 | 0.006 | 0.01 | 0.05 | 0.05 | 0.1 |
+| query_logs | 8 | 0 | 0.002 | 0.01 | 0.01 | 0.01 | 0.0 |
+| completely_nonexistent_tool_xyz | 4 | 4 | 0.000 | 0.01 | 0.01 | 0.01 | 0.0 |
 
 ## Chat (Imperator) Latencies
 
 | Metric | Value |
 |--------|-------|
-| Total calls | 48 |
-| Total time | 445.4s |
-| Average | 9.3s |
+| Total calls | 193 |
+| Total time | 2133.2s |
+| Average | 11.1s |
 | p50 | 10.0s |
 | p90 | 30.0s |
 | p99 | 60.0s |
@@ -66,11 +67,13 @@
 
 | Job Type | Completed | Errors | Avg (s) | p50 (s) | p90 (s) | Total (s) |
 |----------|-----------|--------|---------|---------|---------|-----------|
-| embed_batch | 10,214 | 0 | 1.46 | 5.0 | 5.0 | 382.6 |
-| extract_memory | 26 | 19 | 14.70 | 30.0 | 60.0 | 382.1 |
-| assemble_context | 48 | 0 | 0.23 | 0.1 | 0.1 | 11.1 |
+| embed_batch | 33,944 | 0 | 1.78 | 5.0 | 5.0 | 1666.8 |
+| extract_memory | 131 | 11 | 37.73 | 60.0 | 120.0 | 4942.5 |
+| assemble_context | 202 | 0 | 0.29 | 0.1 | 1.0 | 58.4 |
 
 ## Key Findings
 
-- **HIGH ERROR RATE**: `extract_memory` has 42% error rate (19/45)
-- **QUEUE NOT DRAINED**: `extraction` queue has 6,398 pending items
+- **SLOW**: `imperator_chat` averages 6.0s per call
+- **QUEUE NOT DRAINED**: `embedding` queue has 1 pending items
+- **QUEUE NOT DRAINED**: `extraction` queue has 25,320 pending items
+- **SLOW CHAT**: Imperator averages 11.1s per response
