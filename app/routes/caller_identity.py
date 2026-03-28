@@ -7,6 +7,7 @@ on stored messages.
 Priority: user field from request body → reverse DNS on source IP → "unknown"
 """
 
+import functools
 import logging
 import socket
 
@@ -14,8 +15,16 @@ from fastapi import Request
 
 _log = logging.getLogger("context_broker.routes.caller_identity")
 
-# Cache reverse lookups to avoid repeated DNS calls
-_dns_cache: dict[str, str] = {}
+
+@functools.lru_cache(maxsize=256)
+def _reverse_dns(client_ip: str) -> str:
+    """Cached reverse DNS lookup."""
+    try:
+        hostname, _, _ = socket.gethostbyaddr(client_ip)
+        return hostname
+    except (socket.herror, socket.gaierror, OSError):
+        _log.debug("Reverse DNS failed for %s", client_ip)
+        return client_ip
 
 
 def resolve_caller(request: Request, user_field: str | None = None) -> str:
@@ -35,17 +44,6 @@ def resolve_caller(request: Request, user_field: str | None = None) -> str:
 
     # Priority 2: reverse DNS lookup on source IP (works in Docker networking)
     if request.client and request.client.host:
-        client_ip = request.client.host
-        if client_ip in _dns_cache:
-            return _dns_cache[client_ip]
-        try:
-            hostname, _, _ = socket.gethostbyaddr(client_ip)
-            # Docker DNS returns container name as hostname
-            _dns_cache[client_ip] = hostname
-            return hostname
-        except (socket.herror, socket.gaierror, OSError):
-            _log.debug("Reverse DNS failed for %s", client_ip)
-            _dns_cache[client_ip] = client_ip
-            return client_ip
+        return _reverse_dns(request.client.host)
 
     return "unknown"

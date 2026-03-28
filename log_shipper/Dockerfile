@@ -13,6 +13,9 @@ COPY shipper.py .
 # Ensure logs are flushed immediately to stdout for debugging
 ENV PYTHONUNBUFFERED=1
 
+RUN adduser --disabled-password --no-create-home --system --group shipper && usermod -aG docker shipper
+USER shipper
+
 # Log shipper health: verify the Python process is alive.
 # No HTTP endpoint — checks that PID 1 (the shipper) is running.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

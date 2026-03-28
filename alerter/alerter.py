@@ -43,8 +43,11 @@ _pool: Optional[asyncpg.Pool] = None
 
 CONFIG_PATH = os.environ.get("ALERTER_CONFIG", "/config/alerter.yml")
 POSTGRES_DSN = os.environ["POSTGRES_DSN"]  # Required — set in docker-compose.yml
-CHANNEL_TIMEOUT = 10
-LLM_TIMEOUT = 30
+CHANNEL_TIMEOUT = int(os.environ.get("CHANNEL_TIMEOUT", "10"))
+LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "30"))
+
+_PG_RETRY_COUNT = int(os.environ.get("PG_RETRY_COUNT", "10"))
+_PG_RETRY_INTERVAL = int(os.environ.get("PG_RETRY_INTERVAL", "3"))
 
 
 # ── Config ─────────────────────────────────────────────────────────
@@ -65,21 +68,21 @@ def _load_config() -> dict:
 @app.on_event("startup")
 async def _startup() -> None:
     global _config, _pool
-    _config = _load_config()
+    _config = await asyncio.to_thread(_load_config)
     _log.info("Alerter starting")
 
     # Retry Postgres connection — Postgres may not be ready at container start
-    for attempt in range(10):
+    for attempt in range(_PG_RETRY_COUNT):
         try:
             _pool = await asyncpg.create_pool(POSTGRES_DSN, min_size=1, max_size=3)
             await _ensure_tables()
             _log.info("Postgres connected")
             break
         except (OSError, asyncpg.PostgresError) as exc:
-            _log.warning("Postgres not available (attempt %d/10): %s", attempt + 1, exc)
+            _log.warning("Postgres not available (attempt %d/%d): %s", attempt + 1, _PG_RETRY_COUNT, exc)
             _pool = None
-            if attempt < 9:
-                await asyncio.sleep(3)
+            if attempt < _PG_RETRY_COUNT - 1:
+                await asyncio.sleep(_PG_RETRY_INTERVAL)
 
 
 @app.on_event("shutdown")

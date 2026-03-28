@@ -286,7 +286,7 @@ async def calculate_tier_boundaries(state: StandardTieredAssemblyState) -> dict:
 
     max_summarized_seq = 0
     if existing_t2:
-        max_summarized_seq = existing_t2[0]["summarizes_to_seq"]
+        max_summarized_seq = existing_t2[0].get("summarizes_to_seq", 0)
 
     # Only process messages not yet summarized
     unsummarized = [

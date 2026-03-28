@@ -17,10 +17,6 @@ from langchain_core.tools import tool
 
 _log = logging.getLogger("context_broker.tools.notify")
 
-# Default webhook points to the alerter sidecar on the internal network
-_DEFAULT_WEBHOOK = "http://context-broker-alerter:8000/webhook"
-
-
 @tool
 async def send_notification(
     message: str,
@@ -51,7 +47,7 @@ async def send_notification(
 
         config = load_merged_config()
         webhook_url = config.get("imperator", {}).get(
-            "notification_webhook", _DEFAULT_WEBHOOK
+            "notification_webhook", "http://context-broker-alerter:8000/webhook"
         )
 
         import httpx

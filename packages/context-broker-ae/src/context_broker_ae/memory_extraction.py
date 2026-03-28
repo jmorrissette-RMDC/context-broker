@@ -353,7 +353,6 @@ async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
         ValueError,
         ImportError,
         OSError,
-        Exception,
     ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         # Mem0 wraps Neo4j driver errors and other backend failures in

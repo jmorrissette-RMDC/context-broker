@@ -34,7 +34,7 @@ async def init_postgres(config: dict) -> asyncpg.Pool:
         password=password,
         min_size=db_config.get("pool_min_size", 2),
         max_size=db_config.get("pool_max_size", 10),
-        command_timeout=30,
+        command_timeout=db_config.get("command_timeout", 30),
     )
     _log.info("PostgreSQL connection pool initialized")
     return _pg_pool

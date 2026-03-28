@@ -43,7 +43,7 @@ class LogShipper:
             )
             logger.info("Connected to PostgreSQL")
         except (asyncpg.PostgresError, OSError, asyncio.TimeoutError) as e:
-            logger.error(f"Failed to connect to PostgreSQL: {e}")
+            logger.error("Failed to connect to PostgreSQL: %s", e)
             sys.exit(1)
 
         # 2. Connect to Docker
@@ -62,7 +62,7 @@ class LogShipper:
                 if "context-broker-net" in net["Name"]:
                     self.network_id = net["Id"]
                     logger.info(
-                        f"Discovered network by name: {net['Name']} ({self.network_id[:12]})"
+                        "Discovered network by name: %s (%s)", net['Name'], self.network_id[:12]
                     )
                     break
         else:
@@ -75,10 +75,10 @@ class LogShipper:
                 network_name = list(networks.keys())[0]
                 self.network_id = networks[network_name]["NetworkID"]
                 logger.info(
-                    f"Discovered network via self-inspection: {network_name} ({self.network_id[:12]})"
+                    "Discovered network via self-inspection: %s (%s)", network_name, self.network_id[:12]
                 )
             except (aiodocker.exceptions.DockerError, KeyError, ValueError) as e:
-                logger.error(f"Failed to discover network topology: {e}")
+                logger.error("Failed to discover network topology: %s", e)
                 sys.exit(1)
 
         if not self.network_id:
@@ -117,7 +117,7 @@ class LogShipper:
             if name == "context-broker-log-shipper":
                 return
 
-            logger.info(f"Starting tail for container: {name} ({container_id[:12]})")
+            logger.info("Starting tail for container: %s (%s)", name, container_id[:12])
 
             # Determine where to start tailing from
             since_ts = await self._get_last_timestamp(name)
@@ -192,19 +192,19 @@ class LogShipper:
                     await self.log_queue.put(payload)
 
                 except (ValueError, KeyError, UnicodeDecodeError) as e:
-                    logger.debug(f"Error parsing log line from {name}: {e}")
+                    logger.debug("Error parsing log line from %s: %s", name, e)
 
         except aiodocker.exceptions.DockerError as e:
             if e.status == 404:
                 logger.info(
-                    f"Container {container_id[:12]} no longer exists. Stopping tail."
+                    "Container %s no longer exists. Stopping tail.", container_id[:12]
                 )
             else:
-                logger.error(f"Docker error tailing {container_id[:12]}: {e}")
+                logger.error("Docker error tailing %s: %s", container_id[:12], e)
         except asyncio.CancelledError:
-            logger.info(f"Tail task cancelled for {container_id[:12]}")
+            logger.info("Tail task cancelled for %s", container_id[:12])
         except (OSError, RuntimeError) as e:
-            logger.error(f"Unexpected error tailing {container_id[:12]}: {e}")
+            logger.error("Unexpected error tailing %s: %s", container_id[:12], e)
         finally:
             if container_id in self.active_tasks:
                 del self.active_tasks[container_id]
@@ -233,10 +233,10 @@ class LogShipper:
                 ]
 
                 await conn.executemany(query, records)
-                logger.debug(f"Inserted batch of {len(batch)} logs")
+                logger.debug("Inserted batch of %d logs", len(batch))
 
         except (asyncpg.PostgresError, OSError, asyncio.TimeoutError) as e:
-            logger.error(f"Failed to write batch to Postgres: {e}")
+            logger.error("Failed to write batch to Postgres: %s", e)
             # If the DB fails, we could potentially requeue, but for logs it's usually
             # better to drop them than to exhaust memory if the DB is permanently down.
             # In a State 4 environment, simplicity > perfect reliability for diagnostic logs.
@@ -267,7 +267,7 @@ class LogShipper:
             except asyncio.CancelledError:
                 break
             except (asyncpg.PostgresError, OSError, asyncio.TimeoutError) as e:
-                logger.error(f"Error in postgres writer loop: {e}")
+                logger.error("Error in postgres writer loop: %s", e)
                 await asyncio.sleep(1)
 
         # Final flush on shutdown
@@ -300,9 +300,9 @@ class LogShipper:
                         self.active_tasks[c_id] = task
                         count += 1
 
-            logger.info(f"Started tailing {count} existing containers")
+            logger.info("Started tailing %d existing containers", count)
         except (aiodocker.exceptions.DockerError, OSError) as e:
-            logger.error(f"Failed to scan existing containers: {e}")
+            logger.error("Failed to scan existing containers: %s", e)
 
     async def event_watcher_loop(self):
         """Watch the Docker event stream for containers joining/leaving our network."""
@@ -333,7 +333,7 @@ class LogShipper:
                         continue
 
                     if action == "connect":
-                        logger.info(f"Container joined network: {container_id[:12]}")
+                        logger.info("Container joined network: %s", container_id[:12])
                         if container_id not in self.active_tasks:
                             task = asyncio.create_task(
                                 self.tail_container(container_id)
@@ -341,7 +341,7 @@ class LogShipper:
                             self.active_tasks[container_id] = task
 
                     elif action == "disconnect":
-                        logger.info(f"Container left network: {container_id[:12]}")
+                        logger.info("Container left network: %s", container_id[:12])
                         if container_id in self.active_tasks:
                             self.active_tasks[container_id].cancel()
                             del self.active_tasks[container_id]
@@ -349,11 +349,11 @@ class LogShipper:
                 except asyncio.CancelledError:
                     break
                 except (aiodocker.exceptions.DockerError, KeyError, ValueError) as e:
-                    logger.error(f"Error processing Docker event: {e}")
+                    logger.error("Error processing Docker event: %s", e)
                     await asyncio.sleep(1)
 
         except (aiodocker.exceptions.DockerError, OSError) as e:
-            logger.error(f"Failed to subscribe to Docker events: {e}")
+            logger.error("Failed to subscribe to Docker events: %s", e)
 
     async def run(self):
         """Main execution flow."""
