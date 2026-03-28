@@ -1,52 +1,52 @@
 [
   {
     "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-28T01:53:22.131766+00:00",
+    "timestamp": "2026-03-28T02:36:47.507169+00:00",
     "severity": "warning",
     "category": "assembly",
-    "description": "Conversation ui-ctx-fca382b3 (afccd556-a54d-4c9e-a322-f5c18fe879ae) has no summaries",
+    "description": "Conversation ui-ctx-b20f244e (c0eef7d3-c1eb-4e4f-bfcc-e27da82808e2) has no summaries",
     "expected": ">0 summaries",
     "actual": "0"
   },
   {
     "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-28T01:53:22.591733+00:00",
+    "timestamp": "2026-03-28T02:36:47.939541+00:00",
     "severity": "warning",
     "category": "assembly",
-    "description": "Conversation ui-hist-9e8753a9 (d741ee41-3d38-470a-bf1a-6fe64ecf110c) has no summaries",
+    "description": "Conversation ui-hist-8cea714d (d3f4df95-38fc-48c5-8419-620a2130e43d) has no summaries",
     "expected": ">0 summaries",
     "actual": "0"
   },
   {
     "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-28T01:53:23.067575+00:00",
+    "timestamp": "2026-03-28T02:36:48.497494+00:00",
     "severity": "warning",
     "category": "assembly",
-    "description": "Conversation ui-test-6b1a2858 (0007aa8e-4d56-4b0d-92a9-7cb9619e9529) has no summaries",
+    "description": "Conversation ui-test-a74050c9 (1ce8c068-5fff-4210-9a29-fe0d2e7f3365) has no summaries",
     "expected": ">0 summaries",
     "actual": "0"
   },
   {
     "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-28T01:53:23.561860+00:00",
+    "timestamp": "2026-03-28T02:36:48.964316+00:00",
     "severity": "warning",
     "category": "assembly",
-    "description": "Conversation roundtrip-test (e1a9d3fc-ef15-42d5-a83d-534483476912) has no summaries",
+    "description": "Conversation roundtrip-test (18c8f9da-c9c7-4a31-9ce4-a17c909226ed) has no summaries",
     "expected": ">0 summaries",
     "actual": "0"
   },
   {
     "test_name": "test_standard_tiered_summaries_in_db",
-    "timestamp": "2026-03-28T01:53:24.097243+00:00",
+    "timestamp": "2026-03-28T02:36:49.426815+00:00",
     "severity": "warning",
     "category": "assembly",
-    "description": "Conversation None (b0f02415-6f39-4c10-b1a7-84631413fe61) has no summaries",
+    "description": "Conversation None (85b0fbe5-0540-4d4a-b7ff-9392325dd3d4) has no summaries",
     "expected": ">0 summaries",
     "actual": "0"
   },
   {
     "test_name": "test_tool_turn_0",
-    "timestamp": "2026-03-28T01:55:45.484831+00:00",
+    "timestamp": "2026-03-28T02:38:43.210494+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 0: expected tool 'get_context' not detected in response",
@@ -55,7 +55,7 @@
   },
   {
     "test_name": "test_tool_turn_1",
-    "timestamp": "2026-03-28T01:55:45.496426+00:00",
+    "timestamp": "2026-03-28T02:38:43.218918+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 1: expected tool 'search_messages' not detected in response",
@@ -64,7 +64,7 @@
   },
   {
     "test_name": "test_tool_turn_2",
-    "timestamp": "2026-03-28T01:55:45.505813+00:00",
+    "timestamp": "2026-03-28T02:38:43.226835+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 2: expected tool 'search_messages' not detected in response",
@@ -73,7 +73,7 @@
   },
   {
     "test_name": "test_tool_turn_3",
-    "timestamp": "2026-03-28T01:55:45.513892+00:00",
+    "timestamp": "2026-03-28T02:38:43.234451+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 3: expected tool 'search_messages' not detected in response",
@@ -82,7 +82,7 @@
   },
   {
     "test_name": "test_tool_turn_4",
-    "timestamp": "2026-03-28T01:55:45.524575+00:00",
+    "timestamp": "2026-03-28T02:38:43.241960+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 4: expected tool 'search_messages' not detected in response",
@@ -91,7 +91,7 @@
   },
   {
     "test_name": "test_tool_turn_6",
-    "timestamp": "2026-03-28T01:55:45.532459+00:00",
+    "timestamp": "2026-03-28T02:38:43.249805+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 6: expected tool 'search_messages' not detected in response",
@@ -100,7 +100,7 @@
   },
   {
     "test_name": "test_tool_turn_7",
-    "timestamp": "2026-03-28T01:55:45.540402+00:00",
+    "timestamp": "2026-03-28T02:38:43.256728+00:00",
     "severity": "info",
     "category": "imperator",
     "description": "Turn 7: expected tool 'search_messages' not detected in response",
@@ -108,26 +108,17 @@
     "actual": "Tools used: none detected"
   },
   {
-    "test_name": "test_tool_file_list",
-    "timestamp": "2026-03-28T01:56:00.800714+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['config.yml', 'te.yml'] found in response",
-    "expected": "config.yml, te.yml",
-    "actual": "Here are the contents of the subdirectories:\n\n**/config/credentials/**\n```\n/config/credentials\n\u2514\u2500\u2500 postgres_password.txt\n```\n\n**/config/prompts/**\n```\n/config/prompts\n\u251c\u2500\u2500 archival_consolidation.md\n\u251c\u2500\u2500 chunk_summarization.md\n\u2514\u2500\u2500 imperator_identity.md\n```"
-  },
-  {
     "test_name": "test_tool_file_write",
-    "timestamp": "2026-03-28T01:56:30.236541+00:00",
+    "timestamp": "2026-03-28T02:39:30.391189+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "None of expected keywords ['written', 'created', 'saved', 'success', 'wrote'] found in response",
     "expected": "written, created, saved, success, wrote",
-    "actual": "I have sent a `system.misconfiguration` alert to the administrator detailing the issue. I apologize that I could not complete your request. Is there anything else I can help you with?"
+    "actual": "I have sent a notification to the system administrator detailing the permission error. They will need to resolve the filesystem permissions before I can write files to the `/data/downloads` directory.\n\nIs there anything else I can assist you with in the meantime?"
   },
   {
     "test_name": "test_tool_update_system_prompt",
-    "timestamp": "2026-03-28T01:56:38.040399+00:00",
+    "timestamp": "2026-03-28T02:39:37.074034+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "update_system_prompt not found in tools/list",
@@ -135,57 +126,93 @@
     "actual": "['get_context', 'store_message', 'search_messages', 'search_knowledge', 'conv_create_conversation', 'conv_delete_conversation', 'conv_rename_conversation', 'conv_list_conversations', 'conv_store_message', 'conv_retrieve_context', 'conv_create_context_window', 'conv_search', 'conv_search_messages', 'conv_get_history', 'conv_search_context_windows', 'query_logs', 'search_logs', 'mem_search', 'mem_get_context', 'mem_add']"
   },
   {
-    "test_name": "test_tool_add_alert_instruction",
-    "timestamp": "2026-03-28T01:59:08.165241+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['added', 'alert', 'instruction', 'created', 'test alerts'] found in response",
-    "expected": "added, alert, instruction, created, test alerts",
-    "actual": "I was unable to complete that request within the allowed number of steps. Please try again, or break the request into smaller parts."
-  },
-  {
-    "test_name": "test_tool_list_alert_instructions",
-    "timestamp": "2026-03-28T01:59:33.131459+00:00",
-    "severity": "warning",
-    "category": "imperator-tool",
-    "description": "None of expected keywords ['alert', 'instruction', 'test', 'no instruction', 'none'] found in response",
-    "expected": "alert, instruction, test, no instruction, none",
-    "actual": "I was unable to complete that request within the allowed number of steps. Please try again, or break the request into smaller parts."
-  },
-  {
     "test_name": "test_diagnostic_context_introspection",
-    "timestamp": "2026-03-28T02:00:39.019755+00:00",
+    "timestamp": "2026-03-28T02:43:23.451616+00:00",
     "severity": "warning",
     "category": "imperator-tool",
     "description": "Expected keyword 'context' not found in response",
     "expected": "context",
-    "actual": "Of course. I can do that, but I'll need the conversation's unique ID (the `conversation_id`).\n\nCould you please provide the ID for the conversation you'd like me to inspect?"
+    "actual": "Of course. To do that, I need to know which conversation you're referring to.\n\nCould you please provide the **conversation ID**?\n\nHere are the 5 most recent conversations to help you find it:\n*   `e1a"
   },
   {
-    "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-28T02:02:25.758852+00:00",
+    "test_name": "test_search_docker_health",
+    "timestamp": "2026-03-28T02:43:54.159043+00:00",
     "severity": "warning",
     "category": "imperator-tool",
-    "description": "Expected keyword 'verbose' not found in response",
-    "expected": "verbose",
-    "actual": "I was unable to complete that request within the allowed number of steps. Please try again, or break the request into smaller parts."
+    "description": "Expected keyword 'healthcheck' not found in response",
+    "expected": "healthcheck",
+    "actual": "I found a few conversations that mention container health. It looks like there are several test conversations with the same name, plus the main system conversation.\n\n- `claude-test-conversation-2` (ap"
   },
   {
-    "test_name": "test_admin_verbose_toggle",
-    "timestamp": "2026-03-28T02:02:25.768231+00:00",
+    "test_name": "test_search_docker_health",
+    "timestamp": "2026-03-28T02:43:54.167931+00:00",
     "severity": "warning",
     "category": "imperator-tool",
-    "description": "Expected keyword 'toggle' not found in response",
-    "expected": "toggle",
-    "actual": "I was unable to complete that request within the allowed number of steps. Please try again, or break the request into smaller parts."
+    "description": "Expected keyword 'Docker' not found in response",
+    "expected": "Docker",
+    "actual": "I found a few conversations that mention container health. It looks like there are several test conversations with the same name, plus the main system conversation.\n\n- `claude-test-conversation-2` (ap"
+  },
+  {
+    "test_name": "test_send_notification_reaches_alerter",
+    "timestamp": "2026-03-28T02:49:01.420821+00:00",
+    "severity": "warning",
+    "category": "alerter",
+    "description": "Notification tag '77c451e4' not found in alerter or app logs",
+    "expected": "Notification visible in logs",
+    "actual": "alerter logs (last 100 lines): ...not found"
+  },
+  {
+    "test_name": "test_tiered_summary_quality",
+    "timestamp": "2026-03-28T02:49:22.090965+00:00",
+    "severity": "error",
+    "category": "quality-tiered",
+    "description": "LLM judge rating: POOR",
+    "expected": "GOOD or ACCEPTABLE",
+    "actual": "Rating: POOR. Judge response excerpt: The assembled context is essentially a verbatim copy of the original messages with formatting stripped (role labels removed). Let me evaluate against each criterion:\n\n1. **Key topics and themes**: The \"summary\" preserves all content, but these are test-fixture messages with no meaningful semantic content (UUIDs, synthetic concurrent message patterns). Nothing is lost, but nothing is summarized eit"
+  },
+  {
+    "test_name": "test_enriched_quality",
+    "timestamp": "2026-03-28T02:49:46.106113+00:00",
+    "severity": "error",
+    "category": "quality-enriched",
+    "description": "LLM judge rating: POOR",
+    "expected": "GOOD or ACCEPTABLE",
+    "actual": "Rating: POOR. Judge response excerpt: **Evaluation:**\n\n**Criterion 1 \u00e2\u20ac\u201d Semantic enrichment present?**\nYes. The `[Knowledge graph]` section contains meaningful structured facts: ecosystem scale, user identity, research interests, technical architecture details, and project timeline entries.\n\n**Criterion 2 \u00e2\u20ac\u201d Enrichment adds value beyond raw history?**\nThe knowledge graph portion does add real value \u00e2\u20ac\u201d an AI assistant gains useful b"
+  },
+  {
+    "test_name": "test_search_relevance",
+    "timestamp": "2026-03-28T02:49:55.415521+00:00",
+    "severity": "error",
+    "category": "quality-search",
+    "description": "LLM judge rating: POOR",
+    "expected": "GOOD or ACCEPTABLE",
+    "actual": "Rating: POOR. Judge response excerpt: **Reasoning:**\n\nThe search results are largely noise. Most results (2, 4, 6, 8, 10) are repeated snippets of YOLO mode startup messages or ADR file previews with only tangential mentions of \"MAD\" (result 10 references \"Node.js MADs\" in an ADR, which is topically adjacent but not substantive). Results 3, 5, 7, 9 are literal echoes of the query itself \u00e2\u20ac\u201d the user's original question stored as a mem"
+  },
+  {
+    "test_name": "test_knowledge_extraction_quality",
+    "timestamp": "2026-03-28T02:49:57.510278+00:00",
+    "severity": "warning",
+    "category": "quality-extraction",
+    "description": "No extracted memories found for quality evaluation",
+    "expected": "",
+    "actual": ""
+  },
+  {
+    "test_name": "test_imperator_coherence",
+    "timestamp": "2026-03-28T02:50:26.483206+00:00",
+    "severity": "info",
+    "category": "quality-imperator",
+    "description": "LLM judge rating: GOOD",
+    "expected": "GOOD or ACCEPTABLE",
+    "actual": "Rating: GOOD. Judge response excerpt: **Evaluation of Imperator's Response**\n\n**Criterion 1 \u00e2\u20ac\u201d All three parts addressed?**\nYes. Part 1 delivers a conversation list with concrete data (UUIDs, message counts). Part 2 reports a specific named error (`MultipleSubgraphsError`). Part 3 correctly ties back to the same error and explains why it cannot be completed. No part is silently skipped.\n\n**Criterion 2 \u00e2\u20ac\u201d Coherent and well-structured"
   },
   {
     "test_name": "performance_report",
-    "timestamp": "2026-03-28T02:03:08.413103+00:00",
+    "timestamp": "2026-03-28T02:50:28.520787+00:00",
     "severity": "warning",
     "category": "performance",
-    "description": "imperator_chat averages 6.0s per call",
+    "description": "imperator_chat averages 7.1s per call",
     "expected": "<5s",
-    "actual": "6.0s"
+    "actual": "7.1s"
   }
 ]
