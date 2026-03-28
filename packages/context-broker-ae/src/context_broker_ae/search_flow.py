@@ -329,6 +329,13 @@ async def hybrid_search_messages(state: MessageSearchState) -> dict:
     except ValueError as exc:
         return {"candidates": [], "error": f"Invalid date format: {exc}"}
 
+    # TA-06: Default to excluding assistant/tool messages from search results.
+    # Assistant messages echo user queries and pollute results with near-identical
+    # RRF scores. Tool messages are error outputs. Only include them if the caller
+    # explicitly requests a specific role.
+    if not filter_role:
+        filter_role = "user"
+
     # M-20: Build dynamic WHERE clause fragments with parameterized args.
     # CB-R3-07: Build filter list and args together, compute indices at the end.
     # This eliminates manual index tracking throughout the function.

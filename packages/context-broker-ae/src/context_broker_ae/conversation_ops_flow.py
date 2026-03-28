@@ -485,16 +485,17 @@ async def find_or_create_window_node(state: GetContextState) -> dict:
     except ValueError as exc:
         return {"error": str(exc)}
 
-    # Look for existing window with matching (conversation, build_type, budget)
+    # Look for existing window matching the unique index (conversation, participant, build_type).
+    # The unique constraint idx_windows_conv_participant_build is on these three columns,
+    # so this SELECT must match them — not budget, which can vary.
     row = await pool.fetchrow(
         """
         SELECT id FROM context_windows
-        WHERE conversation_id = $1 AND build_type = $2 AND max_token_budget = $3
+        WHERE conversation_id = $1 AND participant_id = 'auto' AND build_type = $2
         LIMIT 1
         """,
         conv_id,
         build_type,
-        snapped_budget,
     )
 
     if row:
@@ -515,27 +516,46 @@ async def find_or_create_window_node(state: GetContextState) -> dict:
             "system",
         )
 
-    # Create new window
+    # Create new window — ON CONFLICT handles the race where two requests
+    # pass the SELECT above concurrently. If the INSERT conflicts, fetch
+    # the existing row instead.
     window_id = uuid.uuid4()
-    await pool.execute(
+    row = await pool.fetchrow(
         """
         INSERT INTO context_windows
             (id, conversation_id, participant_id, build_type, max_token_budget)
         VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (conversation_id, participant_id, build_type) DO NOTHING
+        RETURNING id
         """,
         window_id,
         conv_id,
-        "auto",  # participant_id kept for schema compat, "auto" for core tool
+        "auto",
         build_type,
         snapped_budget,
     )
-    _log.info(
-        "get_context: created window %s (type=%s, budget=%d)",
-        window_id,
+
+    if row:
+        _log.info(
+            "get_context: created window %s (type=%s, budget=%d)",
+            row["id"],
+            build_type,
+            snapped_budget,
+        )
+        return {"context_window_id": str(row["id"])}
+
+    # INSERT was a no-op (concurrent create won the race) — fetch the winner
+    row = await pool.fetchrow(
+        """
+        SELECT id FROM context_windows
+        WHERE conversation_id = $1 AND participant_id = 'auto' AND build_type = $2
+        LIMIT 1
+        """,
+        conv_id,
         build_type,
-        snapped_budget,
     )
-    return {"context_window_id": str(window_id)}
+    _log.info("get_context: reusing window %s (concurrent create)", row["id"])
+    return {"context_window_id": str(row["id"])}
 
 
 async def retrieve_context_node(state: GetContextState) -> dict:

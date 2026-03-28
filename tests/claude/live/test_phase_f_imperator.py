@@ -273,8 +273,8 @@ class TestImperatorCoherence:
     ):
         """First turn should get a non-empty, substantive response."""
         resp = turn_responses.get(0)
-        if resp is None or resp["error"]:
-            pytest.skip("Turn 0 did not complete successfully")
+        assert resp is not None, "Turn 0 response missing from turn_responses"
+        assert not resp["error"], f"Turn 0 failed: {resp['content'][:300]}"
         assert len(resp["content"]) > 20, (
             f"First turn response too short ({len(resp['content'])} chars): "
             f"{resp['content'][:100]}"
@@ -286,8 +286,8 @@ class TestImperatorCoherence:
         """Later turns should reference context from earlier in the conversation.
         Turn 8 asks to recall MAD architecture discussed in turn 1."""
         resp_8 = turn_responses.get(8)
-        if resp_8 is None or resp_8["error"]:
-            pytest.skip("Turn 8 did not complete successfully")
+        assert resp_8 is not None, "Turn 8 response missing from turn_responses"
+        assert not resp_8["error"], f"Turn 8 failed: {resp_8['content'][:300]}"
         content_lower = resp_8["content"].lower()
         # Turn 8 asks about MAD architecture discussed in turn 1
         has_reference = "mad" in content_lower or "architecture" in content_lower

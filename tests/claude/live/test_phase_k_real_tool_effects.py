@@ -61,7 +61,7 @@ def _chat(http_client, message: str, timeout: int = 120) -> str:
 class TestFileWriteCreatesFile:
     """K-01: file_write via Imperator creates a file on disk."""
 
-    @pytest.mark.xfail(reason="Imperator LLM tool selection is non-deterministic")
+    @pytest.mark.live
     def test_file_write_creates_file(self, http_client):
         """Write a file via Imperator, then verify it exists via docker_exec."""
         tag = uuid.uuid4().hex[:8]
@@ -77,7 +77,8 @@ class TestFileWriteCreatesFile:
         if not any(
             kw in response.lower()
             for kw in ["written", "created", "saved", "success", "wrote"]
-        ): log_issue("test_file_write", "warning", "imperator", f"Imperator did not invoke file_write: {response[:300]}"
+        ):
+            log_issue("test_file_write", "warning", "imperator", f"Imperator did not invoke file_write: {response[:300]}")
 
         # Verify file exists on disk via docker_exec
         ls_output = docker_exec("context-broker-app", f"ls -la {filepath}")
@@ -231,7 +232,7 @@ class TestDisableSchedulePersists:
 class TestAddAlertInstructionPersists:
     """K-06: add_alert_instruction creates a row in alert_instructions table."""
 
-    @pytest.mark.xfail(reason="Imperator LLM tool selection is non-deterministic")
+    @pytest.mark.live
     def test_add_alert_instruction_persists(self, http_client):
         """Add an alert instruction via Imperator, verify count increases in DB."""
         tag = uuid.uuid4().hex[:8]
@@ -268,7 +269,7 @@ class TestAddAlertInstructionPersists:
 class TestStoreDomainInfoPersists:
     """K-07: store_domain_info creates a row in domain_information table."""
 
-    @pytest.mark.xfail(reason="Imperator LLM tool selection is non-deterministic")
+    @pytest.mark.live
     def test_store_domain_info_persists(self, http_client):
         """Store domain info via Imperator, verify count increases in domain_information table."""
         tag = uuid.uuid4().hex[:8]
@@ -300,7 +301,7 @@ class TestStoreDomainInfoPersists:
 class TestConfigWriteTakesEffect:
     """K-08: config_write changes a setting that config_read can verify."""
 
-    @pytest.mark.xfail(reason="Imperator LLM tool selection is non-deterministic")
+    @pytest.mark.live
     def test_config_write_takes_effect(self, http_client):
         """Set verbose_logging to true, verify via config_read, then restore."""
         # Enable verbose logging

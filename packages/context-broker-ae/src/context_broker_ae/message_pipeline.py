@@ -10,6 +10,7 @@ via ARQ background workers after this flow completes.
 
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Optional
@@ -31,6 +32,34 @@ _ROLE_PRIORITY = {
     "system": 3,
     "tool": 4,
 }
+
+# TA-07: Patterns that indicate a tool error response stored as user/assistant.
+# These messages poison conversation context when loaded back — reclassifying
+# them as role='tool' ensures get_context (which loads user/assistant only)
+# naturally filters them out.
+# Patterns match the ACTUAL error strings returned by CB-TE tools (see tools/*.py).
+_TOOL_ERROR_PATTERN = re.compile(
+    r"^Error (?:writing|reading|listing|updating|executing) "
+    r"|^File not found: "
+    r"|^Directory not found: "
+    r"|^Access denied: "
+    r"|^Search error: "
+    r"|^Query error: "
+    r"|^Invalid regex: "
+    r"|^Cannot reach "
+    r"|^System prompt not found: "
+    r"|Traceback \(most recent call last\)"
+    r"|\[Errno \d+\]",
+)
+
+
+def _detect_tool_error_role(content: str | None, role: str) -> str:
+    """Return 'tool' if content matches tool error patterns and role is
+    user or assistant; otherwise return the original role unchanged."""
+    if content and role in ("user", "assistant") and _TOOL_ERROR_PATTERN.search(content):
+        _log.info("TA-07: Reclassified role %s → tool (error content detected)", role)
+        return "tool"
+    return role
 
 
 class MessagePipelineState(TypedDict):
@@ -108,19 +137,22 @@ async def store_message(state: MessagePipelineState) -> dict:
     content = state.get("content")
     effective_token_count = max(1, len(content) // 4) if content else 0
 
+    # TA-07: Reclassify tool error messages stored as user/assistant
+    role = _detect_tool_error_role(content, state["role"])
+
     # ARCH-14: Derive priority from role
-    priority = _ROLE_PRIORITY.get(state["role"], 2)
+    priority = _ROLE_PRIORITY.get(role, 2)
 
     # ARCH-12: Default recipient from role if not provided
     recipient = state.get("recipient")
     if not recipient:
-        if state["role"] == "assistant":
+        if role == "assistant":
             recipient = "user"
-        elif state["role"] == "user":
+        elif role == "user":
             recipient = "assistant"
-        elif state["role"] == "system":
+        elif role == "system":
             recipient = "all"
-        elif state["role"] == "tool":
+        elif role == "tool":
             recipient = "assistant"
         else:
             recipient = "all"
@@ -195,7 +227,7 @@ async def store_message(state: MessagePipelineState) -> dict:
                         RETURNING id, sequence_number
                         """,
                         conv_uuid,
-                        state["role"],
+                        role,
                         state["sender"],
                         recipient,
                         content,

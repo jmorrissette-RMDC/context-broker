@@ -240,7 +240,7 @@ class TestEnrichedQuality:
                 f"Enriched context too short ({len(context_text)} chars), "
                 "may have fallen back to simpler build type",
             )
-            pytest.skip("Enriched context too short -- may lack knowledge graph data")
+            pytest.fail("Enriched context too short — knowledge graph data missing or enriched build type fell back to simpler type")
 
         context_excerpt = context_text[:3000]
 
@@ -291,7 +291,7 @@ class TestSearchRelevance:
                 "quality-search",
                 f"search_messages returned 0 results for '{query}'",
             )
-            pytest.skip(f"No search results for '{query}'")
+            pytest.fail(f"search_messages returned 0 results for '{query}' against 10K+ messages — search is broken")
 
         # Format results for the judge
         formatted_results = []
@@ -356,7 +356,7 @@ class TestKnowledgeExtractionQuality:
                 "quality-extraction",
                 "No extracted memories found for quality evaluation",
             )
-            pytest.skip("No extracted memories available for evaluation")
+            pytest.fail("No extracted memories found — Mem0 extraction pipeline is not producing searchable memories")
 
         # Format memories for the judge
         formatted_memories = []

@@ -85,9 +85,9 @@ class TestExtraction:
                 ">0 rows",
                 "0",
             )
-            pytest.skip(
-                "Mem0 not functional — mem0_memories table is empty "
-                "(stub table schema may not match Mem0 expectations)"
+            pytest.fail(
+                "Mem0 not functional — mem0_memories table is empty. "
+                "Extraction worker may not have run or Mem0 table schema mismatch."
             )
 
 
