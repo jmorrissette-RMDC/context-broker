@@ -632,39 +632,29 @@ class TestMemDelete:
         """C-19: Add a memory, delete it, verify it's gone from mem_list."""
         user_id = f"live-test-del-{uuid.uuid4().hex[:8]}"
 
-        # Add a memory
+        # Add a memory with extractable facts
         add_resp = mcp_call(
             http_client,
             "mem_add",
-            {"content": "Temporary memory to be deleted.", "user_id": user_id},
+            {
+                "content": f"User {user_id} drives a Tesla and lives in Boston.",
+                "user_id": user_id,
+            },
         )
         assert add_resp.status_code == 200
         add_result = extract_mcp_result(add_resp)
 
-        # Get memory ID — may be in the add result or we need to list to find it
-        memory_id = add_result.get("memory_id") or add_result.get("id")
-        if not memory_id:
-            # Fall back: wait for indexing, then list memories and take the first one
-            for attempt in range(4):
-                time.sleep(2)
-                list_resp = mcp_call(
-                    http_client, "mem_list", {"user_id": user_id}
-                )
-                list_result = extract_mcp_result(list_resp)
-                memories = list_result.get("memories", [])
-                if len(memories) > 0:
-                    memory_id = memories[0].get("id") or memories[0].get("memory_id")
-                    break
+        # Get memory ID from Mem0 1.0 result: result.results[0].id
+        memory_id = None
+        mem_result = add_result.get("result")
+        if isinstance(mem_result, dict):
+            results_list = mem_result.get("results", [])
+            if results_list:
+                memory_id = results_list[0].get("id")
 
-        if memory_id is None:
-            log_issue(
-                "test_mem_delete_removes_memory",
-                "warning",
-                "mem0",
-                f"Could not determine memory_id from add result: {add_result}; "
-                "Mem0 may not be fully functional (table schema mismatch)",
-            )
-            assert False, "Could not obtain memory_id — Mem0 not functional"
+        assert memory_id is not None, (
+            f"mem_add did not return a memory ID. Result: {add_result}"
+        )
 
         # Delete
         del_resp = mcp_call(
