@@ -300,14 +300,26 @@ async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
             )
             return {"error": "Mem0 client not available"}
 
+        # Load custom extraction prompt if available (externalized per REQ-001 §8.2)
+        from app.prompt_loader import load_prompt
+
+        extraction_prompt = None
+        try:
+            extraction_prompt = load_prompt("memory_extraction")
+        except RuntimeError:
+            _log.debug("No custom extraction prompt found — using Mem0 defaults")
+
         loop = asyncio.get_running_loop()
+        add_kwargs = {
+            "user_id": state["user_id"],
+            "run_id": state["conversation_id"],
+        }
+        if extraction_prompt:
+            add_kwargs["prompt"] = extraction_prompt
+
         result = await loop.run_in_executor(
             None,
-            lambda: mem0.add(
-                state["extraction_text"],
-                user_id=state["user_id"],
-                run_id=state["conversation_id"],
-            ),
+            lambda: mem0.add(state["extraction_text"], **add_kwargs),
         )
 
         # TA-04: Validate that mem0.add() actually ran.

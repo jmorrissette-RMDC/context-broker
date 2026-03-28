@@ -9,10 +9,10 @@ summarization:
   model: gemini-2.5-flash-lite
   api_key_env: GOOGLE_API_KEY
 
-# Extraction: NOMINAL — GPT-4.1-mini (verified JSON mode)
+# Extraction: GPT-4.1 (full model for quality fact extraction)
 extraction:
   base_url: https://api.openai.com/v1
-  model: gpt-4.1-mini
+  model: gpt-4.1
   api_key_env: OPENAI_API_KEY
 
 # Embeddings: NOMINAL — Google gemini-embedding-2-preview (MRL → 1024 dims)
