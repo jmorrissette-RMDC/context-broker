@@ -532,7 +532,7 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 
 | TA-05 | Test | Opus | major | Sonnet judge rated tiered-summary and enriched context assembly as POOR. The assembled context contains summaries but they may not preserve key themes from the original conversations. Enriched context shows semantic search scores near-identical (no meaningful differentiation). Needs investigation into summarization prompt quality and semantic search relevance ranking. | `packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py`, `knowledge_enriched.py` | OPEN | Quality evaluation via Claude Sonnet CLI (LLM-as-judge). The system assembles context but the quality of compression and retrieval needs improvement. |
 | TA-06 | Test | Opus | major | Sonnet judge rated search_messages relevance as POOR. Search results for "MAD container architecture" returned mostly irrelevant content — prior assistant responses echoing the query, nearly identical similarity scores (0.016 range), and no meaningful semantic differentiation. The hybrid search (vector + BM25 + reranker) is not producing useful rankings. | `packages/context-broker-ae/src/context_broker_ae/search_flow.py` | OPEN | The HNSW index and GPU reranker are fast (~300ms) but the search quality is poor. Possible causes: embedding model not capturing semantic meaning well, BM25 tsvector not discriminating, reranker cross-encoder not effective on this content type. |
-| TA-07 | Test | Opus | minor | 4 Imperator tool tests (file_write, add_alert_instruction, store_domain_info, config_write) fail non-deterministically because the LLM doesn't always invoke the requested tool. Marked as xfail. These tools are only accessible through the Imperator's ReAct loop — no direct MCP endpoint. | `packages/context-broker-te/src/context_broker_te/imperator_flow.py` | OPEN | Options: (1) Expose these tools as MCP endpoints for direct testing. (2) Accept LLM non-determinism and use xfail. (3) Improve tool descriptions so the LLM picks the right one more reliably. |
+| TA-07 | Test | Opus | major | 4 Imperator tool tests (file_write, add_alert_instruction, store_domain_info, config_write) fail because the Imperator does not reliably invoke the correct tool. The LLM responds conversationally instead of calling the tool. This is a core functionality failure — the Imperator's primary purpose is to use its tools on behalf of the user. If it can't reliably call file_write when asked to write a file, the tool is useless. | `packages/context-broker-te/src/context_broker_te/imperator_flow.py`, `tools/*.py` | OPEN | Root causes to investigate: (1) Tool descriptions may be ambiguous — the LLM can't distinguish between similar tools. (2) System prompt may not instruct the LLM to prefer tool use over conversational responses. (3) The prompts used in tests may not be explicit enough. (4) Temperature too high (0.3) — should be lower for tool selection reliability. (5) These tools should also be exposed as direct MCP endpoints so they can be invoked deterministically without relying on LLM reasoning. |
 
 ---
 
@@ -542,7 +542,7 @@ Updated 2026-03-28. 501 tests (315 mock + 186 live). Live: 178 passed, 4 xfail, 
 
 | Status | Count |
 |--------|-------|
-| OPEN | 5 |
+| OPEN | 5 (3 major, 2 minor) |
 | FIXED | 261 |
 | WONTFIX | 36 |
 | FALSE_POSITIVE | 2 |
