@@ -73,7 +73,7 @@ async def web_read(url: str, max_chars: int = 10000) -> str:
                         text = result.markdown or result.text or ""
                         if text:
                             return text[:max_chars]
-                except (ImportError, OSError, RuntimeError, Exception):
+                except (ImportError, OSError, RuntimeError):
                     # crawl4ai may fail if playwright browsers not installed.
                     # Fall through to basic HTML stripping.
                     pass

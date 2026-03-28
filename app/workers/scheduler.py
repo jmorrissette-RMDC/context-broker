@@ -190,6 +190,6 @@ async def scheduler_worker(config: dict) -> None:
         except asyncio.CancelledError:
             _log.info("Scheduler worker cancelled")
             raise
-        except Exception as exc:
+        except (asyncpg.PostgresError, ValueError, RuntimeError, OSError, KeyError) as exc:
             _log.error("Scheduler worker error: %s: %s", type(exc).__name__, exc)
             await asyncio.sleep(30)

@@ -42,10 +42,7 @@ _config: dict = {}
 _pool: Optional[asyncpg.Pool] = None
 
 CONFIG_PATH = os.environ.get("ALERTER_CONFIG", "/config/alerter.yml")
-POSTGRES_DSN = os.environ.get(
-    "POSTGRES_DSN",
-    "postgresql://context_broker:context_broker@context-broker-postgres:5432/context_broker",
-)
+POSTGRES_DSN = os.environ["POSTGRES_DSN"]  # Required — set in docker-compose.yml
 CHANNEL_TIMEOUT = 10
 LLM_TIMEOUT = 30
 

@@ -2,15 +2,18 @@
 Imperator — LangGraph ReAct-style conversational agent flow.
 
 The Imperator is the Context Broker's built-in conversational agent.
-It uses a proper LangGraph ReAct graph (agent_node -> tool_node loop)
-with no checkpointer — conversation history is loaded from PostgreSQL
-on each invocation and results are stored via the standard message
-pipeline (conv_store_message).
+It uses a proper LangGraph ReAct graph (agent_node -> tool_node loop).
+Conversation history is loaded from PostgreSQL on each invocation and
+results are stored via the standard message pipeline (conv_store_message).
 
 Uses LangChain's ChatOpenAI.bind_tools() for tool binding.
 
 ARCH-05: ReAct loop is graph edges, not a while loop inside a node.
-ARCH-06: No MemorySaver — DB is the persistence layer.
+ARCH-06: In-memory MemorySaver is used as the LangGraph checkpointer for
+         the ReAct loop's multi-step tool calling cycle. It is NOT used
+         for cross-invocation persistence — each invocation gets a unique
+         thread_id, so the MemorySaver is effectively ephemeral. The DB
+         remains the persistence layer for conversation history.
 F-22:    Messages stored through conv_store_message pipeline.
 """
 

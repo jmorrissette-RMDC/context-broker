@@ -184,8 +184,8 @@ async def seed_domain_knowledge() -> int:
                 "Domain information already has %d entries — skipping seed", count
             )
             return 0
-    except Exception:
-        _log.info("domain_information table not ready — skipping seed")
+    except (asyncpg.PostgresError, OSError) as exc:
+        _log.info("domain_information table not ready — skipping seed: %s", exc)
         return 0
 
     # Seed the articles (without embeddings — the store_domain_info tool
@@ -213,7 +213,7 @@ async def seed_domain_knowledge() -> int:
                 vec_str,
             )
             seeded += 1
-        except Exception as exc:
+        except (asyncpg.PostgresError, ValueError, RuntimeError, OSError) as exc:
             _log.warning("Failed to seed article: %s", exc)
             # Try without embedding as fallback
             try:
@@ -223,7 +223,7 @@ async def seed_domain_knowledge() -> int:
                     article["source"],
                 )
                 seeded += 1
-            except Exception as exc2:
+            except (asyncpg.PostgresError, OSError) as exc2:
                 _log.error("Failed to seed article even without embedding: %s", exc2)
 
     _log.info("Seeded %d domain knowledge articles", seeded)

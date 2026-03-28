@@ -18,10 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger("log_shipper")
 
 # Configuration
-POSTGRES_DSN = os.environ.get(
-    "POSTGRES_DSN",
-    "postgresql://context_broker:context_broker@context-broker-postgres:5432/context_broker",
-)
+POSTGRES_DSN = os.environ["POSTGRES_DSN"]  # Required — set in docker-compose.yml
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "100"))
 FLUSH_INTERVAL_SEC = float(os.environ.get("FLUSH_INTERVAL_SEC", "1.0"))
 
@@ -45,7 +42,7 @@ class LogShipper:
                 POSTGRES_DSN, min_size=1, max_size=5
             )
             logger.info("Connected to PostgreSQL")
-        except Exception as e:
+        except (asyncpg.PostgresError, OSError, asyncio.TimeoutError) as e:
             logger.error(f"Failed to connect to PostgreSQL: {e}")
             sys.exit(1)
 
@@ -80,7 +77,7 @@ class LogShipper:
                 logger.info(
                     f"Discovered network via self-inspection: {network_name} ({self.network_id[:12]})"
                 )
-            except Exception as e:
+            except (aiodocker.exceptions.DockerError, KeyError, ValueError) as e:
                 logger.error(f"Failed to discover network topology: {e}")
                 sys.exit(1)
 
@@ -194,7 +191,7 @@ class LogShipper:
 
                     await self.log_queue.put(payload)
 
-                except Exception as e:
+                except (ValueError, KeyError, UnicodeDecodeError) as e:
                     logger.debug(f"Error parsing log line from {name}: {e}")
 
         except aiodocker.exceptions.DockerError as e:
@@ -206,7 +203,7 @@ class LogShipper:
                 logger.error(f"Docker error tailing {container_id[:12]}: {e}")
         except asyncio.CancelledError:
             logger.info(f"Tail task cancelled for {container_id[:12]}")
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.error(f"Unexpected error tailing {container_id[:12]}: {e}")
         finally:
             if container_id in self.active_tasks:
@@ -238,7 +235,7 @@ class LogShipper:
                 await conn.executemany(query, records)
                 logger.debug(f"Inserted batch of {len(batch)} logs")
 
-        except Exception as e:
+        except (asyncpg.PostgresError, OSError, asyncio.TimeoutError) as e:
             logger.error(f"Failed to write batch to Postgres: {e}")
             # If the DB fails, we could potentially requeue, but for logs it's usually
             # better to drop them than to exhaust memory if the DB is permanently down.
@@ -269,7 +266,7 @@ class LogShipper:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except (asyncpg.PostgresError, OSError, asyncio.TimeoutError) as e:
                 logger.error(f"Error in postgres writer loop: {e}")
                 await asyncio.sleep(1)
 
@@ -304,7 +301,7 @@ class LogShipper:
                         count += 1
 
             logger.info(f"Started tailing {count} existing containers")
-        except Exception as e:
+        except (aiodocker.exceptions.DockerError, OSError) as e:
             logger.error(f"Failed to scan existing containers: {e}")
 
     async def event_watcher_loop(self):
@@ -351,11 +348,11 @@ class LogShipper:
 
                 except asyncio.CancelledError:
                     break
-                except Exception as e:
+                except (aiodocker.exceptions.DockerError, KeyError, ValueError) as e:
                     logger.error(f"Error processing Docker event: {e}")
                     await asyncio.sleep(1)
 
-        except Exception as e:
+        except (aiodocker.exceptions.DockerError, OSError) as e:
             logger.error(f"Failed to subscribe to Docker events: {e}")
 
     async def run(self):

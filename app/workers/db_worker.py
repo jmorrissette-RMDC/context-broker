@@ -212,7 +212,7 @@ async def _embedding_worker(config: dict) -> None:
         except asyncio.CancelledError:
             _log.info("Embedding worker cancelled")
             raise
-        except Exception as exc:
+        except (asyncpg.PostgresError, ValueError, RuntimeError, OSError, KeyError) as exc:
             _log.error("Embedding worker error: %s: %s", type(exc).__name__, exc)
             consecutive_failures += 1
             if consecutive_failures >= 3:
@@ -361,7 +361,7 @@ async def _extraction_worker(config: dict) -> None:
         except asyncio.CancelledError:
             _log.info("Extraction worker cancelled")
             raise
-        except Exception as exc:
+        except (asyncpg.PostgresError, ValueError, RuntimeError, OSError, KeyError) as exc:
             _log.error("Extraction worker error: %s: %s", type(exc).__name__, exc)
             consecutive_failures += 1
             if consecutive_failures >= 3:
@@ -494,7 +494,7 @@ async def _assembly_worker(config: dict) -> None:
         except asyncio.CancelledError:
             _log.info("Assembly worker cancelled")
             raise
-        except Exception as exc:
+        except (asyncpg.PostgresError, ValueError, RuntimeError, OSError, KeyError) as exc:
             _log.error("Assembly worker error: %s: %s", type(exc).__name__, exc)
             await asyncio.sleep(5)
 
@@ -626,7 +626,7 @@ async def _log_embedding_worker(config: dict) -> None:
         except asyncio.CancelledError:
             _log.info("Log embedding worker cancelled")
             raise
-        except Exception as exc:
+        except (asyncpg.PostgresError, ValueError, RuntimeError, OSError, KeyError) as exc:
             _log.error("Log embedding worker error: %s: %s", type(exc).__name__, exc)
             await asyncio.sleep(poll_interval)
 

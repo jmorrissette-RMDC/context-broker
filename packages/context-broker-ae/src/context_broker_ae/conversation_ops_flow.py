@@ -598,7 +598,7 @@ async def retrieve_context_node(state: GetContextState) -> dict:
                         user_prompt,
                         max(1, len(user_prompt) // 4),
                     )
-        except Exception as exc:
+        except (asyncpg.PostgresError, ValueError, RuntimeError, OSError) as exc:
             _log.warning("V2: Failed to store user message in get_context: %s", exc)
 
     from app.flows.build_type_registry import get_retrieval_graph

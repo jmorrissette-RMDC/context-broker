@@ -649,7 +649,7 @@ async def ke_distill_context(state: KnowledgeEnrichedRetrievalState) -> dict:
                 "total_tokens_used": max(1, len(distilled) // 4),
             }
 
-    except (RuntimeError, OSError, ValueError, Exception) as exc:
+    except (RuntimeError, OSError, ValueError) as exc:
         _log.warning(
             "Context distillation failed (returning raw context): %s", exc
         )

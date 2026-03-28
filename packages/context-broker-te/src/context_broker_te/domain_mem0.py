@@ -21,14 +21,6 @@ _domain_mem0_lock = asyncio.Lock()
 
 def _build_domain_mem0(config: dict) -> object:
     """Build a Mem0 Memory instance for domain knowledge."""
-    # Apply patches (same as AE client — dedup protection)
-    try:
-        from context_broker_ae.memory.mem0_client import _apply_mem0_patches
-
-        _apply_mem0_patches()
-    except ImportError:
-        pass
-
     from mem0 import Memory
     from mem0.configs.base import (
         EmbedderConfig,

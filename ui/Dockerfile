@@ -10,6 +10,9 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 ENV CONFIG_PATH=/app/config.yml
 
+RUN adduser --disabled-password --no-create-home appuser
+USER appuser
+
 EXPOSE 7860
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

@@ -8,6 +8,8 @@ instructions at runtime.
 import json
 import logging
 
+import asyncpg
+
 from langchain_core.tools import tool
 
 from app.database import get_pg_pool
@@ -69,7 +71,7 @@ async def add_alert_instruction(
             f"Description: {description}. "
             f"Channels: {[c.get('type') for c in parsed_channels]}."
         )
-    except Exception as exc:
+    except (asyncpg.PostgresError, json.JSONDecodeError, KeyError, ValueError, OSError) as exc:
         return f"Failed to add instruction: {exc}"
 
 
@@ -103,7 +105,7 @@ async def list_alert_instructions() -> str:
                 f"       Created: {row['created_at'].isoformat()}"
             )
         return "\n".join(lines)
-    except Exception as exc:
+    except (asyncpg.PostgresError, OSError) as exc:
         return f"Failed to list instructions: {exc}"
 
 
@@ -177,7 +179,7 @@ async def update_alert_instruction(
             *params,
         )
         return f"Instruction {instruction_id} updated."
-    except Exception as exc:
+    except (asyncpg.PostgresError, json.JSONDecodeError, KeyError, ValueError) as exc:
         return f"Failed to update instruction: {exc}"
 
 
@@ -196,7 +198,7 @@ async def delete_alert_instruction(instruction_id: int) -> str:
         if result == "DELETE 1":
             return f"Instruction {instruction_id} deleted."
         return f"No instruction with id={instruction_id}."
-    except Exception as exc:
+    except (asyncpg.PostgresError, OSError) as exc:
         return f"Failed to delete instruction: {exc}"
 
 
