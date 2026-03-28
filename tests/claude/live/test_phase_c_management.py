@@ -466,7 +466,7 @@ class TestMemAdd:
         import re
 
         user_id = f"live-test-embed-{uuid.uuid4().hex[:8]}"
-        content = "Claude test suite verification: Mem0 embedding persistence check."
+        content = f"User {user_id} works at Acme Corp and prefers dark mode interfaces."
 
         # Add the memory
         resp = mcp_call(
@@ -498,18 +498,18 @@ class TestMemAdd:
                 "table exists with embedded row",
                 "table missing",
             )
-            pytest.skip("mem0_memories table does not exist (TA-02)")
+            assert False, "mem0_memories table does not exist — Mem0 failed to initialize"
 
         # Check for rows with this user_id that have embeddings
         row_count_raw = docker_psql(
-            f"SELECT COUNT(*) FROM mem0_memories WHERE user_id = '{user_id}'"
+            f"SELECT COUNT(*) FROM mem0_memories WHERE payload->>'user_id' = '{user_id}'"
         ).strip()
         row_match = re.search(r"(\d+)", row_count_raw)
         row_count = int(row_match.group(1)) if row_match else 0
 
         embedded_raw = docker_psql(
             f"SELECT COUNT(*) FROM mem0_memories "
-            f"WHERE user_id = '{user_id}' AND embedding IS NOT NULL"
+            f"WHERE payload->>'user_id' = '{user_id}' AND vector IS NOT NULL"
         ).strip()
         emb_match = re.search(r"(\d+)", embedded_raw)
         embedded_count = int(emb_match.group(1)) if emb_match else 0
@@ -524,7 +524,7 @@ class TestMemAdd:
                 ">=1 row",
                 "0 rows",
             )
-            pytest.skip("Mem0 did not persist the memory row (TA-04)")
+            assert False, "Mem0 did not persist the memory row"
 
         if embedded_count == 0:
             log_issue(
@@ -536,7 +536,7 @@ class TestMemAdd:
                 "non-null embedding",
                 "NULL embedding",
             )
-            pytest.skip("Memory row exists but embedding is NULL")
+            assert False, "Memory row exists but vector is NULL"
 
         # Success — row exists with a real embedding
         assert embedded_count >= 1
@@ -583,7 +583,7 @@ class TestMemSearch:
                 "mem_search returned no results for a just-added memory after retries; "
                 "Mem0 may not be fully functional (table schema mismatch)",
             )
-            pytest.skip("Mem0 not functional — mem_search returned no results")
+            assert False, "mem_search returned no results — Mem0 not functional"
 
 
 class TestMemGetContext:
@@ -658,7 +658,7 @@ class TestMemList:
                 f"Expected at least 1 memory from mem_list, got {found_count}; "
                 "Mem0 may not be fully functional (table schema mismatch)",
             )
-            pytest.skip("Mem0 not functional — mem_list returned no memories")
+            assert False, "mem_list returned no memories — Mem0 not functional"
 
 
 class TestMemDelete:
@@ -700,7 +700,7 @@ class TestMemDelete:
                 f"Could not determine memory_id from add result: {add_result}; "
                 "Mem0 may not be fully functional (table schema mismatch)",
             )
-            pytest.skip("Mem0 not functional — could not obtain memory_id for deletion test")
+            assert False, "Could not obtain memory_id — Mem0 not functional"
 
         # Delete
         del_resp = mcp_call(

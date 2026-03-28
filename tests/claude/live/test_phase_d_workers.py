@@ -139,7 +139,7 @@ class TestLogShipper:
         embedded = int(embedded_match.group(1)) if embedded_match else 0
 
         if total == 0:
-            pytest.skip("No system_logs rows to check")
+            assert False, "No system_logs rows"
 
         if embedded == 0:
             log_issue(
