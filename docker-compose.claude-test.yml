@@ -52,7 +52,7 @@ services:
       - claude-test-net
     volumes:
       - ./config-test:/config
-      - ./data-test:/data
+      - ./data-test/downloads:/data/downloads
       - ./packages:/app/packages
     env_file:
       - ./config/credentials/.env
