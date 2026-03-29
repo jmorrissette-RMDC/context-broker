@@ -12,6 +12,7 @@ Context windows are created automatically by get_context (D-03) —
 the state manager only tracks the conversation.
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -38,7 +39,8 @@ class ImperatorStateManager:
         Reads the state file if it exists and verifies the conversation.
         Creates a new conversation if needed.
         """
-        saved_conv_id = self._read_state_file()
+        loop = asyncio.get_running_loop()
+        saved_conv_id = await loop.run_in_executor(None, self._read_state_file)
 
         if saved_conv_id is not None:
             if await self._conversation_exists(saved_conv_id):
@@ -53,7 +55,7 @@ class ImperatorStateManager:
 
         # Create new conversation
         self._conversation_id = await self._create_imperator_conversation()
-        self._write_state_file(self._conversation_id)
+        await loop.run_in_executor(None, self._write_state_file, self._conversation_id)
         _log.info("Imperator: created new conversation %s", self._conversation_id)
 
     async def get_conversation_id(self) -> Optional[uuid.UUID]:
@@ -69,7 +71,8 @@ class ImperatorStateManager:
                     self._conversation_id,
                 )
                 self._conversation_id = await self._create_imperator_conversation()
-                self._write_state_file(self._conversation_id)
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._write_state_file, self._conversation_id)
                 _log.info(
                     "Imperator: created replacement conversation %s",
                     self._conversation_id,

@@ -23,9 +23,9 @@ async def install_stategraph(
     scan() to refresh the registry. Clears compiled graph caches
     so next invocation uses the updated package.
     """
-    from app.config import load_config
+    from app.config import async_load_config
 
-    config = load_config()
+    config = await async_load_config()
     packages_config = config.get("packages", {})
     source = packages_config.get("source", "pypi")
 

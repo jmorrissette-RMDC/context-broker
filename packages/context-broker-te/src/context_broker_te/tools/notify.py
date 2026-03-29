@@ -9,6 +9,7 @@ Alternative: point directly at an external service (ntfy.sh, Slack) to
 skip the alerter entirely.
 """
 
+import asyncio
 import logging
 import socket
 from datetime import datetime, timezone
@@ -45,7 +46,8 @@ async def send_notification(
     try:
         from context_broker_te._ctx import get_ctx
 
-        config = get_ctx().load_merged_config()
+        loop = asyncio.get_running_loop()
+        config = await loop.run_in_executor(None, get_ctx().load_merged_config)
         webhook_url = config.get("imperator", {}).get(
             "notification_webhook", "http://context-broker-alerter:8000/webhook"
         )

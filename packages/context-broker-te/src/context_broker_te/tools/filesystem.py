@@ -5,6 +5,7 @@ Write: only to /data/downloads/.
 System prompt: read and update the Imperator's own prompt file.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -40,6 +41,18 @@ def _is_safe_write_path(path: str) -> bool:
         return False
 
 
+def _sync_file_read(path: str, max_chars: int) -> str:
+    """Synchronous file read helper."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            content = f.read(max_chars)
+        return content
+    except FileNotFoundError:
+        return f"File not found: {path}"
+    except (OSError, PermissionError) as exc:
+        return f"Error reading {path}: {exc}"
+
+
 @tool
 async def file_read(path: str, max_chars: int = 50000) -> str:
     """Read a file from the filesystem.
@@ -53,27 +66,12 @@ async def file_read(path: str, max_chars: int = 50000) -> str:
     """
     if not _is_safe_read_path(path):
         return f"Access denied: {path} is outside allowed directories."
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            content = f.read(max_chars)
-        return content
-    except FileNotFoundError:
-        return f"File not found: {path}"
-    except (OSError, PermissionError) as exc:
-        return f"Error reading {path}: {exc}"
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _sync_file_read, path, max_chars)
 
 
-@tool
-async def file_list(path: str = "/app") -> str:
-    """List directory contents.
-
-    Sandboxed to /app, /config, and /data directories.
-
-    Args:
-        path: Directory path to list (default /app).
-    """
-    if not _is_safe_read_path(path):
-        return f"Access denied: {path} is outside allowed directories."
+def _sync_file_list(path: str) -> str:
+    """Synchronous directory listing helper."""
     try:
         entries = sorted(os.listdir(path))
         lines = [f"Contents of {path} ({len(entries)} entries):"]
@@ -92,24 +90,22 @@ async def file_list(path: str = "/app") -> str:
 
 
 @tool
-async def file_search(path: str, pattern: str, max_results: int = 20) -> str:
-    """Search file contents for a pattern (like grep).
+async def file_list(path: str = "/app") -> str:
+    """List directory contents.
 
-    Searches recursively through text files in the given directory.
     Sandboxed to /app, /config, and /data directories.
 
     Args:
-        path: Directory to search in.
-        pattern: Regex pattern to search for.
-        max_results: Maximum matching lines to return (default 20).
+        path: Directory path to list (default /app).
     """
     if not _is_safe_read_path(path):
         return f"Access denied: {path} is outside allowed directories."
-    try:
-        compiled = re.compile(pattern, re.IGNORECASE)
-    except re.error as exc:
-        return f"Invalid regex: {exc}"
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _sync_file_list, path)
 
+
+def _sync_file_search(path: str, compiled: re.Pattern, max_results: int) -> str:
+    """Synchronous file search helper."""
     results = []
     try:
         for root, _, files in os.walk(path):
@@ -131,10 +127,44 @@ async def file_search(path: str, pattern: str, max_results: int = 20) -> str:
                     continue
 
         if not results:
-            return f"No matches for '{pattern}' in {path}"
+            return f"No matches for '{compiled.pattern}' in {path}"
         return "\n".join(results)
     except (OSError, PermissionError) as exc:
         return f"Search error: {exc}"
+
+
+@tool
+async def file_search(path: str, pattern: str, max_results: int = 20) -> str:
+    """Search file contents for a pattern (like grep).
+
+    Searches recursively through text files in the given directory.
+    Sandboxed to /app, /config, and /data directories.
+
+    Args:
+        path: Directory to search in.
+        pattern: Regex pattern to search for.
+        max_results: Maximum matching lines to return (default 20).
+    """
+    if not _is_safe_read_path(path):
+        return f"Access denied: {path} is outside allowed directories."
+    try:
+        compiled = re.compile(pattern, re.IGNORECASE)
+    except re.error as exc:
+        return f"Invalid regex: {exc}"
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _sync_file_search, path, compiled, max_results)
+
+
+def _sync_file_write(path: str, content: str) -> str:
+    """Synchronous file write helper."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"Written {len(content)} chars to {path}"
+    except (OSError, PermissionError) as exc:
+        return f"Error writing {path}: {exc}"
 
 
 @tool
@@ -155,21 +185,12 @@ async def file_write(path: str, content: str) -> str:
     if not _is_safe_write_path(path):
         return f"Access denied: can only write to {_DOWNLOADS_DIR}"
 
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        return f"Written {len(content)} chars to {path}"
-    except (OSError, PermissionError) as exc:
-        return f"Error writing {path}: {exc}"
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _sync_file_write, path, content)
 
 
-@tool
-async def read_system_prompt() -> str:
-    """Read the Imperator's current system prompt.
-
-    Returns the full content of the system prompt file.
-    """
+def _sync_read_system_prompt() -> str:
+    """Synchronous system prompt read helper."""
     from context_broker_te._ctx import get_ctx
 
     config = get_ctx().load_merged_config()
@@ -185,21 +206,17 @@ async def read_system_prompt() -> str:
 
 
 @tool
-async def update_system_prompt(content: str) -> str:
-    """Update the Imperator's system prompt.
+async def read_system_prompt() -> str:
+    """Read the Imperator's current system prompt.
 
-    Writes the new content to the system prompt file. The change takes
-    effect on the next chat invocation (no restart needed).
-
-    This is the only TE configuration the Imperator can modify.
-    All other TE config (model, build_type, admin_tools) is architect-only.
-
-    Args:
-        content: The new system prompt content.
+    Returns the full content of the system prompt file.
     """
-    if not content or len(content) < 20:
-        return "System prompt too short — must be at least 20 characters."
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _sync_read_system_prompt)
 
+
+def _sync_update_system_prompt(content: str) -> str:
+    """Synchronous system prompt update helper."""
     from context_broker_te._ctx import get_ctx
 
     config = get_ctx().load_merged_config()
@@ -219,6 +236,26 @@ async def update_system_prompt(content: str) -> str:
         return f"System prompt updated ({len(content)} chars). Backup saved to {backup_path}."
     except (OSError, PermissionError) as exc:
         return f"Error updating system prompt: {exc}"
+
+
+@tool
+async def update_system_prompt(content: str) -> str:
+    """Update the Imperator's system prompt.
+
+    Writes the new content to the system prompt file. The change takes
+    effect on the next chat invocation (no restart needed).
+
+    This is the only TE configuration the Imperator can modify.
+    All other TE config (model, build_type, admin_tools) is architect-only.
+
+    Args:
+        content: The new system prompt content.
+    """
+    if not content or len(content) < 20:
+        return "System prompt too short — must be at least 20 characters."
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _sync_update_system_prompt, content)
 
 
 def get_tools() -> list:

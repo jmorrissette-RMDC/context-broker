@@ -16,7 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.config import load_config, get_build_type_config, get_tuning
+from app.config import async_load_config, load_config, get_build_type_config, get_tuning
 from app.database import init_postgres, close_all_connections
 from app.logging_setup import setup_logging, update_log_level
 from app.migrations import run_migrations
@@ -32,7 +32,7 @@ async def _postgres_retry_loop(application: FastAPI, config: dict) -> None:
     """Background task that retries PostgreSQL connection if it failed at startup."""
     while True:
         # R6-M15: Reload config each iteration so hot-reloaded corrections take effect
-        config = load_config()
+        config = await async_load_config()
         retry_interval = get_tuning(config, "postgres_retry_interval_seconds", 10)
         await asyncio.sleep(retry_interval)
         if getattr(application.state, "postgres_available", False):
@@ -88,7 +88,7 @@ async def lifespan(application: FastAPI):
     """Manage application lifecycle: startup and shutdown."""
     _log.info("Context Broker starting up")
 
-    config = load_config()
+    config = await async_load_config()
 
     # Apply configured log level now that config is available
     configured_level = config.get("log_level", "INFO")
