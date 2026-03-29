@@ -5,6 +5,7 @@ Always available to the Imperator.
 """
 
 import asyncio
+import ipaddress
 import logging
 from urllib.parse import urlparse
 
@@ -63,8 +64,17 @@ async def web_read(url: str, max_chars: int = 10000) -> str:
         return f"Invalid URL scheme: {parsed.scheme}. Only http and https are supported."
     # Block private/internal IPs
     hostname = parsed.hostname or ""
-    if hostname in ("localhost", "127.0.0.1", "0.0.0.0", "169.254.169.254") or hostname.startswith("10.") or hostname.startswith("172.") or hostname.startswith("192.168."):
-        return f"Access denied: cannot access internal/private addresses."
+    if hostname == "localhost":
+        return "Access denied: cannot access internal/private addresses."
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            return "Access denied: cannot access internal/private addresses."
+    except ValueError:
+        pass  # hostname is a DNS name, not an IP — allow (DNS resolution happens later)
+    # Also block metadata endpoint by hostname
+    if hostname == "169.254.169.254":
+        return "Access denied: cannot access metadata endpoint."
 
     try:
         import httpx

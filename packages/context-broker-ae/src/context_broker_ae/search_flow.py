@@ -54,13 +54,16 @@ async def _rerank_via_api(
     # Normalize response — different providers use different keys
     results = data.get("results") or data.get("choices") or data.get("data") or []
 
+    # Work on shallow copies to avoid mutating the input state
+    scored = [dict(c) for c in candidates]
+
     for item in results:
         idx = item.get("index", 0)
         score = item.get("relevance_score", 0)
-        if idx < len(candidates):
-            candidates[idx]["rerank_score"] = score
+        if idx < len(scored):
+            scored[idx]["rerank_score"] = score
 
-    reranked = sorted(candidates, key=lambda x: x.get("rerank_score", 0), reverse=True)
+    reranked = sorted(scored, key=lambda x: x.get("rerank_score", 0), reverse=True)
     return reranked[:top_n]
 
 

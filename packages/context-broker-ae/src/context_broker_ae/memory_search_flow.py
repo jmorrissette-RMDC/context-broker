@@ -81,7 +81,6 @@ async def search_memory_graph(state: MemorySearchState) -> dict:
         ValueError,
         ImportError,
         OSError,
-        Exception,
     ) as exc:  # EX-CB-001: broad catch for Mem0
         _log.warning("Memory search failed (degraded mode): %s", exc)
         return {
@@ -171,7 +170,6 @@ async def retrieve_memory_context(state: MemoryContextState) -> dict:
         ValueError,
         ImportError,
         OSError,
-        Exception,
     ) as exc:  # EX-CB-001: broad catch for Mem0
         _log.warning("Memory context retrieval failed (degraded mode): %s", exc)
         return {"memories": [], "context_text": "", "degraded": True, "error": str(exc)}

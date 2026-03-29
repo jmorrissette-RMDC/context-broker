@@ -132,7 +132,7 @@ async def context_introspection(
             f"Context Window: {window['id']}",
             f"Build Type: {window['build_type']}",
             f"Raw Budget: {window['max_token_budget']} tokens",
-            f"Effective Budget (85%): {effective} tokens",
+            f"Effective Budget ({int(EFFECTIVE_UTILIZATION_DEFAULT * 100)}%): {effective} tokens",
             f"Total Messages: {msg_count}",
             f"Total Message Tokens: {total_tokens}",
             f"Summaries: {summary_count}",

@@ -16,6 +16,7 @@ import logging
 import os
 import smtplib
 import ssl
+import sys
 from email.message import EmailMessage
 from typing import Optional
 
@@ -42,7 +43,10 @@ _config: dict = {}
 _pool: Optional[asyncpg.Pool] = None
 
 CONFIG_PATH = os.environ.get("ALERTER_CONFIG", "/config/alerter.yml")
-POSTGRES_DSN = os.environ["POSTGRES_DSN"]  # Required — set in docker-compose.yml
+POSTGRES_DSN = os.environ.get("POSTGRES_DSN")
+if not POSTGRES_DSN:
+    print("ERROR: POSTGRES_DSN environment variable is required. Set it in docker-compose.yml.", file=sys.stderr)
+    sys.exit(1)
 CHANNEL_TIMEOUT = int(os.environ.get("CHANNEL_TIMEOUT", "10"))
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "30"))
 

@@ -9,6 +9,8 @@ TE-owned: this client is used by the Imperator's operational tools.
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 from typing import Optional
@@ -16,7 +18,22 @@ from typing import Optional
 _log = logging.getLogger("context_broker.te.domain_mem0")
 
 _domain_mem0_instance = None
+_domain_mem0_config_hash: Optional[str] = None
 _domain_mem0_lock = asyncio.Lock()
+
+
+def _compute_config_hash(config: dict) -> str:
+    """Compute a hash of config sections relevant to domain Mem0 initialization.
+
+    Used to detect config changes that require recreating the Mem0 instance.
+    """
+    relevant = {
+        "llm": config.get("llm", {}),
+        "extraction": config.get("extraction", {}),
+        "embeddings": config.get("embeddings", {}),
+    }
+    config_str = json.dumps(relevant, sort_keys=True, default=str)
+    return hashlib.sha256(config_str.encode()).hexdigest()
 
 
 def _build_domain_mem0(config: dict) -> object:
@@ -101,24 +118,43 @@ def _build_domain_mem0(config: dict) -> object:
 
 
 async def get_domain_mem0(config: dict) -> Optional[object]:
-    """Get or create the domain Mem0 singleton."""
-    global _domain_mem0_instance
+    """Get or create the domain Mem0 singleton.
+
+    Automatically recreates the instance if the LLM or embeddings
+    config has changed since the last initialization.
+    """
+    global _domain_mem0_instance, _domain_mem0_config_hash
+
+    current_hash = _compute_config_hash(config)
+
+    if _domain_mem0_instance is not None and _domain_mem0_config_hash == current_hash:
+        return _domain_mem0_instance
 
     async with _domain_mem0_lock:
-        if _domain_mem0_instance is None:
-            try:
-                loop = asyncio.get_running_loop()
-                _domain_mem0_instance = await loop.run_in_executor(
-                    None, _build_domain_mem0, config
-                )
-                _log.info("Domain Mem0 client initialized")
-            except (ImportError, ValueError, OSError, RuntimeError) as exc:
-                _log.error("Failed to initialize domain Mem0: %s", exc)
-                return None
+        # Double-check after acquiring lock
+        if _domain_mem0_instance is not None and _domain_mem0_config_hash == current_hash:
+            return _domain_mem0_instance
+
+        if _domain_mem0_instance is not None and _domain_mem0_config_hash != current_hash:
+            _log.info("Domain Mem0 config changed — recreating client")
+
+        try:
+            loop = asyncio.get_running_loop()
+            _domain_mem0_instance = await loop.run_in_executor(
+                None, _build_domain_mem0, config
+            )
+            _domain_mem0_config_hash = current_hash
+            _log.info("Domain Mem0 client initialized")
+        except (ImportError, ValueError, OSError, RuntimeError) as exc:
+            _log.error("Failed to initialize domain Mem0: %s", exc)
+            _domain_mem0_instance = None
+            _domain_mem0_config_hash = None
+            return None
         return _domain_mem0_instance
 
 
 def reset_domain_mem0():
     """Reset the domain Mem0 singleton."""
-    global _domain_mem0_instance
+    global _domain_mem0_instance, _domain_mem0_config_hash
     _domain_mem0_instance = None
+    _domain_mem0_config_hash = None

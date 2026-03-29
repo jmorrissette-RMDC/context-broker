@@ -58,7 +58,6 @@ async def add_memory(state: MemAddState) -> dict:
         ValueError,
         ImportError,
         OSError,
-        Exception,
     ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         _log.warning("mem_add failed: %s", exc)
@@ -123,7 +122,6 @@ async def list_memories(state: MemListState) -> dict:
         ValueError,
         ImportError,
         OSError,
-        Exception,
     ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         _log.warning("mem_list failed: %s", exc)
@@ -180,7 +178,6 @@ async def delete_memory(state: MemDeleteState) -> dict:
         ValueError,
         ImportError,
         OSError,
-        Exception,
     ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
         _log.warning("mem_delete failed: %s", exc)

@@ -12,17 +12,17 @@ from langchain_core.tools import tool
 _log = logging.getLogger("context_broker.tools.system")
 
 # Allowlisted binaries — read-only system inspection only
+# Allowlisted binaries — read-only system inspection only.
+# SECURITY: Do not add python, pip, cat, env, sh, bash, or any binary
+# that can execute arbitrary code or read arbitrary files. The Imperator
+# is LLM-driven and vulnerable to prompt injection.
 _ALLOWED_BINARIES = {
-    "docker",
     "df",
     "uptime",
     "free",
-    "cat",
     "hostname",
     "whoami",
     "id",
-    "pip",
-    "python",
     "ping",
     "curl",
     "dig",

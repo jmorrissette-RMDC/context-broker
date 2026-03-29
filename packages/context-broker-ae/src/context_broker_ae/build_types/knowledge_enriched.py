@@ -438,7 +438,6 @@ async def ke_inject_knowledge_graph(state: KnowledgeEnrichedRetrievalState) -> d
         ValueError,
         ImportError,
         OSError,
-        Exception,
     ) as exc:  # EX-CB-001: broad catch for Mem0
         _log.warning("Knowledge graph retrieval failed (degraded mode): %s", exc)
         return {"knowledge_graph_facts": []}

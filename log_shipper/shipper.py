@@ -18,7 +18,10 @@ logging.basicConfig(
 logger = logging.getLogger("log_shipper")
 
 # Configuration
-POSTGRES_DSN = os.environ["POSTGRES_DSN"]  # Required — set in docker-compose.yml
+POSTGRES_DSN = os.environ.get("POSTGRES_DSN")
+if not POSTGRES_DSN:
+    print("ERROR: POSTGRES_DSN environment variable is required. Set it in docker-compose.yml.", file=sys.stderr)
+    sys.exit(1)
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "100"))
 FLUSH_INTERVAL_SEC = float(os.environ.get("FLUSH_INTERVAL_SEC", "1.0"))
 
@@ -28,7 +31,7 @@ class LogShipper:
         self.docker = None
         self.pg_pool = None
         self.network_id = None
-        self.log_queue = asyncio.Queue()
+        self.log_queue = asyncio.Queue(maxsize=10000)
         self.active_tasks = {}  # container_id -> task
         self.running = False
 
@@ -189,7 +192,10 @@ class LogShipper:
                         "data": data,
                     }
 
-                    await self.log_queue.put(payload)
+                    try:
+                        self.log_queue.put_nowait(payload)
+                    except asyncio.QueueFull:
+                        pass  # Drop log entry under backpressure
 
                 except (ValueError, KeyError, UnicodeDecodeError) as e:
                     logger.debug("Error parsing log line from %s: %s", name, e)
