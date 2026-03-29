@@ -80,7 +80,10 @@ async def test_config_read_returns_redacted_yaml():
     raw_config = {"llm": {"model": "gpt-4", "api_key": "sk-secret"}}
     yaml_text = yaml.dump(raw_config)
 
-    with patch("app.config.CONFIG_PATH", "/config/config.yml"), \
+    mock_ctx = MagicMock()
+    mock_ctx.config_path = "/config/config.yml"
+
+    with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx), \
          patch("builtins.open", mock_open(read_data=yaml_text)):
         result = await config_read.ainvoke({})
 
@@ -92,7 +95,10 @@ async def test_config_read_returns_redacted_yaml():
 @pytest.mark.asyncio
 async def test_config_read_handles_file_not_found():
     """Returns error string when config file is missing."""
-    with patch("app.config.CONFIG_PATH", "/config/config.yml"), \
+    mock_ctx = MagicMock()
+    mock_ctx.config_path = "/config/config.yml"
+
+    with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx), \
          patch("builtins.open", side_effect=FileNotFoundError("no file")):
         result = await config_read.ainvoke({})
 
@@ -146,7 +152,10 @@ async def test_db_query_returns_formatted_results():
     pool, conn = _make_db_mocks()
     conn.fetch.return_value = [mock_row1, mock_row2]
 
-    with patch("context_broker_te.tools.admin.get_pg_pool", return_value=pool):
+    mock_ctx = MagicMock()
+    mock_ctx.get_pool.return_value = pool
+
+    with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx):
         result = await db_query.ainvoke({"sql": "SELECT id, name FROM test"})
 
     assert "id" in result
@@ -160,7 +169,10 @@ async def test_db_query_empty_results():
     pool, conn = _make_db_mocks()
     conn.fetch.return_value = []
 
-    with patch("context_broker_te.tools.admin.get_pg_pool", return_value=pool):
+    mock_ctx = MagicMock()
+    mock_ctx.get_pool.return_value = pool
+
+    with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx):
         result = await db_query.ainvoke({"sql": "SELECT 1 WHERE false"})
 
     assert result == "No results."
@@ -172,7 +184,10 @@ async def test_db_query_returns_error_on_postgres_error():
     pool, conn = _make_db_mocks()
     conn.fetch.side_effect = asyncpg.PostgresError("syntax error")
 
-    with patch("context_broker_te.tools.admin.get_pg_pool", return_value=pool):
+    mock_ctx = MagicMock()
+    mock_ctx.get_pool.return_value = pool
+
+    with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx):
         result = await db_query.ainvoke({"sql": "INVALID SQL"})
 
     assert "Query error" in result
@@ -203,7 +218,10 @@ async def test_config_write_updates_value():
             return m
         return mock_open(read_data=yaml_text)()
 
-    with patch("app.config.CONFIG_PATH", "/config/config.yml"), \
+    mock_ctx = MagicMock()
+    mock_ctx.config_path = "/config/config.yml"
+
+    with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx), \
          patch("builtins.open", side_effect=smart_open):
         result = await config_write.ainvoke({"key": "tuning.verbose_logging", "value": "true"})
 
@@ -214,9 +232,13 @@ async def test_config_write_updates_value():
 @pytest.mark.asyncio
 async def test_config_write_rejects_te_keys():
     """Rejects TE config keys (imperator, system_prompt, identity, purpose)."""
-    for key in ["imperator.model", "system_prompt.name", "identity.x", "purpose.y"]:
-        result = await config_write.ainvoke({"key": key, "value": "test"})
-        assert "Cannot modify TE config key" in result
+    mock_ctx = MagicMock()
+    mock_ctx.config_path = "/config/config.yml"
+
+    with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx):
+        for key in ["imperator.model", "system_prompt.name", "identity.x", "purpose.y"]:
+            result = await config_write.ainvoke({"key": key, "value": "test"})
+            assert "Cannot modify TE config key" in result
 
 
 @pytest.mark.asyncio
@@ -225,7 +247,10 @@ async def test_config_write_missing_key_path():
     raw_config = {"tuning": {"verbose_logging": False}}
     yaml_text = yaml.dump(raw_config)
 
-    with patch("app.config.CONFIG_PATH", "/config/config.yml"), \
+    mock_ctx = MagicMock()
+    mock_ctx.config_path = "/config/config.yml"
+
+    with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx), \
          patch("builtins.open", mock_open(read_data=yaml_text)):
         result = await config_write.ainvoke({"key": "tuning.nonexistent_key", "value": "x"})
 
@@ -251,7 +276,10 @@ async def test_config_write_type_converts_int():
             return m
         return mock_open(read_data=yaml_text)()
 
-    with patch("app.config.CONFIG_PATH", "/config/config.yml"), \
+    mock_ctx = MagicMock()
+    mock_ctx.config_path = "/config/config.yml"
+
+    with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx), \
          patch("builtins.open", side_effect=smart_open):
         result = await config_write.ainvoke({"key": "tuning.batch_size", "value": "100"})
 
@@ -267,8 +295,11 @@ async def test_verbose_toggle_false_to_true():
     """Toggles from False to True."""
     config = {"tuning": {"verbose_logging": False}}
 
-    with patch("app.config.load_config", return_value=config), \
-         patch("app.config.get_tuning", return_value=False), \
+    mock_ctx = MagicMock()
+    mock_ctx.load_config.return_value = config
+    mock_ctx.get_tuning.return_value = False
+
+    with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx), \
          patch("context_broker_te.tools.admin.config_write") as mock_cw:
         mock_cw.ainvoke = AsyncMock(return_value="Updated 'tuning.verbose_logging': False -> True.")
         result = await verbose_toggle.ainvoke({})
@@ -284,8 +315,11 @@ async def test_verbose_toggle_true_to_false():
     """Toggles from True to False."""
     config = {"tuning": {"verbose_logging": True}}
 
-    with patch("app.config.load_config", return_value=config), \
-         patch("app.config.get_tuning", return_value=True), \
+    mock_ctx = MagicMock()
+    mock_ctx.load_config.return_value = config
+    mock_ctx.get_tuning.return_value = True
+
+    with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx), \
          patch("context_broker_te.tools.admin.config_write") as mock_cw:
         mock_cw.ainvoke = AsyncMock(return_value="Updated 'tuning.verbose_logging': True -> False.")
         result = await verbose_toggle.ainvoke({})

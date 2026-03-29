@@ -114,11 +114,14 @@ class TestAsyncLoadConfig:
     @pytest.mark.asyncio
     async def test_returns_merged_config(self, ae_yaml, te_yaml):
         """Returns merged AE + TE config via async path."""
+        # Pre-populate AE config cache so async_load_config fast-paths the AE read.
+        config_mod._config_cache = ae_yaml
+        config_mod._config_mtime = 100.0
+
         stat_result = MagicMock()
         stat_result.st_mtime = 100.0
 
         with (
-            patch.object(config_mod, "load_config", return_value=ae_yaml),
             patch("os.stat", return_value=stat_result),
             patch.object(
                 config_mod,
@@ -134,16 +137,16 @@ class TestAsyncLoadConfig:
     @pytest.mark.asyncio
     async def test_mtime_fast_path(self, ae_yaml, te_yaml):
         """Uses cached TE config when mtime has not changed."""
+        # Pre-populate both AE and TE config caches.
+        config_mod._config_cache = ae_yaml
+        config_mod._config_mtime = 100.0
         config_mod._te_config_cache = te_yaml
         config_mod._te_config_mtime = 100.0
 
         stat_result = MagicMock()
         stat_result.st_mtime = 100.0
 
-        with (
-            patch.object(config_mod, "load_config", return_value=ae_yaml),
-            patch("os.stat", return_value=stat_result),
-        ):
+        with patch("os.stat", return_value=stat_result):
             result = await config_mod.async_load_config()
 
         assert result["imperator"] == {"model": "gpt-4o"}
@@ -151,10 +154,20 @@ class TestAsyncLoadConfig:
     @pytest.mark.asyncio
     async def test_falls_back_when_te_file_missing(self, ae_yaml):
         """Returns AE-only config when TE file does not exist."""
-        with (
-            patch.object(config_mod, "load_config", return_value=ae_yaml),
-            patch("os.stat", side_effect=FileNotFoundError),
-        ):
+        # Pre-populate AE config cache so the AE stat fast-path works.
+        # Then have os.stat raise FileNotFoundError only for the TE config path.
+        config_mod._config_cache = ae_yaml
+        config_mod._config_mtime = 100.0
+
+        ae_stat = MagicMock()
+        ae_stat.st_mtime = 100.0
+
+        def _stat_side_effect(path):
+            if "te.yml" in str(path) or path == config_mod.TE_CONFIG_PATH:
+                raise FileNotFoundError
+            return ae_stat
+
+        with patch("os.stat", side_effect=_stat_side_effect):
             result = await config_mod.async_load_config()
 
         assert result is ae_yaml

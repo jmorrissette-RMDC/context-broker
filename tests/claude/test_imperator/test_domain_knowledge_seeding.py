@@ -1,6 +1,6 @@
 """Tests for seed_knowledge.py — domain knowledge seeding."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -34,6 +34,17 @@ def mock_config():
     return {"embeddings": {"provider": "test", "model": "test-embed"}}
 
 
+def _make_mock_ctx(mock_pool, mock_config=None, mock_embeddings_model=None):
+    """Build a mock TEContext for seed_knowledge tests."""
+    ctx = MagicMock()
+    ctx.get_pool.return_value = mock_pool
+    if mock_config is not None:
+        ctx.async_load_config = AsyncMock(return_value=mock_config)
+    if mock_embeddings_model is not None:
+        ctx.get_embeddings_model.return_value = mock_embeddings_model
+    return ctx
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -45,14 +56,9 @@ async def test_seed_inserts_articles_when_table_is_empty(
 ):
     """seed_domain_knowledge() inserts articles when table is empty."""
     mock_pool.fetchval = AsyncMock(return_value=0)
+    ctx = _make_mock_ctx(mock_pool, mock_config, mock_embeddings_model)
 
-    with (
-        patch("app.database.get_pg_pool", return_value=mock_pool),
-        patch("app.config.async_load_config", AsyncMock(return_value=mock_config)),
-        patch(
-            "app.config.get_embeddings_model", return_value=mock_embeddings_model
-        ),
-    ):
+    with patch("context_broker_te._ctx.get_ctx", return_value=ctx):
         from context_broker_te.seed_knowledge import seed_domain_knowledge
 
         count = await seed_domain_knowledge()
@@ -65,8 +71,9 @@ async def test_seed_inserts_articles_when_table_is_empty(
 async def test_seed_skips_when_table_has_data(mock_pool):
     """seed_domain_knowledge() skips when table already has data."""
     mock_pool.fetchval = AsyncMock(return_value=42)
+    ctx = _make_mock_ctx(mock_pool)
 
-    with patch("app.database.get_pg_pool", return_value=mock_pool):
+    with patch("context_broker_te._ctx.get_ctx", return_value=ctx):
         from context_broker_te.seed_knowledge import seed_domain_knowledge
 
         count = await seed_domain_knowledge()
@@ -81,15 +88,9 @@ async def test_seed_embeds_articles_using_configured_model(
 ):
     """seed_domain_knowledge() embeds articles using configured embedding model."""
     mock_pool.fetchval = AsyncMock(return_value=0)
+    ctx = _make_mock_ctx(mock_pool, mock_config, mock_embeddings_model)
 
-    with (
-        patch("app.database.get_pg_pool", return_value=mock_pool),
-        patch("app.config.async_load_config", AsyncMock(return_value=mock_config)),
-        patch(
-            "app.config.get_embeddings_model",
-            return_value=mock_embeddings_model,
-        ),
-    ):
+    with patch("context_broker_te._ctx.get_ctx", return_value=ctx):
         from context_broker_te.seed_knowledge import seed_domain_knowledge
 
         await seed_domain_knowledge()
@@ -106,14 +107,9 @@ async def test_seed_handles_embedding_failure_gracefully(mock_pool, mock_config)
     failing_model = AsyncMock()
     failing_model.aembed_documents = AsyncMock(side_effect=RuntimeError("embed fail"))
 
-    # The first pool.execute (with embedding) will raise because
-    # aembed_documents fails, triggering the except block which tries
-    # a fallback insert without embedding.
-    with (
-        patch("app.database.get_pg_pool", return_value=mock_pool),
-        patch("app.config.async_load_config", AsyncMock(return_value=mock_config)),
-        patch("app.config.get_embeddings_model", return_value=failing_model),
-    ):
+    ctx = _make_mock_ctx(mock_pool, mock_config, failing_model)
+
+    with patch("context_broker_te._ctx.get_ctx", return_value=ctx):
         from context_broker_te.seed_knowledge import seed_domain_knowledge
 
         count = await seed_domain_knowledge()
@@ -125,9 +121,11 @@ async def test_seed_handles_embedding_failure_gracefully(mock_pool, mock_config)
 @pytest.mark.asyncio
 async def test_seed_returns_zero_when_table_not_ready(mock_pool):
     """seed_domain_knowledge() returns 0 when domain_information table does not exist."""
-    mock_pool.fetchval = AsyncMock(side_effect=Exception("relation does not exist"))
+    import asyncpg
+    mock_pool.fetchval = AsyncMock(side_effect=asyncpg.PostgresError("relation does not exist"))
+    ctx = _make_mock_ctx(mock_pool)
 
-    with patch("app.database.get_pg_pool", return_value=mock_pool):
+    with patch("context_broker_te._ctx.get_ctx", return_value=ctx):
         from context_broker_te.seed_knowledge import seed_domain_knowledge
 
         count = await seed_domain_knowledge()

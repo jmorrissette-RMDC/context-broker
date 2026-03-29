@@ -47,6 +47,16 @@ def _make_state(messages=None, config=None, iteration_count=0, error=None, cw_id
     }
 
 
+def _make_mock_ctx():
+    """Build a minimal mock TEContext for imperator flow tests."""
+    ctx = MagicMock()
+    # get_tuning: delegate to the config dict's tuning section
+    def _get_tuning(config, key, default=None):
+        return config.get("tuning", {}).get(key, default)
+    ctx.get_tuning.side_effect = _get_tuning
+    return ctx
+
+
 # ── needs_init() ────────────────────────────────────────────────────
 
 
@@ -72,26 +82,34 @@ def test_should_continue_routes_to_tool_node(base_config):
     """Routes to tool_node when last message has tool_calls."""
     ai_msg = AIMessage(content="", tool_calls=[{"name": "test", "args": {}, "id": "1"}])
     state = _make_state(messages=[ai_msg], config=base_config, iteration_count=0)
-    assert should_continue(state) == "tool_node"
+    ctx = _make_mock_ctx()
+    with patch("context_broker_te.imperator_flow.get_ctx", return_value=ctx):
+        assert should_continue(state) == "tool_node"
 
 
 def test_should_continue_routes_to_store_no_tools(base_config):
     """Routes to store_user_message when no tool_calls."""
     ai_msg = AIMessage(content="Final answer")
     state = _make_state(messages=[ai_msg], config=base_config)
-    assert should_continue(state) == "store_user_message"
+    ctx = _make_mock_ctx()
+    with patch("context_broker_te.imperator_flow.get_ctx", return_value=ctx):
+        assert should_continue(state) == "store_user_message"
 
 
 def test_should_continue_routes_on_error(base_config):
     """Routes to store_user_message when error is set."""
     state = _make_state(config=base_config, error="some error")
-    assert should_continue(state) == "store_user_message"
+    ctx = _make_mock_ctx()
+    with patch("context_broker_te.imperator_flow.get_ctx", return_value=ctx):
+        assert should_continue(state) == "store_user_message"
 
 
 def test_should_continue_routes_on_empty_messages(base_config):
     """Routes to store_user_message when messages list is empty."""
     state = _make_state(messages=[], config=base_config)
-    assert should_continue(state) == "store_user_message"
+    ctx = _make_mock_ctx()
+    with patch("context_broker_te.imperator_flow.get_ctx", return_value=ctx):
+        assert should_continue(state) == "store_user_message"
 
 
 def test_should_continue_max_iterations_fallback(base_config):
@@ -100,7 +118,9 @@ def test_should_continue_max_iterations_fallback(base_config):
     state = _make_state(
         messages=[ai_msg], config=base_config, iteration_count=5
     )
-    assert should_continue(state) == "max_iterations_fallback"
+    ctx = _make_mock_ctx()
+    with patch("context_broker_te.imperator_flow.get_ctx", return_value=ctx):
+        assert should_continue(state) == "max_iterations_fallback"
 
 
 def test_should_continue_below_max_iterations(base_config):
@@ -109,7 +129,9 @@ def test_should_continue_below_max_iterations(base_config):
     state = _make_state(
         messages=[ai_msg], config=base_config, iteration_count=4
     )
-    assert should_continue(state) == "tool_node"
+    ctx = _make_mock_ctx()
+    with patch("context_broker_te.imperator_flow.get_ctx", return_value=ctx):
+        assert should_continue(state) == "tool_node"
 
 
 # ── max_iterations_fallback ──────────────────────────────────────────
@@ -140,9 +162,12 @@ async def test_init_context_node_loads_system_prompt(base_config):
         config=base_config,
     )
 
+    mock_pool = AsyncMock()
+    mock_pool.fetch = AsyncMock(return_value=[])
+
     mock_ctx = MagicMock()
     mock_ctx.async_load_prompt = AsyncMock(return_value="You are the Imperator.")
-    mock_ctx.get_pool.return_value = MagicMock()
+    mock_ctx.get_pool.return_value = mock_pool
     mock_ctx.get_embeddings_model.return_value = AsyncMock()
     mock_ctx.dispatch_tool = AsyncMock(return_value={"context": []})
 
@@ -188,7 +213,10 @@ async def test_llm_call_node_retries_empty_response(base_config):
         config=base_config,
     )
 
-    with patch("context_broker_te.imperator_flow._prebound_llm", mock_llm):
+    mock_ctx = _make_mock_ctx()
+
+    with patch("context_broker_te.imperator_flow._prebound_llm", mock_llm), \
+         patch("context_broker_te.imperator_flow.get_ctx", return_value=mock_ctx):
         result = await llm_call_node(state)
 
     # Should have retried once and returned the good response
@@ -217,7 +245,10 @@ async def test_llm_call_node_truncates_messages(base_config):
 
     state = _make_state(messages=messages, config=base_config)
 
-    with patch("context_broker_te.imperator_flow._prebound_llm", mock_llm):
+    mock_ctx = _make_mock_ctx()
+
+    with patch("context_broker_te.imperator_flow._prebound_llm", mock_llm), \
+         patch("context_broker_te.imperator_flow.get_ctx", return_value=mock_ctx):
         result = await llm_call_node(state)
 
     # Verify the LLM was called with truncated messages
@@ -248,7 +279,10 @@ async def test_llm_call_node_truncation_skips_tool_messages(base_config):
 
     state = _make_state(messages=messages, config=base_config)
 
-    with patch("context_broker_te.imperator_flow._prebound_llm", mock_llm):
+    mock_ctx = _make_mock_ctx()
+
+    with patch("context_broker_te.imperator_flow._prebound_llm", mock_llm), \
+         patch("context_broker_te.imperator_flow.get_ctx", return_value=mock_ctx):
         result = await llm_call_node(state)
 
     # The cut should skip past the ToolMessage

@@ -3,8 +3,9 @@
 Covers: store_domain_info, search_domain_info, extract_domain_knowledge,
 search_domain_knowledge.
 
-All functions use local imports (from app.config import ...) so we patch
-at the source module (app.config) level.
+The TE tools use the TEContext provider pattern: they call get_ctx() which
+returns a context object with get_pool(), async_load_config(), and
+get_embeddings_model() methods.
 """
 
 import uuid
@@ -46,6 +47,16 @@ def mock_emb_model():
     return model
 
 
+def _make_mock_ctx(mock_config, mock_pool, mock_emb_model=None):
+    """Build a mock TEContext with standard attributes configured."""
+    ctx = MagicMock()
+    ctx.async_load_config = AsyncMock(return_value=mock_config)
+    ctx.get_pool.return_value = mock_pool
+    if mock_emb_model is not None:
+        ctx.get_embeddings_model.return_value = mock_emb_model
+    return ctx
+
+
 # ── store_domain_info ─────────────────────────────────────────────────
 
 
@@ -53,10 +64,9 @@ def mock_emb_model():
 async def test_store_domain_info_success(mock_pool, mock_config, mock_emb_model):
     """Embeds content and inserts into domain_information table."""
     mock_pool.execute = AsyncMock()
+    ctx = _make_mock_ctx(mock_config, mock_pool, mock_emb_model)
 
-    with patch("app.config.async_load_config", return_value=mock_config), \
-         patch("context_broker_te.tools.operational.get_pg_pool", return_value=mock_pool), \
-         patch("app.config.get_embeddings_model", return_value=mock_emb_model):
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx):
         result = await store_domain_info.ainvoke({"content": "Deployment uses blue-green strategy"})
 
     assert "Stored domain information" in result
@@ -70,10 +80,9 @@ async def test_store_domain_info_success(mock_pool, mock_config, mock_emb_model)
 async def test_store_domain_info_returns_error_on_failure(mock_pool, mock_config, mock_emb_model):
     """Returns error string on DB failure."""
     mock_pool.execute = AsyncMock(side_effect=asyncpg.PostgresError("insert failed"))
+    ctx = _make_mock_ctx(mock_config, mock_pool, mock_emb_model)
 
-    with patch("app.config.async_load_config", return_value=mock_config), \
-         patch("context_broker_te.tools.operational.get_pg_pool", return_value=mock_pool), \
-         patch("app.config.get_embeddings_model", return_value=mock_emb_model):
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx):
         result = await store_domain_info.ainvoke({"content": "test content"})
 
     assert "Failed to store domain information" in result
@@ -83,10 +92,9 @@ async def test_store_domain_info_returns_error_on_failure(mock_pool, mock_config
 async def test_store_domain_info_custom_source(mock_pool, mock_config, mock_emb_model):
     """Uses custom source parameter."""
     mock_pool.execute = AsyncMock()
+    ctx = _make_mock_ctx(mock_config, mock_pool, mock_emb_model)
 
-    with patch("app.config.async_load_config", return_value=mock_config), \
-         patch("context_broker_te.tools.operational.get_pg_pool", return_value=mock_pool), \
-         patch("app.config.get_embeddings_model", return_value=mock_emb_model):
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx):
         result = await store_domain_info.ainvoke({"content": "test", "source": "manual"})
 
     call_args = mock_pool.execute.call_args[0]
@@ -108,10 +116,9 @@ async def test_search_domain_info_returns_results(mock_pool, mock_config, mock_e
         "similarity": 0.95,
     }[k]
     mock_pool.fetch = AsyncMock(return_value=[mock_row])
+    ctx = _make_mock_ctx(mock_config, mock_pool, mock_emb_model)
 
-    with patch("app.config.async_load_config", return_value=mock_config), \
-         patch("context_broker_te.tools.operational.get_pg_pool", return_value=mock_pool), \
-         patch("app.config.get_embeddings_model", return_value=mock_emb_model):
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx):
         result = await search_domain_info.ainvoke({"query": "deployment strategy"})
 
     assert "Found 1 relevant" in result
@@ -122,10 +129,9 @@ async def test_search_domain_info_returns_results(mock_pool, mock_config, mock_e
 async def test_search_domain_info_no_results(mock_pool, mock_config, mock_emb_model):
     """Returns 'no results' message when empty."""
     mock_pool.fetch = AsyncMock(return_value=[])
+    ctx = _make_mock_ctx(mock_config, mock_pool, mock_emb_model)
 
-    with patch("app.config.async_load_config", return_value=mock_config), \
-         patch("context_broker_te.tools.operational.get_pg_pool", return_value=mock_pool), \
-         patch("app.config.get_embeddings_model", return_value=mock_emb_model):
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx):
         result = await search_domain_info.ainvoke({"query": "nonexistent"})
 
     assert "No domain information found" in result
@@ -145,9 +151,9 @@ async def test_extract_domain_knowledge_processes_pending(mock_pool, mock_config
     row.__getitem__ = lambda s, k: {"id": entry_id, "content": "fact"}[k]
     mock_pool.fetchval = AsyncMock(return_value=True)  # table exists
     mock_pool.fetch = AsyncMock(return_value=[row])
+    ctx = _make_mock_ctx(mock_config, mock_pool)
 
-    with patch("app.config.async_load_config", return_value=mock_config), \
-         patch("context_broker_te.tools.operational.get_pg_pool", return_value=mock_pool), \
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx), \
          patch("context_broker_te.domain_mem0.get_domain_mem0", return_value=mock_mem0):
         result = await extract_domain_knowledge.ainvoke({"content": ""})
 
@@ -159,9 +165,9 @@ async def test_extract_domain_knowledge_specific_content(mock_pool, mock_config)
     """Handles specific content extraction."""
     mock_mem0 = MagicMock()
     mock_mem0.add.return_value = {"results": ["extracted"]}
+    ctx = _make_mock_ctx(mock_config, mock_pool)
 
-    with patch("app.config.async_load_config", return_value=mock_config), \
-         patch("context_broker_te.tools.operational.get_pg_pool", return_value=mock_pool), \
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx), \
          patch("context_broker_te.domain_mem0.get_domain_mem0", return_value=mock_mem0):
         result = await extract_domain_knowledge.ainvoke({"content": "specific fact to extract"})
 
@@ -171,7 +177,10 @@ async def test_extract_domain_knowledge_specific_content(mock_pool, mock_config)
 @pytest.mark.asyncio
 async def test_extract_domain_knowledge_mem0_unavailable(mock_config):
     """Returns error when Mem0 is unavailable."""
-    with patch("app.config.async_load_config", return_value=mock_config), \
+    mock_pool = AsyncMock()
+    ctx = _make_mock_ctx(mock_config, mock_pool)
+
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx), \
          patch("context_broker_te.domain_mem0.get_domain_mem0", return_value=None):
         result = await extract_domain_knowledge.ainvoke({"content": ""})
 
@@ -184,9 +193,9 @@ async def test_extract_domain_knowledge_no_pending(mock_pool, mock_config):
     mock_mem0 = MagicMock()
     mock_pool.fetchval = AsyncMock(return_value=True)  # table exists
     mock_pool.fetch = AsyncMock(return_value=[])  # no pending
+    ctx = _make_mock_ctx(mock_config, mock_pool)
 
-    with patch("app.config.async_load_config", return_value=mock_config), \
-         patch("context_broker_te.tools.operational.get_pg_pool", return_value=mock_pool), \
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx), \
          patch("context_broker_te.domain_mem0.get_domain_mem0", return_value=mock_mem0):
         result = await extract_domain_knowledge.ainvoke({"content": ""})
 
@@ -206,8 +215,10 @@ async def test_search_domain_knowledge_returns_results(mock_config):
             {"memory": "Redis is cache layer"},
         ]
     }
+    mock_pool = AsyncMock()
+    ctx = _make_mock_ctx(mock_config, mock_pool)
 
-    with patch("app.config.async_load_config", return_value=mock_config), \
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx), \
          patch("context_broker_te.domain_mem0.get_domain_mem0", return_value=mock_mem0):
         result = await search_domain_knowledge.ainvoke({"query": "database"})
 
@@ -221,8 +232,10 @@ async def test_search_domain_knowledge_no_results(mock_config):
     """Returns 'no results' message when empty."""
     mock_mem0 = MagicMock()
     mock_mem0.search.return_value = {"results": []}
+    mock_pool = AsyncMock()
+    ctx = _make_mock_ctx(mock_config, mock_pool)
 
-    with patch("app.config.async_load_config", return_value=mock_config), \
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx), \
          patch("context_broker_te.domain_mem0.get_domain_mem0", return_value=mock_mem0):
         result = await search_domain_knowledge.ainvoke({"query": "nonexistent"})
 
@@ -232,7 +245,10 @@ async def test_search_domain_knowledge_no_results(mock_config):
 @pytest.mark.asyncio
 async def test_search_domain_knowledge_mem0_unavailable(mock_config):
     """Returns unavailable message when Mem0 is None."""
-    with patch("app.config.async_load_config", return_value=mock_config), \
+    mock_pool = AsyncMock()
+    ctx = _make_mock_ctx(mock_config, mock_pool)
+
+    with patch("context_broker_te.tools.operational.get_ctx", return_value=ctx), \
          patch("context_broker_te.domain_mem0.get_domain_mem0", return_value=None):
         result = await search_domain_knowledge.ainvoke({"query": "test"})
 

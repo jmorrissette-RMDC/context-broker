@@ -342,8 +342,9 @@ async def test_write_batch_empty_is_noop(shipper):
 @pytest.mark.asyncio
 async def test_write_batch_handles_db_failure(shipper):
     """_write_batch() handles DB failure gracefully (logs error, does not raise)."""
+    import asyncpg
     mock_conn = AsyncMock()
-    mock_conn.executemany = AsyncMock(side_effect=Exception("DB down"))
+    mock_conn.executemany = AsyncMock(side_effect=asyncpg.PostgresError("DB down"))
 
     shipper.pg_pool = _mock_pg_pool(conn=mock_conn)
 

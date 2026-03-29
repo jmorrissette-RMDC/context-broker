@@ -37,10 +37,7 @@ logging.getLogger().addHandler(_handler)
 logger = logging.getLogger("log_shipper")
 
 # Configuration
-POSTGRES_DSN = os.environ.get("POSTGRES_DSN")
-if not POSTGRES_DSN:
-    print("ERROR: POSTGRES_DSN environment variable is required. Set it in docker-compose.yml.", file=sys.stderr)
-    sys.exit(1)
+POSTGRES_DSN = os.environ.get("POSTGRES_DSN", "")
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "100"))
 FLUSH_INTERVAL_SEC = float(os.environ.get("FLUSH_INTERVAL_SEC", "1.0"))
 

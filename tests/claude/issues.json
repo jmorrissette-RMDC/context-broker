@@ -1,11 +1,353 @@
 [
   {
+    "test_name": "test_tool_file_write",
+    "timestamp": "2026-03-29T05:54:11.641085+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "None of expected keywords ['written', 'created', 'saved', 'success', 'wrote'] found in response",
+    "expected": "written, created, saved, success, wrote",
+    "actual": "My apologies. I was unable to write the file due to a \"Permission denied\" error.\n\nI then attempted to diagnose the issue by checking the directory's permissions with the `ls -ld` command, but this command is not on my allowed list for security reasons.\n\nThis indicates an issue with the underlying fi"
+  },
+  {
+    "test_name": "test_tool_update_system_prompt",
+    "timestamp": "2026-03-29T05:54:20.597960+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "update_system_prompt not found in tools/list",
+    "expected": "update_system_prompt in tool list",
+    "actual": "['get_context', 'store_message', 'search_messages', 'search_knowledge', 'conv_create_conversation', 'conv_delete_conversation', 'conv_rename_conversation', 'conv_list_conversations', 'conv_store_message', 'conv_retrieve_context', 'conv_create_context_window', 'conv_search', 'conv_search_messages', 'conv_get_history', 'conv_search_context_windows', 'query_logs', 'search_logs', 'mem_search', 'mem_get_context', 'mem_add']"
+  },
+  {
+    "test_name": "test_tool_calculate",
+    "timestamp": "2026-03-29T05:54:55.661146+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "None of expected keywords ['870'] found in response",
+    "expected": "870",
+    "actual": "I was unable to complete that request within the allowed number of steps. Please try again, or break the request into smaller parts."
+  },
+  {
+    "test_name": "test_standard_tiered_summaries_in_db",
+    "timestamp": "2026-03-29T05:55:30.519134+00:00",
+    "severity": "warning",
+    "category": "assembly",
+    "description": "Conversation None (cd0a30df-9d84-43e3-ae83-5ac367659c5a) has no summaries",
+    "expected": ">0 summaries",
+    "actual": "0"
+  },
+  {
+    "test_name": "test_standard_tiered_summaries_in_db",
+    "timestamp": "2026-03-29T05:55:30.982858+00:00",
+    "severity": "warning",
+    "category": "assembly",
+    "description": "Conversation phase-c-test-8e6b0dd9 (d0bc4921-6349-4847-9305-512a2aa38128) has no summaries",
+    "expected": ">0 summaries",
+    "actual": "0"
+  },
+  {
+    "test_name": "test_tool_create_schedule",
+    "timestamp": "2026-03-29T05:56:33.203654+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "None of expected keywords ['created', 'schedule', 'heartbeat', 'claude-test'] found in response",
+    "expected": "created, schedule, heartbeat, claude-test",
+    "actual": "I have searched your conversation history for discussions about a public exposure strategy involving Substack and LinkedIn. Here is a summary of what I found:\n\nOur previous conversations indicate a two-pronged strategy:\n\n1.  **Substack for Long-Form Content**: The primary platform for detailed, tech"
+  },
+  {
+    "test_name": "test_tool_turn_0",
+    "timestamp": "2026-03-29T05:57:14.557203+00:00",
+    "severity": "info",
+    "category": "imperator",
+    "description": "Turn 0: expected tool 'get_context' not detected in response",
+    "expected": "Tool 'get_context' used",
+    "actual": "Tools used: none detected"
+  },
+  {
+    "test_name": "test_tool_turn_1",
+    "timestamp": "2026-03-29T05:57:14.566915+00:00",
+    "severity": "info",
+    "category": "imperator",
+    "description": "Turn 1: expected tool 'search_messages' not detected in response",
+    "expected": "Tool 'search_messages' used",
+    "actual": "Tools used: none detected"
+  },
+  {
+    "test_name": "test_tool_turn_2",
+    "timestamp": "2026-03-29T05:57:14.574949+00:00",
+    "severity": "info",
+    "category": "imperator",
+    "description": "Turn 2: expected tool 'search_messages' not detected in response",
+    "expected": "Tool 'search_messages' used",
+    "actual": "Tools used: none detected"
+  },
+  {
+    "test_name": "test_tool_turn_3",
+    "timestamp": "2026-03-29T05:57:14.584742+00:00",
+    "severity": "info",
+    "category": "imperator",
+    "description": "Turn 3: expected tool 'search_messages' not detected in response",
+    "expected": "Tool 'search_messages' used",
+    "actual": "Tools used: none detected"
+  },
+  {
+    "test_name": "test_tool_turn_4",
+    "timestamp": "2026-03-29T05:57:14.593092+00:00",
+    "severity": "info",
+    "category": "imperator",
+    "description": "Turn 4: expected tool 'search_messages' not detected in response",
+    "expected": "Tool 'search_messages' used",
+    "actual": "Tools used: none detected"
+  },
+  {
+    "test_name": "test_tool_turn_6",
+    "timestamp": "2026-03-29T05:57:14.602445+00:00",
+    "severity": "info",
+    "category": "imperator",
+    "description": "Turn 6: expected tool 'search_messages' not detected in response",
+    "expected": "Tool 'search_messages' used",
+    "actual": "Tools used: none detected"
+  },
+  {
+    "test_name": "test_tool_turn_7",
+    "timestamp": "2026-03-29T05:57:14.610983+00:00",
+    "severity": "info",
+    "category": "imperator",
+    "description": "Turn 7: expected tool 'search_messages' not detected in response",
+    "expected": "Tool 'search_messages' used",
+    "actual": "Tools used: none detected"
+  },
+  {
+    "test_name": "test_tool_list_alert_instructions",
+    "timestamp": "2026-03-29T05:57:21.555278+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "None of expected keywords ['alert', 'instruction', 'test', 'no instruction', 'none'] found in response",
+    "expected": "alert, instruction, test, no instruction, none",
+    "actual": "Of course. Here is a summary of your work based on our conversations:\n\n*   **You are building the Context Broker,** a sophisticated system designed to provide long-term, durable memory for AI agents. It's built on a \"MAD\" (Microservices, Async, Database-centric) architecture and features a critical "
+  },
+  {
+    "test_name": "test_tool_file_write",
+    "timestamp": "2026-03-29T05:58:17.671158+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "None of expected keywords ['written', 'created', 'saved', 'success', 'wrote'] found in response",
+    "expected": "written, created, saved, success, wrote",
+    "actual": "I've enabled verbose logging. Any subsequent operations in the background pipelines will now produce detailed logs."
+  },
+  {
+    "test_name": "test_tool_update_system_prompt",
+    "timestamp": "2026-03-29T05:58:25.003736+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "update_system_prompt not found in tools/list",
+    "expected": "update_system_prompt in tool list",
+    "actual": "['get_context', 'store_message', 'search_messages', 'search_knowledge', 'conv_create_conversation', 'conv_delete_conversation', 'conv_rename_conversation', 'conv_list_conversations', 'conv_store_message', 'conv_retrieve_context', 'conv_create_context_window', 'conv_search', 'conv_search_messages', 'conv_get_history', 'conv_search_context_windows', 'query_logs', 'search_logs', 'mem_search', 'mem_get_context', 'mem_add']"
+  },
+  {
+    "test_name": "test_tool_migrate_embeddings_dry_run",
+    "timestamp": "2026-03-29T05:58:31.388614+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "None of expected keywords ['dry run', 'wipe', 'migration', 'embedding', 'dimension', 'preview', '1536'] found in response",
+    "expected": "dry run, wipe, migration, embedding, dimension, preview, 1536",
+    "actual": "Based on our conversations, here is a summary of your work:\n\n*   **You are building the Context Broker,** a sophisticated system designed to provide long-term, durable memory for AI agents. It's built on a \"MAD\" (Microservices, Async, Database-centric) architecture and features a critical separation"
+  },
+  {
+    "test_name": "test_diagnostic_context_introspection",
+    "timestamp": "2026-03-29T05:58:58.432440+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "Expected keyword 'context' not found in response",
+    "expected": "context",
+    "actual": "I can do that, but I need the conversation's UUID to identify it.\n\nCould you please provide the conversation ID? You can usually find it in the URL of your chat window."
+  },
+  {
+    "test_name": "test_diagnostic_pipeline_status",
+    "timestamp": "2026-03-29T05:59:17.058507+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "Expected keyword 'pipeline' not found in response",
+    "expected": "pipeline",
+    "actual": "I was unable to complete that request within the allowed number of steps. Please try again, or break the request into smaller parts."
+  },
+  {
+    "test_name": "test_admin_config_read",
+    "timestamp": "2026-03-29T06:00:04.228828+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "Expected keyword 'gemini' not found in response",
+    "expected": "gemini",
+    "actual": "I am sorry, but I was unable to disable verbose logging. The system returned a \"Permission denied\" error, which means I do not have the necessary permissions to modify the configuration file.\n\nThis is"
+  },
+  {
+    "test_name": "test_tool_search_domain_info",
+    "timestamp": "2026-03-29T06:00:10.248201+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "None of expected keywords ['test suite', 'result', 'found', 'no result', 'domain', 'port', '8081'] found in response",
+    "expected": "test suite, result, found, no result, domain, port, 8081",
+    "actual": "I couldn't find any information about \"State 3 and State 4 MADs\" in my knowledge base. It seems I haven't learned about that specific topic yet.\n\nCould you tell me more about it, or is there another topic I can help you with?"
+  },
+  {
+    "test_name": "test_admin_verbose_toggle",
+    "timestamp": "2026-03-29T06:00:18.262305+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "Expected keyword 'verbose' not found in response",
+    "expected": "verbose",
+    "actual": "I couldn't find any information about \"State 3 and State 4 MADs\" in my knowledge base.\n\nIt seems this is a concept I haven't been trained on or encountered in our conversations yet. Would you like me "
+  },
+  {
+    "test_name": "test_admin_verbose_toggle",
+    "timestamp": "2026-03-29T06:00:18.272426+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "Expected keyword 'toggle' not found in response",
+    "expected": "toggle",
+    "actual": "I couldn't find any information about \"State 3 and State 4 MADs\" in my knowledge base.\n\nIt seems this is a concept I haven't been trained on or encountered in our conversations yet. Would you like me "
+  },
+  {
+    "test_name": "test_file_write",
+    "timestamp": "2026-03-29T06:00:54.413385+00:00",
+    "severity": "warning",
+    "category": "imperator",
+    "description": "Imperator did not invoke file_write: I am sorry, but I was unable to write the file. The system returned a \"Permission denied\" error, which means I do not have the necessary permissions to write to the `/data/downloads/` directory.\n\nThis is a system-level restriction that I cannot change. I apologize for the inconvenience.",
+    "expected": "",
+    "actual": ""
+  },
+  {
+    "test_name": "test_tool_list_alert_instructions",
+    "timestamp": "2026-03-29T06:01:04.720723+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "None of expected keywords ['alert', 'instruction', 'test', 'no instruction', 'none'] found in response",
+    "expected": "alert, instruction, test, no instruction, none",
+    "actual": "I'm sorry, but I was unable to run the `uptime` command. The system returned the following error:\n\n`[Errno 2] No such file or directory: 'uptime'`\n\nThis means the `uptime` command is not available in the environment where I execute commands. I apologize for the inconvenience."
+  },
+  {
+    "test_name": "test_diagnostic_pipeline_status",
+    "timestamp": "2026-03-29T06:02:21.429177+00:00",
+    "severity": "warning",
+    "category": "imperator-tool",
+    "description": "Expected keyword 'pipeline' not found in response",
+    "expected": "pipeline",
+    "actual": "There are no pending embedding jobs, but there are 9,232 messages waiting for knowledge extraction. In the last hour, the system has created 42 summaries and embedded 10,320 messages."
+  },
+  {
+    "test_name": "test_file_write",
+    "timestamp": "2026-03-29T06:04:17.785445+00:00",
+    "severity": "warning",
+    "category": "imperator",
+    "description": "Imperator did not invoke file_write: I am sorry, but I was unable to write the file. The system returned a \"Permission denied\" error, which means I do not have the necessary permissions to write to the `/data/downloads` directory.\n\nThis is likely a system-level restriction that I cannot change. I apologize for the inconvenience.",
+    "expected": "",
+    "actual": ""
+  },
+  {
+    "test_name": "test_tiered_summary_quality",
+    "timestamp": "2026-03-29T06:04:36.067699+00:00",
+    "severity": "error",
+    "category": "quality-tiered",
+    "description": "LLM judge rating: POOR",
+    "expected": "GOOD or ACCEPTABLE",
+    "actual": "Rating: POOR. Judge response excerpt: The assembled context has several issues worth noting:\n\n**Strengths:**\n- Captures the main topic (website/GitHub Pages deployment work) reasonably well\n- Preserves key details like URLs, file names, and specific errors encountered\n- The narrative arc of the website work is coherent\n\n**Weaknesses:**\n- The archival context and recent summaries are about a personal website project, but the sample ori"
+  },
+  {
+    "test_name": "test_enriched_quality",
+    "timestamp": "2026-03-29T06:04:47.664116+00:00",
+    "severity": "error",
+    "category": "quality-enriched",
+    "description": "LLM judge rating: POOR",
+    "expected": "GOOD or ACCEPTABLE",
+    "actual": "Rating: POOR. Judge response excerpt: The enriched context output consists entirely of repeated `<local-command-caveat>` wrapper messages with no actual content \u00e2\u20ac\u201d the last entry is even truncated mid-sentence. There is:\n\n1. **No semantic enrichment** \u00e2\u20ac\u201d no related memories, knowledge graph facts, or entity relationships\n2. **No value beyond raw message history** \u00e2\u20ac\u201d the \"messages\" themselves are just boilerplate caveats with no sub"
+  },
+  {
     "test_name": "test_knowledge_extraction_quality",
-    "timestamp": "2026-03-28T19:16:51.639727+00:00",
+    "timestamp": "2026-03-29T06:05:12.298137+00:00",
     "severity": "warning",
     "category": "quality-extraction",
     "description": "LLM judge rating: ACCEPTABLE",
     "expected": "GOOD or ACCEPTABLE",
-    "actual": "Rating: ACCEPTABLE. Judge response excerpt: **Evaluation:**\n\n**Strengths:**\n- Memory 2 is excellent \u00e2\u20ac\u201d a dense, factual inventory of deployed services with clear naming conventions\n- Memory 3 captures concrete infrastructure specs (87TB ZFS, 256GB RAM, 6 GPUs) that would be useful context\n- Memories 4, 5, 6, 7 capture architectural concepts (MAD, AE/TE, State 2/3) consistently and discretely\n- Memory 1 correctly distinguishes Blueprint fro"
+    "actual": "Rating: ACCEPTABLE. Judge response excerpt: **Assessment by criterion:**\n\n**1. Discrete, factual information**\nMixed. Memories 6, 7, 8, 9, 10 capture discrete facts. Memory 5 (\"Author: Design Session (polished-baking-wigderson)\") is not a fact \u00e2\u20ac\u201d it appears to be a raw session label or conversation ID that leaked through. Memory 2 (\"Was asking about...\") captures an ephemeral action, not a fact.\n\n**2. Well-formed and understandable out of "
+  },
+  {
+    "test_name": "test_imperator_coherence",
+    "timestamp": "2026-03-29T06:05:43.764022+00:00",
+    "severity": "warning",
+    "category": "quality-imperator",
+    "description": "LLM judge rating: ACCEPTABLE",
+    "expected": "GOOD or ACCEPTABLE",
+    "actual": "Rating: ACCEPTABLE. Judge response excerpt: **Evaluation of Imperator's Response**\n\n**Criterion 1 \u00e2\u20ac\u201d All three parts addressed?**\nYes. The response explicitly covers each numbered item with a corresponding numbered section. Even in failure, nothing is silently skipped.\n\n**Criterion 2 \u00e2\u20ac\u201d Coherent and well-structured?**\nYes. The mirrored numbering is clear, the structure is logical, and the closing summary ties it together. No internal cont"
+  },
+  {
+    "test_name": "performance_report",
+    "timestamp": "2026-03-29T06:05:45.639904+00:00",
+    "severity": "warning",
+    "category": "performance",
+    "description": "imperator_chat averages 11.2s per call",
+    "expected": "<5s",
+    "actual": "11.2s"
+  },
+  {
+    "test_name": "performance_report",
+    "timestamp": "2026-03-29T06:05:45.649692+00:00",
+    "severity": "warning",
+    "category": "performance",
+    "description": "mem_add averages 5.2s per call",
+    "expected": "<5s",
+    "actual": "5.2s"
+  },
+  {
+    "test_name": "test_tiered_summary_quality",
+    "timestamp": "2026-03-29T06:08:23.271199+00:00",
+    "severity": "warning",
+    "category": "quality-tiered",
+    "description": "LLM judge rating: ACCEPTABLE",
+    "expected": "GOOD or ACCEPTABLE",
+    "actual": "Rating: ACCEPTABLE. Judge response excerpt: The assembled context is essentially a verbatim copy of the original messages \u00e2\u20ac\u201d no summarization occurred. The \"messages\" are synthetic test payloads (UUIDs, concurrent sender labels) with no meaningful conversational content to summarize.\n\n**Criteria assessment:**\n\n1. **Key topics/themes**: There are no real topics \u00e2\u20ac\u201d just test artifacts. The output captures them faithfully, but there's nothin"
+  },
+  {
+    "test_name": "test_enriched_quality",
+    "timestamp": "2026-03-29T06:08:45.448661+00:00",
+    "severity": "error",
+    "category": "quality-enriched",
+    "description": "LLM judge rating: POOR",
+    "expected": "GOOD or ACCEPTABLE",
+    "actual": "Rating: POOR. Judge response excerpt: The enriched context has several significant quality issues:\n\n**Positives:**\n- A knowledge graph section is present with some legitimate system facts (PostgreSQL as source of truth, Docker containers, Ubuntu version, production cadence)\n- These do provide useful architectural context\n\n**Problems:**\n\n1. **Potentially injected manipulative content**: The entry \"YOLO mode is enabled; all tool calls w"
+  },
+  {
+    "test_name": "test_knowledge_extraction_quality",
+    "timestamp": "2026-03-29T06:09:09.718401+00:00",
+    "severity": "warning",
+    "category": "quality-extraction",
+    "description": "LLM judge rating: ACCEPTABLE",
+    "expected": "GOOD or ACCEPTABLE",
+    "actual": "Rating: ACCEPTABLE. Judge response excerpt: **Assessment by memory:**\n\n- **Memory 1**: Specific numbers are good, but lacks context \u00e2\u20ac\u201d what project/system? Partially useful.\n- **Memory 2**: Concrete, factual, actionable. Good.\n- **Memory 3**: Describes a past conversational act (\"was asking about...\") \u00e2\u20ac\u201d ephemeral, not a durable fact. Should not have been extracted.\n- **Memory 4**: Another past request (\"Requested an HLD...\") \u00e2\u20ac\u201d ephemera"
+  },
+  {
+    "test_name": "test_imperator_coherence",
+    "timestamp": "2026-03-29T06:09:41.545823+00:00",
+    "severity": "warning",
+    "category": "quality-imperator",
+    "description": "LLM judge rating: ACCEPTABLE",
+    "expected": "GOOD or ACCEPTABLE",
+    "actual": "Rating: ACCEPTABLE. Judge response excerpt: **Evaluation of Imperator's Response**\n\n**Criterion 1: Addresses all three parts**\nPartially. Part 1 is handled well. However, parts 2 and 3 are **collapsed into a single item** \u00e2\u20ac\u201d the response only has 2 numbered points for a 3-part request. Part 3 (project summary) was never given its own response; it was silently merged into the error for part 2. This is a structural failure even if an error o"
+  },
+  {
+    "test_name": "performance_report",
+    "timestamp": "2026-03-29T06:09:43.478186+00:00",
+    "severity": "warning",
+    "category": "performance",
+    "description": "imperator_chat averages 11.2s per call",
+    "expected": "<5s",
+    "actual": "11.2s"
+  },
+  {
+    "test_name": "performance_report",
+    "timestamp": "2026-03-29T06:09:43.488200+00:00",
+    "severity": "warning",
+    "category": "performance",
+    "description": "mem_add averages 5.2s per call",
+    "expected": "<5s",
+    "actual": "5.2s"
   }
 ]

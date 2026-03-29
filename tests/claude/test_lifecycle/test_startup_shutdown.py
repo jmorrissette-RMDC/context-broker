@@ -42,12 +42,10 @@ def _config_bad_build_type():
 async def test_startup_raises_on_bad_build_type_config():
     """get_build_type_config raising ValueError should abort startup."""
     with (
-        patch("app.main.load_config", return_value=_config_bad_build_type()),
+        patch("app.main.async_load_config", AsyncMock(return_value=_config_bad_build_type())),
         patch("app.main.update_log_level"),
         patch(
-            "app.main.scan_stategraph_packages"
-            if False
-            else "app.stategraph_registry.scan",
+            "app.stategraph_registry.scan",
             return_value={"ae": True, "te": True},
         ),
         patch(
@@ -71,7 +69,7 @@ async def test_startup_raises_on_bad_build_type_config():
 async def test_startup_raises_when_embedding_dims_missing():
     """Startup must fail fast when embeddings.embedding_dims is absent."""
     with (
-        patch("app.main.load_config", return_value=_config_missing_dims()),
+        patch("app.main.async_load_config", AsyncMock(return_value=_config_missing_dims())),
         patch("app.main.update_log_level"),
         patch(
             "app.stategraph_registry.scan",
@@ -111,7 +109,7 @@ async def test_postgres_retry_loop_retries_and_succeeds():
 
     cfg = {**_VALID_CONFIG}
     with (
-        patch("app.main.load_config", return_value=cfg),
+        patch("app.main.async_load_config", AsyncMock(return_value=cfg)),
         patch("app.main.get_tuning", return_value=0),
         patch("app.main.init_postgres", side_effect=fake_init),
         patch("app.main.run_migrations", new_callable=AsyncMock) as mock_mig,
@@ -141,7 +139,7 @@ async def test_postgres_retry_loop_retries_imperator_init():
 
     cfg = {**_VALID_CONFIG}
     with (
-        patch("app.main.load_config", return_value=cfg),
+        patch("app.main.async_load_config", AsyncMock(return_value=cfg)),
         patch("app.main.get_tuning", return_value=0),
     ):
         await _postgres_retry_loop(fake_app, cfg)
@@ -159,7 +157,7 @@ async def test_postgres_retry_loop_retries_imperator_init():
 async def test_degraded_mode_sets_postgres_unavailable():
     """When init_postgres raises, app should enter degraded mode."""
     with (
-        patch("app.main.load_config", return_value=_VALID_CONFIG),
+        patch("app.main.async_load_config", AsyncMock(return_value=_VALID_CONFIG)),
         patch("app.main.update_log_level"),
         patch(
             "app.stategraph_registry.scan",
@@ -192,7 +190,7 @@ async def test_degraded_mode_sets_postgres_unavailable():
 async def test_domain_knowledge_seed_import_error_is_non_fatal():
     """ImportError from seed_knowledge should be caught and logged, not crash."""
     with (
-        patch("app.main.load_config", return_value=_VALID_CONFIG),
+        patch("app.main.async_load_config", AsyncMock(return_value=_VALID_CONFIG)),
         patch("app.main.update_log_level"),
         patch(
             "app.stategraph_registry.scan",
@@ -237,7 +235,7 @@ async def test_domain_knowledge_seed_import_error_is_non_fatal():
 async def test_shutdown_cancels_tasks_and_closes_connections():
     """Shutdown should cancel worker/retry tasks and close DB connections."""
     with (
-        patch("app.main.load_config", return_value=_VALID_CONFIG),
+        patch("app.main.async_load_config", AsyncMock(return_value=_VALID_CONFIG)),
         patch("app.main.update_log_level"),
         patch(
             "app.stategraph_registry.scan",
@@ -298,6 +296,9 @@ async def test_known_exception_handler_runtime_error():
     async def _raise():
         raise RuntimeError("boom")
 
+    # Ensure postgres is marked available so middleware doesn't block
+    app.state.postgres_available = True
+
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test-raise-runtime")
@@ -318,6 +319,8 @@ async def test_known_exception_handler_value_error():
     async def _raise():
         raise ValueError("bad value")
 
+    app.state.postgres_available = True
+
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test-raise-value")
@@ -335,6 +338,8 @@ async def test_known_exception_handler_os_error():
     @app.get("/test-raise-os")
     async def _raise():
         raise OSError("disk full")
+
+    app.state.postgres_available = True
 
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -354,6 +359,8 @@ async def test_known_exception_handler_connection_error():
     async def _raise():
         raise ConnectionError("refused")
 
+    app.state.postgres_available = True
+
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/test-raise-conn")
@@ -371,6 +378,8 @@ async def test_known_exception_handler_asyncpg_error():
     @app.get("/test-raise-pg")
     async def _raise():
         raise asyncpg.PostgresError("relation does not exist")
+
+    app.state.postgres_available = True
 
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

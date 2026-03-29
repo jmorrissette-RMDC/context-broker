@@ -1,7 +1,7 @@
 """Tests for scheduling tools — create, enable, disable schedules."""
 
 import uuid
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -11,6 +11,13 @@ def mock_pool():
     """Return an AsyncMock that behaves like an asyncpg pool."""
     pool = AsyncMock()
     return pool
+
+
+def _make_mock_ctx(mock_pool):
+    """Build a mock TEContext with get_pool configured."""
+    ctx = MagicMock()
+    ctx.get_pool.return_value = mock_pool
+    return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -23,10 +30,11 @@ async def test_create_schedule_cron(mock_pool):
     """create_schedule() inserts a cron schedule into the DB."""
     sched_id = uuid.uuid4()
     mock_pool.fetchrow = AsyncMock(return_value={"id": sched_id})
+    ctx = _make_mock_ctx(mock_pool)
 
     with patch(
-        "context_broker_te.tools.scheduling.get_pg_pool",
-        return_value=mock_pool,
+        "context_broker_te.tools.scheduling.get_ctx",
+        return_value=ctx,
     ):
         from context_broker_te.tools.scheduling import create_schedule
 
@@ -49,10 +57,11 @@ async def test_create_schedule_interval(mock_pool):
     """create_schedule() inserts an interval schedule into the DB."""
     sched_id = uuid.uuid4()
     mock_pool.fetchrow = AsyncMock(return_value={"id": sched_id})
+    ctx = _make_mock_ctx(mock_pool)
 
     with patch(
-        "context_broker_te.tools.scheduling.get_pg_pool",
-        return_value=mock_pool,
+        "context_broker_te.tools.scheduling.get_ctx",
+        return_value=ctx,
     ):
         from context_broker_te.tools.scheduling import create_schedule
 
@@ -71,9 +80,11 @@ async def test_create_schedule_interval(mock_pool):
 @pytest.mark.asyncio
 async def test_create_schedule_rejects_short_interval(mock_pool):
     """create_schedule() rejects intervals shorter than 30 seconds."""
+    ctx = _make_mock_ctx(mock_pool)
+
     with patch(
-        "context_broker_te.tools.scheduling.get_pg_pool",
-        return_value=mock_pool,
+        "context_broker_te.tools.scheduling.get_ctx",
+        return_value=ctx,
     ):
         from context_broker_te.tools.scheduling import create_schedule
 
@@ -93,9 +104,11 @@ async def test_create_schedule_rejects_short_interval(mock_pool):
 @pytest.mark.asyncio
 async def test_create_schedule_rejects_invalid_type(mock_pool):
     """create_schedule() rejects an invalid schedule_type."""
+    ctx = _make_mock_ctx(mock_pool)
+
     with patch(
-        "context_broker_te.tools.scheduling.get_pg_pool",
-        return_value=mock_pool,
+        "context_broker_te.tools.scheduling.get_ctx",
+        return_value=ctx,
     ):
         from context_broker_te.tools.scheduling import create_schedule
 
@@ -121,10 +134,11 @@ async def test_enable_schedule_updates_enabled_true(mock_pool):
     """enable_schedule() updates enabled=TRUE for the given schedule."""
     sched_id = str(uuid.uuid4())
     mock_pool.execute = AsyncMock(return_value="UPDATE 1")
+    ctx = _make_mock_ctx(mock_pool)
 
     with patch(
-        "context_broker_te.tools.scheduling.get_pg_pool",
-        return_value=mock_pool,
+        "context_broker_te.tools.scheduling.get_ctx",
+        return_value=ctx,
     ):
         from context_broker_te.tools.scheduling import enable_schedule
 
@@ -141,10 +155,11 @@ async def test_enable_schedule_not_found(mock_pool):
     """enable_schedule() reports not found when no row is updated."""
     sched_id = str(uuid.uuid4())
     mock_pool.execute = AsyncMock(return_value="UPDATE 0")
+    ctx = _make_mock_ctx(mock_pool)
 
     with patch(
-        "context_broker_te.tools.scheduling.get_pg_pool",
-        return_value=mock_pool,
+        "context_broker_te.tools.scheduling.get_ctx",
+        return_value=ctx,
     ):
         from context_broker_te.tools.scheduling import enable_schedule
 
@@ -163,10 +178,11 @@ async def test_disable_schedule_updates_enabled_false(mock_pool):
     """disable_schedule() updates enabled=FALSE for the given schedule."""
     sched_id = str(uuid.uuid4())
     mock_pool.execute = AsyncMock(return_value="UPDATE 1")
+    ctx = _make_mock_ctx(mock_pool)
 
     with patch(
-        "context_broker_te.tools.scheduling.get_pg_pool",
-        return_value=mock_pool,
+        "context_broker_te.tools.scheduling.get_ctx",
+        return_value=ctx,
     ):
         from context_broker_te.tools.scheduling import disable_schedule
 
@@ -183,10 +199,11 @@ async def test_disable_schedule_not_found(mock_pool):
     """disable_schedule() reports not found when no row is updated."""
     sched_id = str(uuid.uuid4())
     mock_pool.execute = AsyncMock(return_value="UPDATE 0")
+    ctx = _make_mock_ctx(mock_pool)
 
     with patch(
-        "context_broker_te.tools.scheduling.get_pg_pool",
-        return_value=mock_pool,
+        "context_broker_te.tools.scheduling.get_ctx",
+        return_value=ctx,
     ):
         from context_broker_te.tools.scheduling import disable_schedule
 

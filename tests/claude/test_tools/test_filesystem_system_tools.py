@@ -108,7 +108,10 @@ async def test_read_system_prompt_returns_content():
     config = {"imperator": {"system_prompt": "imperator_identity"}}
     prompt_text = "You are the Imperator, a system agent."
 
-    with patch("app.config.load_merged_config", return_value=config), \
+    mock_ctx = MagicMock()
+    mock_ctx.load_merged_config.return_value = config
+
+    with patch("context_broker_te._ctx.get_ctx", return_value=mock_ctx), \
          patch("builtins.open", mock_open(read_data=prompt_text)):
         result = await read_system_prompt.ainvoke({})
 
@@ -120,7 +123,10 @@ async def test_read_system_prompt_not_found():
     """Returns error when prompt file is missing."""
     config = {"imperator": {"system_prompt": "nonexistent"}}
 
-    with patch("app.config.load_merged_config", return_value=config), \
+    mock_ctx = MagicMock()
+    mock_ctx.load_merged_config.return_value = config
+
+    with patch("context_broker_te._ctx.get_ctx", return_value=mock_ctx), \
          patch("builtins.open", side_effect=FileNotFoundError("no file")):
         result = await read_system_prompt.ainvoke({})
 
@@ -153,7 +159,10 @@ async def test_update_system_prompt_writes_and_backs_up():
             m = mock_open(read_data=old_content)()
             return m
 
-    with patch("app.config.load_merged_config", return_value=config), \
+    mock_ctx = MagicMock()
+    mock_ctx.load_merged_config.return_value = config
+
+    with patch("context_broker_te._ctx.get_ctx", return_value=mock_ctx), \
          patch("builtins.open", side_effect=smart_open), \
          patch("os.path.exists", return_value=True):
         result = await update_system_prompt.ainvoke({"content": new_content})
@@ -173,24 +182,24 @@ async def test_update_system_prompt_too_short():
 
 
 def test_is_command_allowed_exact():
-    """Exact allowlisted command passes."""
-    assert _is_command_allowed("uptime") is True
-    assert _is_command_allowed("df -h") is True
-    assert _is_command_allowed("hostname") is True
+    """Exact allowlisted binary passes when given as a list."""
+    assert _is_command_allowed(["uptime"]) is True
+    assert _is_command_allowed(["df", "-h"]) is True
+    assert _is_command_allowed(["hostname"]) is True
 
 
 def test_is_command_allowed_prefix():
-    """Prefix-allowlisted commands pass."""
-    assert _is_command_allowed("docker logs mycontainer") is True
-    assert _is_command_allowed("ping -c 4 google.com") is True
-    assert _is_command_allowed("curl -s http://example.com") is True
+    """Allowlisted binaries pass when given with arguments."""
+    assert _is_command_allowed(["ping", "-c", "4", "google.com"]) is True
+    assert _is_command_allowed(["curl", "-s", "http://example.com"]) is True
+    assert _is_command_allowed(["whoami"]) is True
 
 
 def test_is_command_not_allowed():
     """Commands not in allowlist are rejected."""
-    assert _is_command_allowed("rm -rf /") is False
-    assert _is_command_allowed("cat /etc/passwd") is False
-    assert _is_command_allowed("python -c 'import os'") is False
+    assert _is_command_allowed(["rm", "-rf", "/"]) is False
+    assert _is_command_allowed(["cat", "/etc/passwd"]) is False
+    assert _is_command_allowed(["python", "-c", "import os"]) is False
 
 
 @pytest.mark.asyncio
@@ -202,7 +211,7 @@ async def test_run_command_allowed_returns_output():
     async def mock_create_subprocess(*args, **kwargs):
         return mock_proc
 
-    with patch("asyncio.create_subprocess_shell", side_effect=mock_create_subprocess):
+    with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
         result = await run_command.ainvoke({"command": "uptime"})
 
     assert "up 5 days" in result
@@ -210,22 +219,22 @@ async def test_run_command_allowed_returns_output():
 
 @pytest.mark.asyncio
 async def test_run_command_not_allowed():
-    """Command not in allowlist returns error listing permitted commands."""
+    """Command not in allowlist returns error listing permitted binaries."""
     result = await run_command.ainvoke({"command": "rm -rf /"})
     assert "not allowed" in result.lower()
-    assert "Permitted commands" in result
+    assert "Permitted binaries" in result
 
 
 @pytest.mark.asyncio
 async def test_run_command_with_prefix_allowed():
-    """Prefix-allowlisted commands execute successfully."""
+    """Allowlisted binaries with arguments execute successfully."""
     mock_proc = MagicMock()
     mock_proc.communicate = AsyncMock(return_value=(b"PING response\n", b""))
 
     async def mock_create_subprocess(*args, **kwargs):
         return mock_proc
 
-    with patch("asyncio.create_subprocess_shell", side_effect=mock_create_subprocess):
+    with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
         result = await run_command.ainvoke({"command": "ping -c 1 localhost"})
 
     assert "PING response" in result

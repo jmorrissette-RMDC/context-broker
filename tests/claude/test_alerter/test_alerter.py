@@ -187,7 +187,7 @@ async def test_health_with_pool(async_client, mock_pool):
         resp = await async_client.get("/health")
     body = resp.json()
     assert body["status"] == "healthy"
-    assert body["postgres"] is True
+    assert body["postgres"] == "up"
     assert body["instructions"] == 5
 
 
@@ -196,7 +196,7 @@ async def test_health_without_pool(async_client):
     with patch("alerter.alerter._pool", None):
         resp = await async_client.get("/health")
     body = resp.json()
-    assert body["postgres"] is False
+    assert body["postgres"] == "down"
     assert body["instructions"] == 0
 
 
@@ -207,7 +207,7 @@ async def test_health_pool_error(async_client, mock_pool):
     with patch("alerter.alerter._pool", mock_pool):
         resp = await async_client.get("/health")
     body = resp.json()
-    assert body["postgres"] is True
+    assert body["postgres"] == "down"
     assert body["instructions"] == 0
 
 
@@ -640,7 +640,7 @@ async def test_fetch_log_context_no_pool():
 async def test_fetch_log_context_with_rows(mock_pool):
     ts = datetime(2026, 3, 25, 12, 0, 0, tzinfo=timezone.utc)
     mock_pool.fetch.return_value = [
-        {"container_name": "broker", "level": "ERROR", "message": "segfault", "timestamp": ts},
+        {"container_name": "broker", "level": "ERROR", "message": "segfault", "log_timestamp": ts},
     ]
     with patch("alerter.alerter._pool", mock_pool):
         result = await _fetch_log_context({"level": "ERROR", "limit": 10, "minutes": 5})
