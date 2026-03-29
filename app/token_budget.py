@@ -2,7 +2,7 @@
 Token budget resolution for context windows.
 
 Resolves the max_context_tokens setting for a build type:
-- "auto": user_prompt the configured LLM provider's model list endpoint
+- "auto": query the configured LLM provider's model list endpoint
 - explicit integer: use that value directly
 - caller override: takes precedence over build type default
 
@@ -29,7 +29,7 @@ async def resolve_token_budget(
     Priority order:
     1. caller_override (explicit max_tokens from the caller)
     2. build_type_config["max_context_tokens"] if it's an integer
-    3. Auto-user_prompt the LLM provider if max_context_tokens == "auto"
+    3. Auto-query the LLM provider if max_context_tokens == "auto"
     4. fallback_tokens from build_type_config
 
     Args:
@@ -111,7 +111,7 @@ async def _query_provider_context_length(config: dict, fallback: int) -> int:
 
     except httpx.HTTPError as exc:
         _log.warning(
-            "Token budget: failed to user_prompt provider model list: %s, using fallback %d",
+            "Token budget: failed to query provider model list: %s, using fallback %d",
             exc,
             fallback,
         )

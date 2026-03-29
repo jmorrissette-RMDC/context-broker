@@ -10,11 +10,30 @@ import aiodocker
 import asyncpg
 
 # Configure logging for the shipper itself
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S%z",
-)
+
+
+class _JsonFormatter(logging.Formatter):
+    """Format log records as single-line JSON objects."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+
+        entry = {
+            "timestamp": _dt.now(_tz.utc).isoformat(),
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "logger": record.name,
+        }
+        if record.exc_info and record.exc_info[0] is not None:
+            entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(entry)
+
+
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(_JsonFormatter())
+logging.getLogger().setLevel(logging.INFO)
+logging.getLogger().addHandler(_handler)
 logger = logging.getLogger("log_shipper")
 
 # Configuration

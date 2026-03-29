@@ -23,6 +23,11 @@ async def init_postgres(config: dict) -> asyncpg.Pool:
     """Create the asyncpg connection pool using config and environment variables."""
     global _pg_pool
 
+    # CR-M06: Close existing pool to prevent connection leak on re-init
+    if _pg_pool is not None:
+        _log.info("Closing existing PostgreSQL pool before re-initialization")
+        await _pg_pool.close()
+
     db_config = config.get("database", {})
     password = os.environ.get("POSTGRES_PASSWORD", "")
 

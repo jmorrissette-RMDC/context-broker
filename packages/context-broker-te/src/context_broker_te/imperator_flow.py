@@ -280,11 +280,12 @@ async def _load_conversation_history(context_window_id: str, config: dict) -> st
 # ── Graph nodes ──────────────────────────────────────────────────────────
 
 
-async def agent_node(state: ImperatorState) -> dict:
-    """Call the LLM with bound tools and return the response.
+async def init_context_node(state: ImperatorState) -> dict:
+    """First-call setup: load system prompt, domain RAG, get_context for history.
 
-    ARCH-05: This node contains NO loop.  Flow control (tool-call vs
-    final answer) is handled by the conditional edge after this node.
+    CR-A03: Split from agent_node. Only runs when no SystemMessage in state
+    (i.e., first iteration). Subsequent ReAct iterations skip this node
+    via the conditional edge and go directly to llm_call_node.
 
     V2 cache-friendly message structure:
       1. SystemMessage — static identity (cached, never changes)
@@ -295,7 +296,128 @@ async def agent_node(state: ImperatorState) -> dict:
     to preserve prompt caching across turns.
     """
     config = state["config"]
+    ctx = get_ctx()
 
+    imperator_cfg = config.get("imperator", {})
+    prompt_name = imperator_cfg.get("system_prompt", "imperator_identity")
+    try:
+        system_content = await ctx.async_load_prompt(prompt_name)
+    except RuntimeError as exc:
+        _log.error("Failed to load system prompt '%s': %s", prompt_name, exc)
+        return {
+            "messages": [AIMessage(content="I encountered a configuration error.")],
+            "response_text": "I encountered a configuration error.",
+            "error": f"Prompt loading failed: {exc}",
+        }
+
+    # Static system message — identity only (cached by LLM providers)
+    system_msg = SystemMessage(content=system_content)
+
+    messages = list(state["messages"])
+
+    # Extract user's query for RAG-driven retrieval
+    user_query = None
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            user_query = msg.content
+            break
+
+    # Domain RAG: search local domain knowledge for the user's query
+    domain_context = None
+    if user_query:
+        try:
+            pool = ctx.get_pool()
+            emb_model = ctx.get_embeddings_model(config)
+            query_vec = await emb_model.aembed_query(user_query[:500])
+            vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
+
+            rows = await pool.fetch(
+                """
+                SELECT content, 1 - (embedding <=> $1::vector) AS similarity
+                FROM domain_information
+                WHERE embedding IS NOT NULL
+                ORDER BY embedding <=> $1::vector
+                LIMIT 3
+                """,
+                vec_str,
+            )
+            if rows:
+                relevant = [r["content"] for r in rows if float(r["similarity"]) > 0.3]
+                if relevant:
+                    domain_context = "\n".join(f"- {r}" for r in relevant)
+        except (RuntimeError, OSError, ValueError) as exc:
+            _log.debug("Domain RAG lookup skipped: %s", exc)
+
+    # D-07: Load context via get_context with V2 parameters
+    history_messages = []
+    conversation_id = state.get("context_window_id")
+    if conversation_id:
+        try:
+            build_type = imperator_cfg.get("build_type", "tiered-summary")
+            budget = imperator_cfg.get("max_context_tokens", 8192)
+            if not isinstance(budget, int):
+                budget = 8192
+
+            # V2: Pass query, model config, and domain context
+            get_context_args = {
+                "build_type": build_type,
+                "budget": budget,
+                "conversation_id": str(conversation_id),
+            }
+            if user_query:
+                get_context_args["user_prompt"] = user_query
+            if domain_context:
+                get_context_args["domain_context"] = domain_context
+            # Pass the Imperator's own model config for distillation cache
+            get_context_args["model"] = {
+                "base_url": imperator_cfg.get("base_url", ""),
+                "model": imperator_cfg.get("model", ""),
+                "api_key_env": imperator_cfg.get("api_key_env", ""),
+            }
+
+            ctx_result = await ctx.dispatch_tool(
+                "get_context",
+                get_context_args,
+                config,
+                None,
+            )
+            context_messages = ctx_result.get("context", [])
+
+            # V2: Load history as separate messages for prompt caching
+            for msg in context_messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if not content:
+                    continue
+                if role == "assistant":
+                    history_messages.append(AIMessage(content=content))
+                else:
+                    history_messages.append(HumanMessage(content=content))
+        except (ValueError, RuntimeError, OSError) as exc:
+            _log.warning("Failed to load context via get_context: %s", exc)
+
+    # Assemble: system (static, cached) + history (cached prefix) + current messages
+    assembled = [system_msg] + history_messages + messages
+
+    result = {
+        "messages": assembled,
+    }
+
+    # V2: Flag that user message was stored by get_context
+    if user_query and state.get("context_window_id"):
+        result["_user_message_stored"] = True
+
+    return result
+
+
+async def llm_call_node(state: ImperatorState) -> dict:
+    """Call the LLM with bound tools and return the response.
+
+    CR-A03: Split from agent_node. Runs every ReAct iteration.
+    ARCH-05: This node contains NO loop. Flow control (tool-call vs
+    final answer) is handled by the conditional edge after this node.
+    """
+    config = state["config"]
     ctx = get_ctx()
 
     # R7-m14: Use the pre-bound LLM from graph compilation.
@@ -308,112 +430,6 @@ async def agent_node(state: ImperatorState) -> dict:
         llm_with_tools = llm.bind_tools(active_tools)
 
     messages = list(state["messages"])
-    user_query = None  # set inside first-call block if available
-
-    # First call: build cache-friendly message sequence
-    has_system = any(isinstance(m, SystemMessage) for m in messages)
-    if not has_system:
-        imperator_cfg = config.get("imperator", {})
-        prompt_name = imperator_cfg.get("system_prompt", "imperator_identity")
-        try:
-            system_content = await ctx.async_load_prompt(prompt_name)
-        except RuntimeError as exc:
-            _log.error("Failed to load system prompt '%s': %s", prompt_name, exc)
-            return {
-                "messages": [AIMessage(content="I encountered a configuration error.")],
-                "response_text": "I encountered a configuration error.",
-                "error": f"Prompt loading failed: {exc}",
-            }
-
-        # Static system message — identity only (cached by LLM providers)
-        system_msg = SystemMessage(content=system_content)
-
-        # Extract user's query for RAG-driven retrieval
-        user_query = None
-        for msg in reversed(messages):
-            if isinstance(msg, HumanMessage):
-                user_query = msg.content
-                break
-
-        # Domain RAG: search local domain knowledge for the user's query
-        domain_context = None
-        if user_query:
-            try:
-                pool = ctx.get_pool()
-                emb_model = ctx.get_embeddings_model(config)
-                query_vec = await emb_model.aembed_query(user_query[:500])
-                vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
-
-                rows = await pool.fetch(
-                    """
-                    SELECT content, 1 - (embedding <=> $1::vector) AS similarity
-                    FROM domain_information
-                    WHERE embedding IS NOT NULL
-                    ORDER BY embedding <=> $1::vector
-                    LIMIT 3
-                    """,
-                    vec_str,
-                )
-                if rows:
-                    relevant = [r["content"] for r in rows if float(r["similarity"]) > 0.3]
-                    if relevant:
-                        domain_context = "\n".join(f"- {r}" for r in relevant)
-            except (RuntimeError, OSError, ValueError) as exc:
-                _log.debug("Domain RAG lookup skipped: %s", exc)
-
-        # D-07: Load context via get_context with V2 parameters
-        history_messages = []
-        conversation_id = state.get("context_window_id")
-        if conversation_id:
-            try:
-                build_type = imperator_cfg.get("build_type", "tiered-summary")
-                budget = imperator_cfg.get("max_context_tokens", 8192)
-                if not isinstance(budget, int):
-                    budget = 8192
-
-                # V2: Pass query, model config, and domain context
-                get_context_args = {
-                    "build_type": build_type,
-                    "budget": budget,
-                    "conversation_id": str(conversation_id),
-                }
-                if user_query:
-                    get_context_args["user_prompt"] = user_query
-                if domain_context:
-                    get_context_args["domain_context"] = domain_context
-                # Pass the Imperator's own model config for distillation cache
-                get_context_args["model"] = {
-                    "base_url": imperator_cfg.get("base_url", ""),
-                    "model": imperator_cfg.get("model", ""),
-                    "api_key_env": imperator_cfg.get("api_key_env", ""),
-                }
-
-                ctx_result = await ctx.dispatch_tool(
-                    "get_context",
-                    get_context_args,
-                    config,
-                    None,
-                )
-                context_messages = ctx_result.get("context", [])
-
-                # V2: Load history as separate messages for prompt caching
-                for msg in context_messages:
-                    role = msg.get("role", "user")
-                    content = msg.get("content", "")
-                    if not content:
-                        continue
-                    if role == "assistant":
-                        history_messages.append(AIMessage(content=content))
-                    else:
-                        history_messages.append(HumanMessage(content=content))
-            except (ValueError, RuntimeError, OSError) as exc:
-                _log.warning("Failed to load context via get_context: %s", exc)
-
-        # Assemble: system (static, cached) + history (cached prefix) + current messages
-        messages = [system_msg] + history_messages + messages
-        _first_call = True
-    else:
-        _first_call = False
 
     # CB-R3-06: Truncate older messages if the list exceeds the limit.
     max_react_messages = ctx.get_tuning(config, "imperator_max_react_messages", 40)
@@ -463,23 +479,22 @@ async def agent_node(state: ImperatorState) -> dict:
                 max_retries + 1,
             )
 
-    # On first call, include SystemMessage in returned messages so
-    # add_messages persists it in state. Prevents re-executing get_context
-    # on subsequent ReAct iterations.
-    returned_messages = [response]
-    if _first_call:
-        returned_messages = [system_msg] + returned_messages
-
-    result = {
-        "messages": returned_messages,
+    return {
+        "messages": [response],
         "iteration_count": state.get("iteration_count", 0) + 1,
     }
 
-    # V2: Flag that user message was stored by get_context
-    if _first_call and user_query and state.get("context_window_id"):
-        result["_user_message_stored"] = True
 
-    return result
+def needs_init(state: ImperatorState) -> str:
+    """Conditional edge at entry: route to init_context_node if no SystemMessage.
+
+    CR-A03: First call goes through init_context_node for setup,
+    subsequent ReAct iterations skip directly to llm_call_node.
+    """
+    has_system = any(isinstance(m, SystemMessage) for m in state.get("messages", []))
+    if has_system:
+        return "llm_call_node"
+    return "init_context_node"
 
 
 def should_continue(state: ImperatorState) -> str:
@@ -675,16 +690,26 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
 
     workflow = StateGraph(ImperatorState)
 
-    workflow.add_node("agent_node", agent_node)
+    workflow.add_node("init_context_node", init_context_node)
+    workflow.add_node("llm_call_node", llm_call_node)
     workflow.add_node("tool_node", tool_node_instance)
     workflow.add_node("max_iterations_fallback", max_iterations_fallback)
     workflow.add_node("store_user_message", store_user_message)
     workflow.add_node("store_assistant_message", store_assistant_message)
 
-    workflow.set_entry_point("agent_node")
+    # CR-A03: Entry → conditional (has SystemMessage? → llm_call_node, else → init_context_node)
+    workflow.set_conditional_entry_point(
+        needs_init,
+        {
+            "init_context_node": "init_context_node",
+            "llm_call_node": "llm_call_node",
+        },
+    )
+
+    workflow.add_edge("init_context_node", "llm_call_node")
 
     workflow.add_conditional_edges(
-        "agent_node",
+        "llm_call_node",
         should_continue,
         {
             "tool_node": "tool_node",
@@ -693,7 +718,7 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
         },
     )
 
-    workflow.add_edge("tool_node", "agent_node")
+    workflow.add_edge("tool_node", "llm_call_node")
     workflow.add_edge("max_iterations_fallback", "store_user_message")
     workflow.add_edge("store_user_message", "store_assistant_message")
     workflow.add_edge("store_assistant_message", END)

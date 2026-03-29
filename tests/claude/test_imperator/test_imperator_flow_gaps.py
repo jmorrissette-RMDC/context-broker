@@ -1,7 +1,7 @@
 """Tests for imperator_flow.py gap coverage.
 
 Covers: system prompt loading, max iterations fallback, empty response retry,
-message truncation, should_continue() routing logic.
+message truncation, should_continue() routing logic, needs_init() routing.
 """
 
 import uuid
@@ -12,8 +12,10 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from context_broker_te.imperator_flow import (
     ImperatorState,
-    agent_node,
+    init_context_node,
+    llm_call_node,
     max_iterations_fallback,
+    needs_init,
     should_continue,
 )
 
@@ -43,6 +45,24 @@ def _make_state(messages=None, config=None, iteration_count=0, error=None, cw_id
         "error": error,
         "iteration_count": iteration_count,
     }
+
+
+# ── needs_init() ────────────────────────────────────────────────────
+
+
+def test_needs_init_no_system_message(base_config):
+    """Routes to init_context_node when no SystemMessage in state."""
+    state = _make_state(messages=[HumanMessage(content="Hi")], config=base_config)
+    assert needs_init(state) == "init_context_node"
+
+
+def test_needs_init_has_system_message(base_config):
+    """Routes to llm_call_node when SystemMessage already present."""
+    state = _make_state(
+        messages=[SystemMessage(content="sys"), HumanMessage(content="Hi")],
+        config=base_config,
+    )
+    assert needs_init(state) == "llm_call_node"
 
 
 # ── should_continue() ────────────────────────────────────────────────
@@ -109,51 +129,54 @@ async def test_max_iterations_fallback_injects_text():
     assert "smaller parts" in msg.content.lower()
 
 
-# ── agent_node: system prompt loading ────────────────────────────────
+# ── init_context_node: system prompt loading ────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_agent_node_loads_system_prompt(base_config):
+async def test_init_context_node_loads_system_prompt(base_config):
     """First call loads system prompt via async_load_prompt."""
-    mock_llm = AsyncMock()
-    ai_response = AIMessage(content="Hello!")
-    mock_llm.ainvoke.return_value = ai_response
-
     state = _make_state(
         messages=[HumanMessage(content="Hi")],
         config=base_config,
     )
 
-    with patch("context_broker_te.imperator_flow._prebound_llm", mock_llm), \
-         patch("context_broker_te.imperator_flow.async_load_prompt", return_value="You are the Imperator.") as mock_prompt:
-        result = await agent_node(state)
+    mock_ctx = MagicMock()
+    mock_ctx.async_load_prompt = AsyncMock(return_value="You are the Imperator.")
+    mock_ctx.get_pool.return_value = MagicMock()
+    mock_ctx.get_embeddings_model.return_value = AsyncMock()
+    mock_ctx.dispatch_tool = AsyncMock(return_value={"context": []})
 
-    mock_prompt.assert_called_once_with("imperator_identity")
-    # Result should include SystemMessage + AIMessage
+    with patch("context_broker_te.imperator_flow.get_ctx", return_value=mock_ctx):
+        result = await init_context_node(state)
+
+    mock_ctx.async_load_prompt.assert_called_once_with("imperator_identity")
+    # Result should include SystemMessage
     assert any(isinstance(m, SystemMessage) for m in result["messages"])
 
 
 @pytest.mark.asyncio
-async def test_agent_node_prompt_load_failure(base_config):
+async def test_init_context_node_prompt_load_failure(base_config):
     """Returns error when system prompt fails to load."""
     state = _make_state(
         messages=[HumanMessage(content="Hi")],
         config=base_config,
     )
 
-    with patch("context_broker_te.imperator_flow._prebound_llm", AsyncMock()), \
-         patch("context_broker_te.imperator_flow.async_load_prompt", side_effect=RuntimeError("file not found")):
-        result = await agent_node(state)
+    mock_ctx = MagicMock()
+    mock_ctx.async_load_prompt = AsyncMock(side_effect=RuntimeError("file not found"))
+
+    with patch("context_broker_te.imperator_flow.get_ctx", return_value=mock_ctx):
+        result = await init_context_node(state)
 
     assert result.get("error")
     assert "Prompt loading failed" in result["error"]
 
 
-# ── agent_node: empty response retry ─────────────────────────────────
+# ── llm_call_node: empty response retry ─────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_agent_node_retries_empty_response(base_config):
+async def test_llm_call_node_retries_empty_response(base_config):
     """Retries on empty content response before accepting."""
     empty_response = AIMessage(content="")
     good_response = AIMessage(content="Real answer")
@@ -166,7 +189,7 @@ async def test_agent_node_retries_empty_response(base_config):
     )
 
     with patch("context_broker_te.imperator_flow._prebound_llm", mock_llm):
-        result = await agent_node(state)
+        result = await llm_call_node(state)
 
     # Should have retried once and returned the good response
     assert mock_llm.ainvoke.call_count == 2
@@ -174,11 +197,11 @@ async def test_agent_node_retries_empty_response(base_config):
     assert ai_msgs[-1].content == "Real answer"
 
 
-# ── agent_node: message truncation ────────────────────────────────────
+# ── llm_call_node: message truncation ────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_agent_node_truncates_messages(base_config):
+async def test_llm_call_node_truncates_messages(base_config):
     """Truncates older messages when exceeding max_react_messages."""
     base_config["tuning"]["imperator_max_react_messages"] = 5
 
@@ -195,7 +218,7 @@ async def test_agent_node_truncates_messages(base_config):
     state = _make_state(messages=messages, config=base_config)
 
     with patch("context_broker_te.imperator_flow._prebound_llm", mock_llm):
-        result = await agent_node(state)
+        result = await llm_call_node(state)
 
     # Verify the LLM was called with truncated messages
     call_args = mock_llm.ainvoke.call_args[0][0]
@@ -206,7 +229,7 @@ async def test_agent_node_truncates_messages(base_config):
 
 
 @pytest.mark.asyncio
-async def test_agent_node_truncation_skips_tool_messages(base_config):
+async def test_llm_call_node_truncation_skips_tool_messages(base_config):
     """Truncation boundary skips ToolMessage to avoid orphaned tool results."""
     base_config["tuning"]["imperator_max_react_messages"] = 4
 
@@ -226,7 +249,7 @@ async def test_agent_node_truncation_skips_tool_messages(base_config):
     state = _make_state(messages=messages, config=base_config)
 
     with patch("context_broker_te.imperator_flow._prebound_llm", mock_llm):
-        result = await agent_node(state)
+        result = await llm_call_node(state)
 
     # The cut should skip past the ToolMessage
     call_args = mock_llm.ainvoke.call_args[0][0]

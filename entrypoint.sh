@@ -89,6 +89,12 @@ except Exception:
 echo "Installing StateGraph packages: $SG_PACKAGES"
 
 for pkg in $SG_PACKAGES; do
+    # Check if package is already installed at the correct version
+    if pip show "$pkg" >/dev/null 2>&1; then
+        echo "Package $pkg already installed — skipping"
+        continue
+    fi
+
     case "$PKG_SOURCE" in
         local)
             # Look for pre-built wheels in /app/stategraph-wheels/ first (built in Dockerfile),

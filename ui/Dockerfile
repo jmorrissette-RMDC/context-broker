@@ -2,16 +2,17 @@ FROM python:3.12.1-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+RUN adduser --disabled-password --no-create-home appuser
+
+COPY --chown=appuser requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY --chown=appuser . .
+
+USER appuser
 
 ENV PYTHONUNBUFFERED=1
 ENV CONFIG_PATH=/app/config.yml
-
-RUN adduser --disabled-password --no-create-home appuser
-USER appuser
 
 EXPOSE 7860
 

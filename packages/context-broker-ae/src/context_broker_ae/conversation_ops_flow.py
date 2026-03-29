@@ -12,6 +12,8 @@ import logging
 import uuid
 from typing import Optional
 
+import asyncpg
+
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
@@ -582,28 +584,59 @@ async def retrieve_context_node(state: GetContextState) -> dict:
                         "SELECT pg_advisory_xact_lock(hashtext($1::text))",
                         state["conversation_id"],
                     )
-                    await conn.fetchrow(
+
+                    # CR-M05: Duplicate-collapse — skip insert if last message
+                    # has the same sender+content, increment repeat_count instead.
+                    last_msg = await conn.fetchrow(
                         """
-                        INSERT INTO conversation_messages
-                            (conversation_id, role, sender, recipient, content,
-                             priority, token_count, sequence_number)
-                        VALUES ($1, 'user', $2, 'assistant', $3, 1, $4,
-                                (SELECT COALESCE(MAX(sequence_number), 0) + 1
-                                 FROM conversation_messages
-                                 WHERE conversation_id = $1))
-                        RETURNING id
+                        SELECT id, sender, content
+                        FROM conversation_messages
+                        WHERE conversation_id = $1
+                        ORDER BY sequence_number DESC
+                        LIMIT 1
                         """,
                         conv_uuid,
-                        sender,
-                        user_prompt,
-                        max(1, len(user_prompt) // 4),
                     )
+                    if (
+                        last_msg
+                        and last_msg["sender"] == sender
+                        and last_msg["content"] == user_prompt
+                    ):
+                        await conn.execute(
+                            "UPDATE conversation_messages SET repeat_count = repeat_count + 1 WHERE id = $1",
+                            last_msg["id"],
+                        )
+                        _log.debug("V2: Duplicate message collapsed (repeat_count incremented)")
+                    else:
+                        await conn.fetchrow(
+                            """
+                            INSERT INTO conversation_messages
+                                (conversation_id, role, sender, recipient, content,
+                                 priority, token_count, sequence_number)
+                            VALUES ($1, 'user', $2, 'assistant', $3, 1, $4,
+                                    (SELECT COALESCE(MAX(sequence_number), 0) + 1
+                                     FROM conversation_messages
+                                     WHERE conversation_id = $1))
+                            RETURNING id
+                            """,
+                            conv_uuid,
+                            sender,
+                            user_prompt,
+                            max(1, len(user_prompt) // 4),
+                        )
+
+                        # CR-M04: Update conversation counters after INSERT
+                        await conn.execute(
+                            "UPDATE conversations SET total_messages = total_messages + 1, estimated_token_count = estimated_token_count + $1, updated_at = NOW() WHERE id = $2",
+                            max(1, len(user_prompt) // 4),
+                            conv_uuid,
+                        )
         except (asyncpg.PostgresError, ValueError, RuntimeError, OSError) as exc:
             _log.warning("V2: Failed to store user message in get_context: %s", exc)
 
     from app.flows.build_type_registry import get_retrieval_graph
 
-    retrieval_graph = get_retrieval_graph(state["build_type"])
+    retrieval_graph = await get_retrieval_graph(state["build_type"])
     result = await retrieval_graph.ainvoke(
         {
             "context_window_id": state["context_window_id"],
@@ -666,4 +699,355 @@ def build_get_context_flow() -> StateGraph:
     )
     workflow.add_edge("retrieve_context_node", END)
 
+    return workflow.compile()
+
+
+# ============================================================
+# Delete Conversation Flow (CR-A02)
+# ============================================================
+
+
+class DeleteConversationState(TypedDict):
+    """State for conversation deletion."""
+
+    conversation_id: str
+    deleted: bool
+    error: Optional[str]
+
+
+async def delete_conversation_node(state: DeleteConversationState) -> dict:
+    """Atomically delete a conversation and all related records."""
+    pool = get_pg_pool()
+    try:
+        conv_uuid = uuid.UUID(state["conversation_id"])
+    except ValueError:
+        return {"error": f"Invalid conversation_id: {state['conversation_id']}"}
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "DELETE FROM conversation_summaries WHERE context_window_id IN "
+                "(SELECT id FROM context_windows WHERE conversation_id = $1)",
+                conv_uuid,
+            )
+            await conn.execute(
+                "DELETE FROM context_windows WHERE conversation_id = $1",
+                conv_uuid,
+            )
+            await conn.execute(
+                "DELETE FROM conversation_messages WHERE conversation_id = $1",
+                conv_uuid,
+            )
+            result = await conn.execute(
+                "DELETE FROM conversations WHERE id = $1",
+                conv_uuid,
+            )
+    return {"deleted": result == "DELETE 1"}
+
+
+def build_delete_conversation_flow() -> StateGraph:
+    """Build and compile the delete conversation StateGraph."""
+    workflow = StateGraph(DeleteConversationState)
+    workflow.add_node("delete_conversation_node", delete_conversation_node)
+    workflow.set_entry_point("delete_conversation_node")
+    workflow.add_edge("delete_conversation_node", END)
+    return workflow.compile()
+
+
+# ============================================================
+# Rename Conversation Flow (CR-A02)
+# ============================================================
+
+
+class RenameConversationState(TypedDict):
+    """State for conversation rename."""
+
+    conversation_id: str
+    title: str
+    renamed: bool
+    error: Optional[str]
+
+
+async def rename_conversation_node(state: RenameConversationState) -> dict:
+    """Rename a conversation."""
+    pool = get_pg_pool()
+    try:
+        conv_uuid = uuid.UUID(state["conversation_id"])
+    except ValueError:
+        return {"error": f"Invalid conversation_id: {state['conversation_id']}"}
+
+    result = await pool.execute(
+        "UPDATE conversations SET title = $1 WHERE id = $2",
+        state["title"],
+        conv_uuid,
+    )
+    return {"renamed": result == "UPDATE 1"}
+
+
+def build_rename_conversation_flow() -> StateGraph:
+    """Build and compile the rename conversation StateGraph."""
+    workflow = StateGraph(RenameConversationState)
+    workflow.add_node("rename_conversation_node", rename_conversation_node)
+    workflow.set_entry_point("rename_conversation_node")
+    workflow.add_edge("rename_conversation_node", END)
+    return workflow.compile()
+
+
+# ============================================================
+# List Conversations Flow (CR-A02)
+# ============================================================
+
+
+class ListConversationsState(TypedDict):
+    """State for conversation listing."""
+
+    participant: Optional[str]
+    limit: int
+    offset: int
+    conversations: list[dict]
+    error: Optional[str]
+
+
+async def list_conversations_node(state: ListConversationsState) -> dict:
+    """List conversations, optionally filtered by participant."""
+    pool = get_pg_pool()
+
+    if state.get("participant"):
+        rows = await pool.fetch(
+            """
+            SELECT DISTINCT c.id, c.title, c.flow_id, c.user_id, c.created_at,
+                   (SELECT COUNT(*) FROM conversation_messages cm
+                    WHERE cm.conversation_id = c.id) AS message_count
+            FROM conversations c
+            WHERE EXISTS (
+                SELECT 1 FROM conversation_messages cm
+                WHERE cm.conversation_id = c.id
+                AND (cm.sender = $1 OR cm.recipient = $1)
+            )
+            ORDER BY c.created_at DESC
+            LIMIT $2 OFFSET $3
+            """,
+            state["participant"],
+            state["limit"],
+            state["offset"],
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT c.id, c.title, c.flow_id, c.user_id, c.created_at,
+                   (SELECT COUNT(*) FROM conversation_messages cm
+                    WHERE cm.conversation_id = c.id) AS message_count
+            FROM conversations c
+            ORDER BY c.created_at DESC
+            LIMIT $1 OFFSET $2
+            """,
+            state["limit"],
+            state["offset"],
+        )
+
+    conversations = [
+        {
+            "id": str(row["id"]),
+            "title": row["title"],
+            "flow_id": row["flow_id"],
+            "user_id": row["user_id"],
+            "created_at": (
+                row["created_at"].isoformat() if row["created_at"] else None
+            ),
+            "message_count": row["message_count"],
+        }
+        for row in rows
+    ]
+    return {"conversations": conversations}
+
+
+def build_list_conversations_flow() -> StateGraph:
+    """Build and compile the list conversations StateGraph."""
+    workflow = StateGraph(ListConversationsState)
+    workflow.add_node("list_conversations_node", list_conversations_node)
+    workflow.set_entry_point("list_conversations_node")
+    workflow.add_edge("list_conversations_node", END)
+    return workflow.compile()
+
+
+# ============================================================
+# Query Logs Flow (CR-A02)
+# ============================================================
+
+
+class QueryLogsState(TypedDict):
+    """State for log querying."""
+
+    container_name: Optional[str]
+    level: Optional[str]
+    since: Optional[str]
+    until: Optional[str]
+    keyword: Optional[str]
+    limit: int
+    entries: list[dict]
+    error: Optional[str]
+
+
+async def query_logs_node(state: QueryLogsState) -> dict:
+    """Query system logs with filters."""
+    pool = get_pg_pool()
+    conditions: list[str] = []
+    args: list = []
+    idx = 1
+
+    if state.get("container_name"):
+        conditions.append(f"container_name ILIKE ${idx}")
+        args.append(f"%{state['container_name']}%")
+        idx += 1
+    if state.get("level"):
+        conditions.append(f"data->>'level' = ${idx}")
+        args.append(state["level"].upper())
+        idx += 1
+    if state.get("since"):
+        conditions.append(f"log_timestamp >= ${idx}::timestamptz")
+        args.append(state["since"])
+        idx += 1
+    if state.get("until"):
+        conditions.append(f"log_timestamp <= ${idx}::timestamptz")
+        args.append(state["until"])
+        idx += 1
+    if state.get("keyword"):
+        conditions.append(f"message ILIKE ${idx}")
+        args.append(f"%{state['keyword']}%")
+        idx += 1
+
+    where = " AND ".join(conditions) if conditions else "1=1"
+    args.append(state["limit"])
+
+    rows = await pool.fetch(
+        f"""
+        SELECT container_name, log_timestamp, message, data
+        FROM system_logs
+        WHERE {where}
+        ORDER BY log_timestamp DESC
+        LIMIT ${idx}
+        """,
+        *args,
+    )
+    entries = []
+    for row in rows:
+        data = row["data"] if isinstance(row["data"], dict) else {}
+        entries.append(
+            {
+                "timestamp": (
+                    row["log_timestamp"].isoformat()
+                    if row["log_timestamp"]
+                    else None
+                ),
+                "container_name": row["container_name"],
+                "level": data.get("level", "unknown"),
+                "logger": data.get("logger", ""),
+                "message": row["message"] or "",
+            }
+        )
+    return {"entries": entries}
+
+
+def build_query_logs_flow() -> StateGraph:
+    """Build and compile the query logs StateGraph."""
+    workflow = StateGraph(QueryLogsState)
+    workflow.add_node("query_logs_node", query_logs_node)
+    workflow.set_entry_point("query_logs_node")
+    workflow.add_edge("query_logs_node", END)
+    return workflow.compile()
+
+
+# ============================================================
+# Search Logs Flow (CR-A02)
+# ============================================================
+
+
+class SearchLogsState(TypedDict):
+    """State for semantic log search."""
+
+    query: str
+    container_name: Optional[str]
+    level: Optional[str]
+    since: Optional[str]
+    limit: int
+    config: dict
+    entries: list[dict]
+    error: Optional[str]
+
+
+async def search_logs_node(state: SearchLogsState) -> dict:
+    """Search system logs using vector similarity."""
+    from app.config import get_embeddings_model
+
+    config = state["config"]
+    log_emb_config = config.get("log_embeddings")
+    if not log_emb_config:
+        return {
+            "error": (
+                "Log vectorization is not enabled. "
+                "Add a 'log_embeddings' section to config.yml to enable semantic log search."
+            )
+        }
+
+    emb_model = get_embeddings_model(config, config_key="log_embeddings")
+    query_vec = await emb_model.aembed_query(state["query"])
+    vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
+
+    pool = get_pg_pool()
+    conditions = ["embedding IS NOT NULL"]
+    args: list = [vec_str]
+    idx = 2
+
+    if state.get("container_name"):
+        conditions.append(f"container_name ILIKE ${idx}")
+        args.append(f"%{state['container_name']}%")
+        idx += 1
+    if state.get("level"):
+        conditions.append(f"data->>'level' = ${idx}")
+        args.append(state["level"].upper())
+        idx += 1
+    if state.get("since"):
+        conditions.append(f"log_timestamp >= ${idx}::timestamptz")
+        args.append(state["since"])
+        idx += 1
+
+    where = " AND ".join(conditions)
+    args.append(state["limit"])
+
+    rows = await pool.fetch(
+        f"""
+        SELECT container_name, log_timestamp, message, data,
+               1 - (embedding <=> $1::vector) AS similarity
+        FROM system_logs
+        WHERE {where}
+        ORDER BY embedding <=> $1::vector
+        LIMIT ${idx}
+        """,
+        *args,
+    )
+    entries = []
+    for row in rows:
+        data = row["data"] if isinstance(row["data"], dict) else {}
+        entries.append(
+            {
+                "timestamp": (
+                    row["log_timestamp"].isoformat()
+                    if row["log_timestamp"]
+                    else None
+                ),
+                "container_name": row["container_name"],
+                "level": data.get("level", "unknown"),
+                "message": row["message"] or "",
+                "similarity": round(float(row["similarity"]), 4),
+            }
+        )
+    return {"entries": entries}
+
+
+def build_search_logs_flow() -> StateGraph:
+    """Build and compile the search logs StateGraph."""
+    workflow = StateGraph(SearchLogsState)
+    workflow.add_node("search_logs_node", search_logs_node)
+    workflow.set_entry_point("search_logs_node")
+    workflow.add_edge("search_logs_node", END)
     return workflow.compile()

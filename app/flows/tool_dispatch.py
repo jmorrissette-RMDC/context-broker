@@ -257,44 +257,32 @@ async def _dispatch_tool_inner(
 
     elif tool_name == "conv_delete_conversation":
         validated = DeleteConversationInput(**arguments)
-        from app.database import get_pg_pool
-
-        pool = get_pg_pool()
-        # Atomic delete — all or nothing
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute(
-                    "DELETE FROM conversation_summaries WHERE context_window_id IN "
-                    "(SELECT id FROM context_windows WHERE conversation_id = $1)",
-                    validated.conversation_id,
-                )
-                await conn.execute(
-                    "DELETE FROM context_windows WHERE conversation_id = $1",
-                    validated.conversation_id,
-                )
-                await conn.execute(
-                    "DELETE FROM conversation_messages WHERE conversation_id = $1",
-                    validated.conversation_id,
-                )
-                result = await conn.execute(
-                    "DELETE FROM conversations WHERE id = $1",
-                    validated.conversation_id,
-                )
-        return {"deleted": result == "DELETE 1"}
+        result = await _get_flow("delete_conversation").ainvoke(
+            {
+                "conversation_id": str(validated.conversation_id),
+                "deleted": False,
+                "error": None,
+            }
+        )
+        if result.get("error"):
+            raise ValueError(result["error"])
+        return {"deleted": result.get("deleted", False)}
 
     elif tool_name == "conv_rename_conversation":
         from app.models import RenameConversationInput
 
         validated = RenameConversationInput(**arguments)
-        from app.database import get_pg_pool
-
-        pool = get_pg_pool()
-        result = await pool.execute(
-            "UPDATE conversations SET title = $1 WHERE id = $2",
-            validated.title,
-            validated.conversation_id,
+        result = await _get_flow("rename_conversation").ainvoke(
+            {
+                "conversation_id": str(validated.conversation_id),
+                "title": validated.title,
+                "renamed": False,
+                "error": None,
+            }
         )
-        return {"renamed": result == "UPDATE 1", "title": validated.title}
+        if result.get("error"):
+            raise ValueError(result["error"])
+        return {"renamed": result.get("renamed", False), "title": validated.title}
 
     elif tool_name == "conv_list_conversations":
         validated = ListConversationsInput(**arguments)
@@ -409,7 +397,7 @@ async def _dispatch_tool_inner(
             raise ValueError(
                 f"Context window {validated.context_window_id} has no build_type set"
             )
-        retrieval_graph = get_retrieval_graph(_build_type)
+        retrieval_graph = await get_retrieval_graph(_build_type)
 
         result = await retrieval_graph.ainvoke(
             {

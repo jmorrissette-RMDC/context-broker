@@ -3,6 +3,7 @@
 Configuration reading/writing, verbose toggle, database queries.
 """
 
+import asyncio
 import copy
 import logging
 import re
@@ -120,7 +121,7 @@ async def config_write(key: str, value: str) -> str:
             "TE configuration is the architect's domain."
         )
 
-    try:
+    def _sync_write():
         with open(ctx.config_path, encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
@@ -156,6 +157,10 @@ async def config_write(key: str, value: str) -> str:
             f"Updated '{key}': {old_value} → {value_typed}. "
             "Change will take effect on next operation (hot-reload)."
         )
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _sync_write)
     except (FileNotFoundError, OSError, yaml.YAMLError, ValueError) as exc:
         return f"Config write error: {exc}"
 
@@ -175,8 +180,8 @@ async def verbose_toggle() -> str:
     )
 
 
-def _load_inference_models() -> dict:
-    """Load the inference-models.yml catalog."""
+def _load_inference_models_sync() -> dict:
+    """Load the inference-models.yml catalog (sync, for use in executor)."""
     import os
     from pathlib import Path
 
@@ -185,6 +190,12 @@ def _load_inference_models() -> dict:
         return {}
     with open(catalog_path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+async def _load_inference_models() -> dict:
+    """Load the inference-models.yml catalog without blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _load_inference_models_sync)
 
 
 async def _test_endpoint(base_url: str, api_key_env: str, model: str) -> str | None:
@@ -233,7 +244,7 @@ async def change_inference(slot: str, provider: str = "", model: str = "") -> st
     if slot not in valid_slots:
         return f"Invalid slot '{slot}'. Must be one of: {', '.join(valid_slots)}"
 
-    catalog = _load_inference_models()
+    catalog = await _load_inference_models()
 
     # List mode: show available models for this slot
     if not provider or not model:
@@ -320,7 +331,7 @@ async def change_inference(slot: str, provider: str = "", model: str = "") -> st
         )
 
     # Apply the change
-    try:
+    def _sync_apply():
         with open(target_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
 
@@ -339,6 +350,10 @@ async def change_inference(slot: str, provider: str = "", model: str = "") -> st
             f"Switched {slot} to {model} ({provider}).\n"
             f"Updated {file_name}. Change takes effect on next operation (hot-reload)."
         )
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _sync_apply)
     except (OSError, yaml.YAMLError) as exc:
         return f"Failed to update config: {exc}"
 
@@ -399,13 +414,17 @@ async def migrate_embeddings(
     results = []
 
     # Step 1: Update config.yml
-    try:
+    def _sync_update_config():
         with open(ctx.config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
         cfg.setdefault("embeddings", {})["model"] = new_model
         cfg["embeddings"]["embedding_dims"] = new_dims
         with open(ctx.config_path, "w", encoding="utf-8") as f:
             yaml.dump(cfg, f, default_flow_style=False)
+
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _sync_update_config)
         results.append(f"Config updated: model={new_model}, dims={new_dims}")
     except (OSError, yaml.YAMLError) as exc:
         return f"Failed to update config: {exc}"

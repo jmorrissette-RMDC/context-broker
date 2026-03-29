@@ -72,7 +72,6 @@ def _build_domain_mem0(config: dict) -> object:
     neo4j_port = os.environ.get("NEO4J_PORT", "7687")
 
     mem_config = MemoryConfig(
-        version="v1.1",
         llm=LlmConfig(
             provider="openai",
             config={

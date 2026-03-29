@@ -2,19 +2,22 @@ FROM python:3.12.1-slim
 
 WORKDIR /app
 
+# Create user before copying application code
+RUN adduser --disabled-password --no-create-home --system --group shipper && usermod -aG docker shipper
+
 # Install dependencies
 # Using slim instead of alpine ensures we can use wheels for asyncpg,
 # keeping the image small without needing build-essentials.
-RUN pip install --no-cache-dir aiodocker asyncpg
+COPY --chown=shipper requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the shipper script
-COPY shipper.py .
+COPY --chown=shipper shipper.py .
+
+USER shipper
 
 # Ensure logs are flushed immediately to stdout for debugging
 ENV PYTHONUNBUFFERED=1
-
-RUN adduser --disabled-password --no-create-home --system --group shipper && usermod -aG docker shipper
-USER shipper
 
 # Log shipper health: verify the Python process is alive.
 # No HTTP endpoint — checks that PID 1 (the shipper) is running.

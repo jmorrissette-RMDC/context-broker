@@ -4,13 +4,17 @@ Build Type Registry (ARCH-18).
 Maps build type names to their (assembly_graph, retrieval_graph) pairs.
 Graphs are compiled lazily on first use and cached thereafter.
 
+CR-A04: Graph compilation uses asyncio.to_thread() to avoid blocking the
+event loop with the synchronous threading.Lock + builder() call.
+
 Usage:
     from app.flows.build_type_registry import get_assembly_graph, get_retrieval_graph
 
-    graph = get_assembly_graph("tiered-summary")
+    graph = await get_assembly_graph("tiered-summary")
     result = await graph.ainvoke(input_state)
 """
 
+import asyncio
 import logging
 import threading
 from typing import Any, Callable
@@ -46,50 +50,58 @@ def register_build_type(
     _log.info("Registered build type: %s", name)
 
 
-def get_assembly_graph(name: str) -> Any:
-    """Return the compiled assembly graph for a build type (lazy).
+def _get_graph_sync(name: str, kind: str) -> Any:
+    """Compile and cache a graph under the lock (sync, for use in executor).
+
+    Args:
+        name: Build type name.
+        kind: "assembly" or "retrieval".
+    """
+    idx = 0 if kind == "assembly" else 1
+    cache_key = (name, kind)
+    with _lock:
+        if cache_key in _compiled_cache:
+            return _compiled_cache[cache_key]
+
+        if name not in _registry:
+            raise ValueError(
+                f"Build type '{name}' is not registered. "
+                f"Available: {list(_registry.keys())}"
+            )
+
+        builder = _registry[name][idx]
+        graph = builder()
+        _compiled_cache[cache_key] = graph
+    _log.info("Compiled %s graph for build type: %s", kind, name)
+    return graph
+
+
+async def get_assembly_graph(name: str) -> Any:
+    """Return the compiled assembly graph for a build type (lazy, async).
+
+    CR-A04: Compilation is offloaded to a thread to avoid blocking the
+    event loop. Cache hits return immediately without thread dispatch.
 
     Raises ValueError if the build type is not registered.
     """
     cache_key = (name, "assembly")
-    with _lock:
-        if cache_key in _compiled_cache:
-            return _compiled_cache[cache_key]
-
-        if name not in _registry:
-            raise ValueError(
-                f"Build type '{name}' is not registered. "
-                f"Available: {list(_registry.keys())}"
-            )
-
-        builder = _registry[name][0]
-        graph = builder()
-        _compiled_cache[cache_key] = graph
-    _log.info("Compiled assembly graph for build type: %s", name)
-    return graph
+    if cache_key in _compiled_cache:
+        return _compiled_cache[cache_key]
+    return await asyncio.to_thread(_get_graph_sync, name, "assembly")
 
 
-def get_retrieval_graph(name: str) -> Any:
-    """Return the compiled retrieval graph for a build type (lazy).
+async def get_retrieval_graph(name: str) -> Any:
+    """Return the compiled retrieval graph for a build type (lazy, async).
+
+    CR-A04: Compilation is offloaded to a thread to avoid blocking the
+    event loop. Cache hits return immediately without thread dispatch.
 
     Raises ValueError if the build type is not registered.
     """
     cache_key = (name, "retrieval")
-    with _lock:
-        if cache_key in _compiled_cache:
-            return _compiled_cache[cache_key]
-
-        if name not in _registry:
-            raise ValueError(
-                f"Build type '{name}' is not registered. "
-                f"Available: {list(_registry.keys())}"
-            )
-
-        builder = _registry[name][1]
-        graph = builder()
-        _compiled_cache[cache_key] = graph
-    _log.info("Compiled retrieval graph for build type: %s", name)
-    return graph
+    if cache_key in _compiled_cache:
+        return _compiled_cache[cache_key]
+    return await asyncio.to_thread(_get_graph_sync, name, "retrieval")
 
 
 def list_build_types() -> list[str]:

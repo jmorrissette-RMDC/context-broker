@@ -17,6 +17,7 @@ import os
 import smtplib
 import ssl
 import sys
+import time
 from email.message import EmailMessage
 from typing import Optional
 
@@ -24,15 +25,33 @@ import asyncpg
 import httpx
 import yaml
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 # ── Logging ────────────────────────────────────────────────────────
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S%z",
-)
+
+class _JsonFormatter(logging.Formatter):
+    """Format log records as single-line JSON objects."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        from datetime import datetime, timezone
+
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "logger": record.name,
+        }
+        if record.exc_info and record.exc_info[0] is not None:
+            entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(entry)
+
+
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(_JsonFormatter())
+logging.getLogger().setLevel(logging.INFO)
+logging.getLogger().addHandler(_handler)
 _log = logging.getLogger("alerter")
 
 # ── App ────────────────────────────────────────────────────────────
@@ -144,20 +163,40 @@ async def _ensure_tables() -> None:
 
 
 @app.get("/health")
-async def health() -> dict:
+async def health() -> JSONResponse:
+    pg_status = "down"
     instruction_count = 0
-    if _pool:
+    if _pool is not None:
         try:
             instruction_count = await _pool.fetchval(
                 "SELECT COUNT(*) FROM alert_instructions"
             )
+            pg_status = "up"
         except (asyncpg.PostgresError, OSError):
-            pass
-    return {
-        "status": "healthy",
-        "postgres": _pool is not None,
+            pg_status = "down"
+
+    is_healthy = pg_status == "up"
+    body = {
+        "status": "healthy" if is_healthy else "unhealthy",
+        "postgres": pg_status,
         "instructions": instruction_count,
     }
+    return JSONResponse(body, status_code=200 if is_healthy else 503)
+
+
+# ── Metrics ───────────────────────────────────────────────────────
+
+ALERTER_EVENTS_TOTAL = Counter(
+    "alerter_events_total", "Total webhook events processed", ["event_type", "status"]
+)
+ALERTER_EVENT_DURATION = Histogram(
+    "alerter_event_duration_seconds", "Webhook event processing duration"
+)
+
+
+@app.get("/metrics")
+async def metrics() -> PlainTextResponse:
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # ── Embedding helper ───────────────────────────────────────────────
@@ -250,6 +289,10 @@ async def _find_instruction(event: dict) -> Optional[dict]:
 # ── Webhook endpoint ───────────────────────────────────────────────
 
 
+_seen_event_ids: set[str] = set()
+_SEEN_EVENT_IDS_MAX = 10000
+
+
 @app.post("/webhook")
 async def webhook(request: Request) -> JSONResponse:
     """Receive a CloudEvents webhook, find instruction, format, fan out."""
@@ -258,13 +301,32 @@ async def webhook(request: Request) -> JSONResponse:
     except (json.JSONDecodeError, ValueError):
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
+    # CR-M03: Validate input structure
+    if not isinstance(event, dict):
+        return JSONResponse({"error": "Event must be a JSON object"}, status_code=400)
+
     event_type = event.get("type", "")
     if not event_type:
         return JSONResponse({"error": "Missing 'type' field"}, status_code=400)
 
-    data = event.get("data", {})
-    if not data:
-        return JSONResponse({"error": "Missing 'data' field"}, status_code=400)
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "'data' must be a JSON object"}, status_code=400)
+
+    # CR-B04: Idempotency — deduplicate by CloudEvents id
+    event_id = event.get("id")
+    if event_id:
+        if event_id in _seen_event_ids:
+            return JSONResponse({"status": "duplicate", "id": event_id}, status_code=200)
+        _seen_event_ids.add(event_id)
+        # Bounded eviction
+        if len(_seen_event_ids) > _SEEN_EVENT_IDS_MAX:
+            # Discard oldest half (sets are unordered but this is good enough)
+            to_remove = list(_seen_event_ids)[:_SEEN_EVENT_IDS_MAX // 2]
+            for eid in to_remove:
+                _seen_event_ids.discard(eid)
+
+    _webhook_start = time.monotonic()
 
     message = data.get("message", json.dumps(data))
 
@@ -312,6 +374,11 @@ async def webhook(request: Request) -> JSONResponse:
     await _record_event_and_deliveries(
         event, message, formatted, instruction_id, channels, succeeded, failed
     )
+
+    # CR-M02: Track metrics
+    _status = "success" if not failed else "partial"
+    ALERTER_EVENTS_TOTAL.labels(event_type=event_type, status=_status).inc()
+    ALERTER_EVENT_DURATION.observe(time.monotonic() - _webhook_start)
 
     _log.info(
         "Event '%s' processed: instruction=%s, %d/%d channels succeeded",

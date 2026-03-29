@@ -43,13 +43,19 @@ def _cron_is_due(cron_expr: str, now: datetime) -> bool:
         if pattern == "*":
             continue
         if pattern.startswith("*/"):
-            divisor = int(pattern[2:])
+            try:
+                divisor = int(pattern[2:])
+            except ValueError:
+                return False
             if divisor == 0:
                 return False
             if field_val % divisor != 0:
                 return False
         else:
-            if field_val != int(pattern):
+            try:
+                if field_val != int(pattern):
+                    return False
+            except ValueError:
                 return False
     return True
 
@@ -143,7 +149,11 @@ async def scheduler_worker(config: dict) -> None:
                         if elapsed < 55:
                             is_due = False
                 elif schedule_type == "interval":
-                    interval_secs = int(schedule_expr)
+                    try:
+                        interval_secs = int(schedule_expr)
+                    except ValueError:
+                        _log.warning("Invalid interval expression: %s", schedule_expr)
+                        continue
                     if not last_fired_at:
                         is_due = True
                     else:

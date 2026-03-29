@@ -141,8 +141,27 @@ async def async_load_config() -> dict[str, Any]:
     This is the primary config function for route handlers and flow nodes.
     Returns the merged config so callers get both infrastructure and
     cognitive settings in one dict.
+
+    CR-M11: AE config read is offloaded to run_in_executor on cache miss
+    to avoid blocking the event loop with synchronous file I/O.
     """
-    ae_config = load_config()
+    global _config_cache, _config_mtime
+
+    # AE config: fast-path if cached
+    try:
+        ae_mtime = os.stat(CONFIG_PATH).st_mtime
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"Configuration file not found at {CONFIG_PATH}. "
+            "Mount /config/config.yml into the container."
+        ) from exc
+
+    if _config_cache is not None and ae_mtime == _config_mtime:
+        ae_config = _config_cache
+    else:
+        loop = asyncio.get_running_loop()
+        config, raw = await loop.run_in_executor(None, _read_and_parse_config)
+        ae_config = _apply_config(config, raw, ae_mtime)
 
     # Fast-path: check TE config mtime without async overhead
     try:

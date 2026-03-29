@@ -407,7 +407,7 @@ async def _check_assembly_needed(pool, config: dict, conv_ids: list[str]) -> Non
                     continue
 
             _log.info("Triggering assembly for window=%s", window_id)
-            assembly_graph = get_assembly_graph(window["build_type"])
+            assembly_graph = await get_assembly_graph(window["build_type"])
             assembly_timeout = get_tuning(config, "assembly_timeout_seconds", 600)
             start = time.monotonic()
 
@@ -507,7 +507,7 @@ async def _run_assembly(pool, config, window_id, conv_id, build_type):
     start = time.monotonic()
 
     try:
-        assembly_graph = get_assembly_graph(build_type)
+        assembly_graph = await get_assembly_graph(build_type)
         await assembly_graph.ainvoke(
             {
                 "context_window_id": window_id,

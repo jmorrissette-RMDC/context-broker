@@ -5,6 +5,8 @@ Covers registration, retrieval, unknown type errors, lazy compilation,
 and verification that all three shipped types are registered.
 """
 
+import asyncio
+
 import pytest
 
 from app.flows.build_type_registry import (
@@ -37,6 +39,11 @@ def _restore_registry(saved):
     _compiled_cache.update(saved_cache)
 
 
+def _run(coro):
+    """Run an async coroutine synchronously for tests."""
+    return asyncio.get_event_loop().run_until_complete(coro)
+
+
 # ------------------------------------------------------------------
 # Registration and retrieval
 # ------------------------------------------------------------------
@@ -55,25 +62,25 @@ class TestBuildTypeRegistry:
         """A registered build type's assembly graph can be retrieved."""
         mock_graph = object()
         register_build_type("test-type", lambda: mock_graph, lambda: None)
-        graph = get_assembly_graph("test-type")
+        graph = _run(get_assembly_graph("test-type"))
         assert graph is mock_graph
 
     def test_register_and_retrieve_retrieval(self):
         """A registered build type's retrieval graph can be retrieved."""
         mock_graph = object()
         register_build_type("test-type", lambda: None, lambda: mock_graph)
-        graph = get_retrieval_graph("test-type")
+        graph = _run(get_retrieval_graph("test-type"))
         assert graph is mock_graph
 
     def test_unknown_type_raises_assembly(self):
         """get_assembly_graph raises ValueError for an unregistered type."""
         with pytest.raises(ValueError, match="not registered"):
-            get_assembly_graph("nonexistent-build-type")
+            _run(get_assembly_graph("nonexistent-build-type"))
 
     def test_unknown_type_raises_retrieval(self):
         """get_retrieval_graph raises ValueError for an unregistered type."""
         with pytest.raises(ValueError, match="not registered"):
-            get_retrieval_graph("nonexistent-build-type")
+            _run(get_retrieval_graph("nonexistent-build-type"))
 
     def test_lazy_compilation_cached(self):
         """Graph builders are called only once; subsequent calls use the cache."""
@@ -85,8 +92,8 @@ class TestBuildTypeRegistry:
             return f"graph-{call_count}"
 
         register_build_type("cached-type", builder, lambda: None)
-        first = get_assembly_graph("cached-type")
-        second = get_assembly_graph("cached-type")
+        first = _run(get_assembly_graph("cached-type"))
+        second = _run(get_assembly_graph("cached-type"))
         assert first is second
         assert call_count == 1
 
@@ -98,7 +105,7 @@ class TestBuildTypeRegistry:
         # Clear compiled cache so the new builder is invoked
         _compiled_cache.clear()
 
-        graph = get_assembly_graph("dup-type")
+        graph = _run(get_assembly_graph("dup-type"))
         assert graph == "new"
 
     def test_list_build_types(self):
@@ -138,7 +145,7 @@ class TestShippedBuildTypes:
         _compiled_cache.clear()
         try:
             for name in ("sliding-window", "tiered-summary", "enriched"):
-                graph = get_assembly_graph(name)
+                graph = _run(get_assembly_graph(name))
                 assert graph is not None
         finally:
             _compiled_cache.clear()
@@ -153,7 +160,7 @@ class TestShippedBuildTypes:
         _compiled_cache.clear()
         try:
             for name in ("sliding-window", "tiered-summary", "enriched"):
-                graph = get_retrieval_graph(name)
+                graph = _run(get_retrieval_graph(name))
                 assert graph is not None
         finally:
             _compiled_cache.clear()

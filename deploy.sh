@@ -82,7 +82,7 @@ case "${1}" in
 
         # Clean up data directories created by containers (owned by container users).
         # Use a temporary container to remove files we can't delete as the host user.
-        DATA_DIR="./data-test"
+        DATA_DIR="./data-${PREFIX}"
         if [[ -d "${DATA_DIR}" ]]; then
             log "Cleaning up ${DATA_DIR} (container-owned files)..."
             docker run --rm -v "$(pwd)/${DATA_DIR}:/cleanup" alpine:3.19 \

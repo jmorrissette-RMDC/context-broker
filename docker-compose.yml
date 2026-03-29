@@ -189,8 +189,6 @@ services:
     restart: unless-stopped
     networks:
       - context-broker-net
-    ports:
-      - "7860:7860"
     volumes:
       - ./ui/config.yml:/app/config.yml:ro
 
