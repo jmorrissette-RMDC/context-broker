@@ -3,7 +3,7 @@ FROM python:3.12.10-slim
 WORKDIR /app
 
 # Create user before copying application code
-RUN adduser --disabled-password --no-create-home --system --group shipper && usermod -aG docker shipper
+RUN adduser --disabled-password --no-create-home --system --group shipper
 
 # Install dependencies
 # Using slim instead of alpine ensures we can use wheels for asyncpg,
