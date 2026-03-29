@@ -564,6 +564,38 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | CR-m03 | R5 | Gemini | minor | ReAct loop context loss — history loaded in agent_node not persisted in state for subsequent iterations | `imperator_flow.py` | FALSE_POSITIVE | **VERIFIED:** History correctly preserved via `add_messages` reducer + conditional first-call check. MemorySaver carries it across ReAct iterations. |
 | CR-m04 | R4 | Claude | minor | Unbounded log shipper queue — OOM risk during DB outage | `log_shipper/shipper.py` | OPEN | Add maxsize=10000, handle QueueFull |
 
+### Dependency Audit (2026-03-28)
+
+| ID | Category | Severity | Description | File(s) | Status | Notes |
+|----|----------|----------|-------------|---------|--------|-------|
+| DEP-01 | Python | minor | asyncpg 0.30.0 → 0.31.0 | `requirements.txt` | OPEN | Safe update — stable DB driver, 1 minor version. |
+| DEP-02 | Python | minor | psycopg2-binary 2.9.10 → 2.9.11 | `requirements.txt` | OPEN | Safe update — bug fixes only. |
+| DEP-03 | Python | minor | mem0ai 1.0.8 → 1.0.9 | `requirements.txt` | OPEN | Safe update — patch release. May fix pgvector issues. |
+| DEP-04 | Python | minor | pydantic 2.10.4 → 2.12.5 | `requirements.txt` | OPEN | Safe update — backward compat within major. |
+| DEP-05 | Python | minor | pydantic-settings 2.7.1 → 2.13.1 | `requirements.txt` | OPEN | Safe update. |
+| DEP-06 | Python | minor | prometheus-client 0.21.1 → 0.24.1 | `requirements.txt` | OPEN | Safe update — stable API. |
+| DEP-07 | Python | minor | python-dotenv 1.0.1 → 1.2.2 | `requirements.txt` | OPEN | Safe update. |
+| DEP-08 | Python | minor | pyyaml 6.0.2 → 6.0.3 | `requirements.txt` | OPEN | Safe update — patch. |
+| DEP-09 | Python | minor | tiktoken 0.8.0 → 0.12.0 | `requirements.txt` | OPEN | Safe update — token counting, stable API. |
+| DEP-10 | Python | minor | tenacity 9.0.0 → 9.1.4 | `requirements.txt` | OPEN | Safe update. |
+| DEP-11 | Python | minor | langchain-community 0.3.13 → 0.4.1 | `requirements.txt` | OPEN | Safe update — community integrations. |
+| DEP-12 | Python | minor | langchain-postgres 0.0.13 → 0.0.17 | `requirements.txt` | OPEN | Safe update — PGVector fixes. |
+| DEP-13 | Python | minor | crawl4ai 0.6.1 → 0.8.6 | `requirements.txt` | OPEN | Safe — we have fallback for failures. |
+| DEP-14 | Docker | major | python:3.12.1-slim → 3.12.10-slim — 9 security patches behind | `Dockerfile`, `alerter/Dockerfile`, `log_shipper/Dockerfile`, `ui/Dockerfile` | OPEN | Security patches. Must update for public repo. |
+| DEP-15 | Docker | major | nginx:1.25.3-alpine → 1.28.0-alpine — 1.25.x is EOL since April 2024 | `docker-compose.yml` | OPEN | Known CVEs in EOL nginx. Must update. |
+| DEP-16 | Docker | minor | pgvector/pgvector:0.7.0-pg16 — check if 0.8.0-pg16 exists | `docker-compose.yml` | OPEN | pgvector 0.8 adds performance improvements. Stay on pg16. |
+| DEP-17 | Docker | minor | neo4j:5.26.0 → 5.28.0 | `docker-compose.yml` | OPEN | 2 patch versions behind. Stay on 5.x (Mem0 constraint). |
+| DEP-18 | Docker | minor | ollama:0.6.2 → 0.9+ — 3 minor versions behind | `docker-compose.yml` | OPEN | OpenAI-compat API is stable. Model format may differ. |
+| DEP-19 | Python | major | **DEFERRED.** langgraph 0.2.60 → 1.1.3, langchain 0.3.13 → 1.2.13, langchain-core 0.3.28 → 1.2.23, langchain-openai 0.2.14 → 1.1.12 — entire LangChain ecosystem jumped to 1.x. Major breaking changes expected in StateGraph API, message types, tool binding, checkpointing. | `requirements.txt` | DEFERRED | Needs dedicated session. Full test coverage required after upgrade. The biggest single piece of technical debt. |
+| DEP-20 | Python | minor | **DEFERRED.** sse-starlette 2.2.1 → 3.3.3 — major version, SSE session API may differ | `requirements.txt` | DEFERRED | Test SSE session handling before upgrading. |
+| DEP-21 | Python | minor | duckduckgo-search 7.5.1 → 8.1.1 — major version. Core API (DDGS.text) unchanged. | `requirements.txt` | OPEN | Update — API is stable across major versions. |
+| DEP-22 | Python | minor | **DEFERRED.** neo4j driver 5.27.0 → 6.1.0 — major version. Mem0 does not list neo4j as a direct dependency; uses it optionally for graph store. Cannot verify 6.x compatibility without testing. | `requirements.txt` | DEFERRED | Defer until Mem0 explicitly supports neo4j 6.x or we can test in isolation. |
+| DEP-24 | Python | minor | fastapi 0.115.6 → 0.135.2 — 20 minor versions | `requirements.txt` | OPEN | Generally safe — FastAPI maintains backward compat. But large gap warrants testing. |
+| DEP-25 | Python | minor | uvicorn 0.34.0 → 0.42.0 — 8 minor versions | `requirements.txt` | OPEN | Generally safe — ASGI server. |
+| DEP-26 | Python | minor | **DEFERRED.** langchain-neo4j 0.3.0 → 0.8.0 — 5 minor versions. Part of LangChain ecosystem, may require langchain-core 1.x. | `requirements.txt` | DEFERRED | Defer with DEP-19 (LangChain 1.x upgrade). |
+| DEP-27 | Python | minor | aiodocker 0.23.0 → 0.26.0 | `log_shipper/requirements.txt` | OPEN | 3 minor versions. Log shipper only. |
+| DEP-28 | Dev tools | minor | black 24.10.0 → 26.3.1, ruff 0.8.6 → 0.15.8, pytest 8.3.4 → 9.0.2, pytest-mock 3.14.0 → 3.15.1 | `requirements.txt` | OPEN | Dev tools only, not runtime. Safe to update. |
+
 ---
 
 ## Summary

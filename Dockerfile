@@ -3,7 +3,7 @@
 #
 # Build context: project root (.)
 
-FROM python:3.12.1-slim
+FROM python:3.12.10-slim
 
 ARG USER_NAME=context-broker
 ARG USER_UID=1001

@@ -1,49 +1,50 @@
 # ASGI server and framework
-uvicorn==0.34.0
-fastapi==0.115.6
+uvicorn==0.42.0
+fastapi==0.135.2
 sse-starlette==2.2.1
 
 # LangGraph and LangChain
+# PINNED to 0.x — 1.x upgrade is deferred (DEP-19), requires dedicated session
 langgraph==0.2.60
 langchain==0.3.13
 langchain-core==0.3.28
 langchain-openai==0.2.14
-langchain-community==0.3.13
-langchain-postgres==0.0.13
+langchain-community==0.4.1
+langchain-postgres==0.0.17
 
 # Database
-asyncpg==0.30.0
-psycopg2-binary==2.9.10
+asyncpg==0.31.0
+psycopg2-binary==2.9.11
 
 # Memory / Knowledge graph
-mem0ai==1.0.8
-neo4j==5.27.0
+mem0ai==1.0.9
+neo4j==5.28.0
 langchain-neo4j==0.3.0
 
 # Observability
-prometheus-client==0.21.1
+prometheus-client==0.24.1
 
 # Validation
-pydantic==2.10.4
-pydantic-settings==2.7.1
+pydantic==2.12.5
+pydantic-settings==2.13.1
 
 # Web tools
-duckduckgo-search==7.5.1
-crawl4ai==0.6.1
+duckduckgo-search==8.1.1
+crawl4ai==0.8.6
 
 # Utilities
 httpx==0.28.1
-python-dotenv==1.0.1
-pyyaml==6.0.2
-tiktoken==0.8.0
-tenacity==9.0.0
+python-dotenv==1.2.2
+pyyaml==6.0.3
+tiktoken==0.12.0
+tenacity==9.1.4
 
 # Testing
-pytest==8.3.4
+pytest==9.0.2
 pytest-asyncio==0.24.0
-pytest-mock==3.14.0
+pytest-mock==3.15.1
 
 # Code quality
-black==24.10.0
-ruff==0.8.6
+black==26.3.1
+ruff==0.15.8
 rank-bm25==0.2.2
