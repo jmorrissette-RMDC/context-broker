@@ -279,6 +279,38 @@ def test_stack(http_client):
         print("[SETUP] Data pre-loaded — skipping pipeline wait")
 
     # ------------------------------------------------------------------
+    # Step 5: Ensure context windows exist for all conversations
+    # ------------------------------------------------------------------
+    # get_context creates windows on demand. Quality tests need windows
+    # with completed assembly. Trigger get_context for each conversation
+    # with tiered-summary build type so the assembly worker processes them.
+    print("[SETUP] Creating context windows for all conversations...")
+    for conv_name, conv_id in loaded_conversations.items():
+        resp = mcp_call(
+            http_client,
+            "get_context",
+            {
+                "conversation_id": conv_id,
+                "build_type": "tiered-summary",
+                "budget": 16000,
+            },
+        )
+        if resp.status_code != 200:
+            print(f"[SETUP] WARNING: get_context failed for {conv_name}: {resp.status_code}")
+
+    # Wait for assembly to complete on the newly created windows
+    print("[SETUP] Waiting for assembly to complete on new windows...")
+    assembly_deadline = time.time() + 120  # 2 minutes max
+    while time.time() < assembly_deadline:
+        counts = get_db_counts()
+        if counts.get("summaries", 0) > 0:
+            print(f"[SETUP] Assembly produced {counts['summaries']} summaries")
+            break
+        time.sleep(5)
+    else:
+        print("[SETUP] WARNING: Assembly did not produce summaries within 120s")
+
+    # ------------------------------------------------------------------
     # Yield to tests
     # ------------------------------------------------------------------
     yield {
@@ -315,6 +347,25 @@ def total_messages(test_stack):
 
 
 @pytest.fixture(scope="session")
-def any_conversation_id(loaded_conversations):
-    """Return any loaded conversation ID for tests that just need one."""
+def any_conversation_id(loaded_conversations, http_client):
+    """Return a Phase 1 conversation ID with substantial data.
+
+    Quality tests need conversations with thousands of messages and
+    completed assembly. Filters out small test-created conversations
+    and the Imperator's system conversation.
+    """
+    # Query for conversations with >1000 messages (Phase 1 bulk data)
+    resp = mcp_call(
+        http_client,
+        "conv_list_conversations",
+        {"limit": 20},
+    )
+    if resp.status_code == 200:
+        result = extract_mcp_result(resp)
+        convs = result.get("conversations", [])
+        for c in convs:
+            msg_count = c.get("total_messages", 0)
+            if msg_count and msg_count > 1000:
+                return c["id"]
+    # Fallback: return first loaded conversation
     return next(iter(loaded_conversations.values()))

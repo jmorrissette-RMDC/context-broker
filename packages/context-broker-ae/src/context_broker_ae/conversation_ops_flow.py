@@ -161,15 +161,18 @@ async def create_context_window_node(state: CreateContextWindowState) -> dict:
     )
 
     if row is None:
-        # Already exists — look up the existing window
+        # Already exists — look up the existing window.
+        # Must match the ON CONFLICT columns (conversation_id, build_type,
+        # max_token_budget), not participant_id, since the conflict was on
+        # the budget-based unique index.
         existing = await pool.fetchrow(
             """
             SELECT id FROM context_windows
-            WHERE conversation_id = $1 AND participant_id = $2 AND build_type = $3
+            WHERE conversation_id = $1 AND build_type = $2 AND max_token_budget = $3
             """,
             uuid.UUID(state["conversation_id"]),
-            state["participant_id"],
             state["build_type"],
+            state["resolved_token_budget"],
         )
         # R5-M21: Defensive None check — should not happen but prevents crash
         if existing is None:
