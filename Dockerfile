@@ -17,7 +17,8 @@ RUN apt-get update && \
         libpq-dev && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --gid ${USER_GID} ${USER_NAME} && \
-    useradd --uid ${USER_UID} --gid ${USER_GID} --shell /bin/bash --create-home ${USER_NAME}
+    useradd --uid ${USER_UID} --gid ${USER_GID} --shell /bin/bash --create-home ${USER_NAME} && \
+    mkdir -p /data/downloads && chown ${USER_NAME}:${USER_NAME} /data /data/downloads
 
 USER ${USER_NAME}
 WORKDIR /app
