@@ -80,14 +80,12 @@ case "${1}" in
         log "Tearing down stack: ${PREFIX}"
         docker compose -p "${PREFIX}" -f "${COMPOSE_FILE}" down --remove-orphans 2>&1
 
-        # Clean up data directories created by containers (owned by container users).
-        # Use a temporary container to remove files we can't delete as the host user.
+        # Clean up data directories.
+        # Container UID matches host UID (1000) so no permission issues.
         DATA_DIR="./data-${PREFIX}"
         if [[ -d "${DATA_DIR}" ]]; then
-            log "Cleaning up ${DATA_DIR} (container-owned files)..."
-            docker run --rm -v "$(pwd)/${DATA_DIR}:/cleanup" alpine:3.19 \
-                sh -c "rm -rf /cleanup/*" 2>/dev/null || true
-            rmdir "${DATA_DIR}" 2>/dev/null || true
+            log "Cleaning up ${DATA_DIR}..."
+            rm -rf "${DATA_DIR}"
         fi
 
         log "Stack ${PREFIX} torn down"

@@ -151,6 +151,10 @@ services:
     restart: unless-stopped
     networks:
       - claude-test-net
+    # Grant docker socket access via group_add — matches host docker GID.
+    # Override DOCKER_GID in .env if host docker group is not GID 125.
+    group_add:
+      - "${DOCKER_GID:-125}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:

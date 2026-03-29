@@ -6,8 +6,8 @@
 FROM python:3.12.10-slim
 
 ARG USER_NAME=context-broker
-ARG USER_UID=1001
-ARG USER_GID=1001
+ARG USER_UID=1000
+ARG USER_GID=1000
 
 # Root phase: system packages, user creation
 RUN apt-get update && \

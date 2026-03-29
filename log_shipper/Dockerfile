@@ -2,13 +2,10 @@ FROM python:3.12.10-slim
 
 WORKDIR /app
 
-# Create user before copying application code
-# Create shipper user and add to a group matching the host's docker socket GID.
-# The GID (default 125) can be overridden at build time if the host differs.
-ARG DOCKER_GID=125
-RUN addgroup --gid ${DOCKER_GID} docker && \
-    adduser --disabled-password --no-create-home --system --group shipper && \
-    usermod -aG docker shipper
+# Create shipper user. Docker socket access is handled by running
+# the container with --group-add matching the host's docker socket GID,
+# configured in docker-compose.yml (not hardcoded here).
+RUN adduser --disabled-password --no-create-home --system --group shipper
 
 # Install dependencies
 # Using slim instead of alpine ensures we can use wheels for asyncpg,

@@ -37,12 +37,18 @@ async def install_stategraph(
         devpi_url = packages_config.get("devpi_url")
         if devpi_url:
             cmd.extend(["--index-url", devpi_url])
+        cmd.append(pkg_spec)
     elif source == "local":
+        # Install directly from the source directory on the bind mount.
+        # --find-links only works with wheels/sdists, not source directories.
+        # The bind mount at local_path contains source directories like
+        # context-broker-ae/ and context-broker-te/ with pyproject.toml.
         local_path = packages_config.get("local_path", "/app/packages")
-        cmd.extend(["--no-index", "--find-links", local_path])
-    # pypi: no extra flags needed
-
-    cmd.append(pkg_spec)
+        source_dir = f"{local_path}/{package_name}/"
+        cmd.extend(["--force-reinstall", source_dir])
+    else:
+        # pypi: no extra flags needed
+        cmd.append(pkg_spec)
 
     _log.info("Installing StateGraph package: %s (source=%s)", pkg_spec, source)
 

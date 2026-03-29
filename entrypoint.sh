@@ -89,23 +89,18 @@ except Exception:
 echo "Installing StateGraph packages: $SG_PACKAGES"
 
 for pkg in $SG_PACKAGES; do
-    # Check if package is already installed at the correct version
-    if pip show "$pkg" >/dev/null 2>&1; then
-        echo "Package $pkg already installed — skipping"
-        continue
-    fi
 
     case "$PKG_SOURCE" in
         local)
-            # Look for pre-built wheels in /app/stategraph-wheels/ first (built in Dockerfile),
-            # then fall back to /app/packages/ (volume mount for development overrides).
-            SG_WHEEL_DIR="/app/stategraph-wheels"
-            if [ -d "$SG_WHEEL_DIR" ]; then
-                echo "Installing $pkg from built wheels: $SG_WHEEL_DIR"
-                pip install --user --no-cache-dir --no-index --find-links="$SG_WHEEL_DIR" "$pkg"
+            # Install from source directory on the bind mount.
+            # The bind mount at PKG_LOCAL_PATH contains source directories
+            # (context-broker-ae/, context-broker-te/) with pyproject.toml.
+            SG_SOURCE_DIR="$PKG_LOCAL_PATH/$pkg"
+            if [ -d "$SG_SOURCE_DIR" ]; then
+                echo "Installing $pkg from source: $SG_SOURCE_DIR"
+                pip install --user --no-cache-dir "$SG_SOURCE_DIR"
             else
-                echo "Installing $pkg from local packages: $PKG_LOCAL_PATH"
-                pip install --user --no-cache-dir --no-index --find-links="$PKG_LOCAL_PATH" "$pkg"
+                echo "WARNING: Source directory not found: $SG_SOURCE_DIR — skipping $pkg"
             fi
             ;;
         devpi)
@@ -119,9 +114,10 @@ for pkg in $SG_PACKAGES; do
     esac
 done
 
-# Ensure /data subdirectories exist with correct ownership.
-# /data is a volume mount (host-owned). The app needs writable subdirs.
-mkdir -p /data/downloads 2>/dev/null || true
+# Ensure /data subdirectories exist.
+# /data is a bind mount. With UID matching the host user (UID 1000),
+# the container user can create subdirectories directly.
+mkdir -p /data/downloads
 
 # Start the application
 exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000

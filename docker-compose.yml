@@ -171,6 +171,8 @@ services:
     restart: unless-stopped
     networks:
       - context-broker-net
+    group_add:
+      - "${DOCKER_GID:-125}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:

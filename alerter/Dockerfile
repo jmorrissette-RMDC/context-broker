@@ -2,7 +2,7 @@ FROM python:3.12.10-slim
 
 WORKDIR /app
 
-RUN adduser --disabled-password --no-create-home appuser
+RUN adduser --disabled-password --no-create-home --uid 1000 appuser
 
 COPY --chown=appuser requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
