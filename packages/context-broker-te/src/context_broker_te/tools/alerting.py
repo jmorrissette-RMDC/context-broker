@@ -12,7 +12,7 @@ import asyncpg
 
 from langchain_core.tools import tool
 
-from app.database import get_pg_pool
+from context_broker_te._ctx import get_ctx
 
 _log = logging.getLogger("context_broker.tools.alerting")
 
@@ -46,7 +46,7 @@ async def add_alert_instruction(
     except json.JSONDecodeError as exc:
         return f"Error: invalid JSON in channels: {exc}"
 
-    pool = get_pg_pool()
+    pool = get_ctx().get_pool()
 
     # Embed the description for semantic search
     embedding = await _embed_description(description)
@@ -81,7 +81,7 @@ async def list_alert_instructions() -> str:
 
     Shows each instruction's ID, description, channels, and creation date.
     """
-    pool = get_pg_pool()
+    pool = get_ctx().get_pool()
     try:
         rows = await pool.fetch(
             """
@@ -126,7 +126,7 @@ async def update_alert_instruction(
         instruction: New instruction text (empty to keep current).
         channels: New channels JSON array (empty to keep current).
     """
-    pool = get_pg_pool()
+    pool = get_ctx().get_pool()
 
     # Verify it exists
     existing = await pool.fetchrow(
@@ -190,7 +190,7 @@ async def delete_alert_instruction(instruction_id: int) -> str:
     Args:
         instruction_id: ID of the instruction to delete.
     """
-    pool = get_pg_pool()
+    pool = get_ctx().get_pool()
     try:
         result = await pool.execute(
             "DELETE FROM alert_instructions WHERE id = $1", instruction_id
@@ -205,10 +205,9 @@ async def delete_alert_instruction(instruction_id: int) -> str:
 async def _embed_description(text: str) -> list[float] | None:
     """Embed the description using the MAD's configured embedding model."""
     try:
-        from app.config import async_load_config, get_embeddings_model
-
-        config = await async_load_config()
-        model = get_embeddings_model(config)
+        ctx = get_ctx()
+        config = await ctx.async_load_config()
+        model = ctx.get_embeddings_model(config)
         vectors = await model.aembed_documents([text])
         return vectors[0]
     except (ImportError, OSError, ValueError, RuntimeError) as exc:

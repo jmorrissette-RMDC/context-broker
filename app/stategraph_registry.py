@@ -88,6 +88,14 @@ def scan() -> dict[str, list[str]]:
         try:
             register_fn = ep.load()
             registration = register_fn()
+            # TE/AE decoupling: inject KernelTEContext before flow compilation
+            init_fn = registration.get("initialize")
+            if init_fn is not None:
+                from context_broker_te._kernel_ctx import KernelTEContext
+
+                init_fn(KernelTEContext())
+                _log.info("Injected KernelTEContext into TE package: %s", ep.name)
+
             with _lock:
                 _te_packages[ep.name] = registration
 

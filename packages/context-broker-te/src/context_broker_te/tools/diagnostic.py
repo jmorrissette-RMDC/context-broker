@@ -8,7 +8,7 @@ import logging
 import asyncpg
 from langchain_core.tools import tool
 
-from app.database import get_pg_pool
+from context_broker_te._ctx import get_ctx
 
 _log = logging.getLogger("context_broker.tools.diagnostic")
 
@@ -29,7 +29,7 @@ async def log_query(
         limit: Maximum entries to return (default 50, max 200).
     """
     try:
-        pool = get_pg_pool()
+        pool = get_ctx().get_pool()
         conditions = []
         args: list = []
         idx = 1
@@ -90,7 +90,7 @@ async def context_introspection(
     import uuid as _uuid
 
     try:
-        pool = get_pg_pool()
+        pool = get_ctx().get_pool()
 
         window = await pool.fetchrow(
             """
@@ -124,15 +124,15 @@ async def context_introspection(
             _uuid.UUID(conversation_id),
         )
 
-        from app.budget import EFFECTIVE_UTILIZATION_DEFAULT
+        eu_default = get_ctx().effective_utilization_default
 
-        effective = int(window["max_token_budget"] * EFFECTIVE_UTILIZATION_DEFAULT)
+        effective = int(window["max_token_budget"] * eu_default)
 
         lines = [
             f"Context Window: {window['id']}",
             f"Build Type: {window['build_type']}",
             f"Raw Budget: {window['max_token_budget']} tokens",
-            f"Effective Budget ({int(EFFECTIVE_UTILIZATION_DEFAULT * 100)}%): {effective} tokens",
+            f"Effective Budget ({int(eu_default * 100)}%): {effective} tokens",
             f"Total Messages: {msg_count}",
             f"Total Message Tokens: {total_tokens}",
             f"Summaries: {summary_count}",
@@ -152,7 +152,7 @@ async def pipeline_status() -> str:
     plus recent activity.
     """
     try:
-        pool = get_pg_pool()
+        pool = get_ctx().get_pool()
 
         pending_embed = await pool.fetchval(
             "SELECT COUNT(*) FROM conversation_messages "

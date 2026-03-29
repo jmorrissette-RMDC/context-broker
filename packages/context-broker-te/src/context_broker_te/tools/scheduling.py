@@ -10,7 +10,7 @@ import logging
 import asyncpg
 from langchain_core.tools import tool
 
-from app.database import get_pg_pool
+from context_broker_te._ctx import get_ctx
 
 _log = logging.getLogger("context_broker.tools.scheduling")
 
@@ -23,7 +23,7 @@ async def list_schedules() -> str:
     enabled status, and recent execution history.
     """
     try:
-        pool = get_pg_pool()
+        pool = get_ctx().get_pool()
         rows = await pool.fetch("""
             SELECT s.id, s.name, s.schedule_type, s.schedule_expr,
                    s.message, s.target, s.enabled, s.created_at,
@@ -83,7 +83,7 @@ async def create_schedule(
             return f"Invalid interval: {schedule_expr}. Must be a number of seconds."
 
     try:
-        pool = get_pg_pool()
+        pool = get_ctx().get_pool()
         row = await pool.fetchrow(
             """
             INSERT INTO schedules (name, schedule_type, schedule_expr, message, target)
@@ -111,7 +111,7 @@ async def enable_schedule(schedule_id: str) -> str:
     import uuid
 
     try:
-        pool = get_pg_pool()
+        pool = get_ctx().get_pool()
         result = await pool.execute(
             "UPDATE schedules SET enabled = TRUE, updated_at = NOW() WHERE id = $1",
             uuid.UUID(schedule_id),
@@ -133,7 +133,7 @@ async def disable_schedule(schedule_id: str) -> str:
     import uuid
 
     try:
-        pool = get_pg_pool()
+        pool = get_ctx().get_pool()
         result = await pool.execute(
             "UPDATE schedules SET enabled = FALSE, updated_at = NOW() WHERE id = $1",
             uuid.UUID(schedule_id),

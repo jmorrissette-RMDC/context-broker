@@ -534,11 +534,41 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | TA-06 | Test | Opus | major | **FIXED.** Sonnet judge rated search_messages relevance as POOR. Root cause: assistant messages were included in search results by default. Assistant messages echo user queries ("Based on your question about MAD architecture..."), producing near-identical vector embeddings and RRF scores (0.016 range). Fix: `hybrid_search_messages` now defaults `filter_role` to `"user"` when no role filter is specified. Callers can still explicitly request `role=assistant` if needed. | `packages/context-broker-ae/src/context_broker_ae/search_flow.py` | FIXED | 4-line change: default filter_role to "user" before building WHERE clause. Assistant echo messages excluded from results. |
 | TA-07 | Test | Opus | major | **PARTIALLY FIXED.** Imperator tool invocation failures. 3 root causes identified: (1) `/data/downloads` missing on fresh deploy — FIXED in entrypoint.sh (`mkdir -p /data/downloads`). (2) Alerter Postgres race condition (tables not created) — FIXED with retry loop in alerter.py. (3) Tool error messages stored as `assistant` role get loaded back into context, poisoning future turns — FIXED in message_pipeline.py: `_detect_tool_error_role()` detects error patterns (Permission denied, Error writing, failed to, [Errno, Traceback, etc.) in incoming user/assistant messages and reclassifies role to `tool` before INSERT. Since `get_context` only loads user/assistant roles, error messages are naturally filtered out of future context. Remaining: LLM non-determinism in tool selection (4 tests marked xfail). | `entrypoint.sh`, `alerter/alerter.py`, `packages/context-broker-ae/src/context_broker_ae/message_pipeline.py` | FIXED | All 3 root causes addressed. The error pattern reclassification is the key fix — prevents error history from accumulating in context and causing the LLM to repeat errors instead of retrying tools. |
 
+### Code Review Rounds R1-R5 (2026-03-28) — Open Findings
+
+| ID | Round | Reviewer | Severity | Description | File(s) | Status | Notes |
+|----|-------|----------|----------|-------------|---------|--------|-------|
+| CR-B01 | R5 | Claude | blocker | Missing `import asyncpg` in conversation_ops_flow.py — NameError on Postgres failures in V2 user-message-store path | `conversation_ops_flow.py` | OPEN | Same pattern as R2 B-01/B-02 — introduced when narrowing exception types |
+| CR-B02 | R5 | Claude | major | domain_mem0.py passes stale `version="v1.1"` to MemoryConfig — causes TypeError with Mem0 >= 1.0 | `domain_mem0.py` | OPEN | AE client was updated in Mem0 upgrade but TE client was not |
+| CR-B03 | R5 | Codex | major | Alerter /health always returns 200 even when Postgres is unavailable — violates REQ-001 §6.3 | `alerter/alerter.py` | OPEN | Should return 503 with per-dependency status |
+| CR-B04 | R5 | Codex | major | Webhook processing not idempotent — retries duplicate inserts into alert_events/alert_deliveries | `alerter/alerter.py` | OPEN | Need CloudEvents id dedup with unique constraint |
+| CR-M01 | R5 | All 3 | major | Sidecar containers (alerter, log_shipper) use plain-text logging not structured JSON — violates REQ-001 §4.2 | `alerter/alerter.py`, `log_shipper/shipper.py` | OPEN | Need JSON formatter like app/logging_setup.py |
+| CR-M02 | R5 | Codex | major | Alerter missing /metrics endpoint — violates REQ-001 §6.4 | `alerter/alerter.py` | OPEN | Need minimal Prometheus counter/histogram |
+| CR-M03 | R5 | Codex | major | Webhook input validation — non-dict `data` field crashes with AttributeError | `alerter/alerter.py` | OPEN | Validate data is dict before accessing |
+| CR-M04 | R3 | Claude | major | **VERIFIED REAL.** V2 user message INSERT in get_context has no UPDATE to conversations.total_messages/estimated_token_count — counters drift from actual message count. Standard flow in message_pipeline.py always updates counters. | `conversation_ops_flow.py:585-600` | OPEN | Add counter UPDATE after INSERT |
+| CR-M05 | R3 | Claude | major | **VERIFIED REAL.** V2 user message INSERT blindly inserts without checking for consecutive duplicates. Standard flow checks sender+content match and increments repeat_count instead. | `conversation_ops_flow.py:585-600` | OPEN | Add duplicate-collapse check before INSERT |
+| CR-M06 | R3 | Claude | major | **VERIFIED REAL.** init_postgres overwrites `_pg_pool` global without closing the existing pool. On retry loops, leaked pools leave orphaned connections. | `app/database.py:22-40` | OPEN | Close existing pool before creating new one |
+| CR-M07 | R3 | Claude | major | **VERIFIED REAL (partial).** config_write, change_inference, and migrate_embeddings use synchronous open().read()/write() in async tool functions. config_read correctly uses run_in_executor. | `tools/admin.py` | OPEN | Wrap file I/O in run_in_executor |
+| CR-M08 | R3 | Claude | major | deploy.sh --down hardcodes data-test cleanup regardless of prefix | `deploy.sh` | OPEN | Cleanup path should use the prefix, not hardcoded "data-test" |
+| CR-M09 | R3 | Gemini | major | Unpinned dependencies in log_shipper/requirements.txt — violates REQ-001 §1.5 | `log_shipper/requirements.txt` | OPEN | Pin aiodocker and asyncpg to exact versions |
+| CR-M10 | R3 | Gemini | major | Entrypoint pip install runs on every container restart — wasteful | `entrypoint.sh` | OPEN | Should check if packages already installed |
+| CR-M11 | R5 | Gemini | major | async_load_config does synchronous file I/O on cache miss — violates REQ-001 §5.1 | `app/config.py` | OPEN | Wrap file read in run_in_executor |
+| CR-M12 | R5 | Gemini | major | Dockerfile USER/COPY ordering — COPY as root before USER directive — violates REQ-002 §1.1/§1.3 | `alerter/Dockerfile`, `log_shipper/Dockerfile`, `ui/Dockerfile` | OPEN | Move user creation before COPY, use --chown |
+| CR-A01 | R3 | Gemini | major | **TE/AE decoupling** — TE package imports directly from kernel (app.config, app.database, app.prompt_loader) instead of receiving via state. Violates REQ-001 §12.3/§13.2. The CB is the reference State 4 MAD — this must be correct. | `imperator_flow.py`, `tools/*.py`, `domain_mem0.py`, `seed_knowledge.py` | OPEN | Refactor TE to receive pool/config via state or provider |
+| CR-A02 | R3 | Gemini | major | Several management tools in tool_dispatch.py contain direct SQL logic instead of StateGraphs — violates REQ-001 §2.1 | `app/flows/tool_dispatch.py` | OPEN | Refactor into dedicated AE StateGraphs |
+| CR-A03 | R3 | Gemini | major | agent_node performs domain RAG, prompt loading, and LLM call sequentially in one node — violates REQ-001 §2.1 (nodes must not contain sequential multi-step logic) | `imperator_flow.py` | OPEN | Break into rag_node → context_node → llm_node chain |
+| CR-A04 | R3 | Gemini | major | Blocking graph compilation inside threading.Lock in build_type_registry — blocks event loop on first call | `app/flows/build_type_registry.py` | OPEN | Compile in executor or pre-compile at startup |
+| CR-A05 | R5 | Gemini | minor | UI container publishes port directly to host, bypassing nginx gateway — violates REQ-002 §2.2 | `docker-compose.yml` | OPEN | Route through nginx /ui location block |
+| CR-m01 | R5 | Claude | minor | Unguarded int() in cron parsing — bad expression crashes entire poll cycle | `app/workers/scheduler.py` | OPEN | Add try/except around int() conversions |
+| CR-m02 | R5 | Claude | minor | Stale "user_prompt" text in token_budget.py docstrings/log messages | `app/token_budget.py` | OPEN | Replace with "query" |
+| CR-m03 | R5 | Gemini | minor | ReAct loop context loss — history loaded in agent_node not persisted in state for subsequent iterations | `imperator_flow.py` | FALSE_POSITIVE | **VERIFIED:** History correctly preserved via `add_messages` reducer + conditional first-call check. MemorySaver carries it across ReAct iterations. |
+| CR-m04 | R4 | Claude | minor | Unbounded log shipper queue — OOM risk during DB outage | `log_shipper/shipper.py` | OPEN | Add maxsize=10000, handle QueueFull |
+
 ---
 
 ## Summary
 
-Updated 2026-03-28. 501 tests (315 mock + 186 live). Live: 178 passed, 4 xfail, 3 failed (quality), 1 skipped. Mock: 315 passed.
+Updated 2026-03-28 (evening). 501 tests (315 mock + 186 live). 34/34 targeted tests passing. Full suite not yet re-run after review fixes.
 
 | Status | Count |
 |--------|-------|

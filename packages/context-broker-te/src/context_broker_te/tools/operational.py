@@ -9,7 +9,7 @@ import logging
 import asyncpg
 from langchain_core.tools import tool
 
-from app.database import get_pg_pool
+from context_broker_te._ctx import get_ctx
 
 _log = logging.getLogger("context_broker.tools.operational")
 
@@ -27,13 +27,12 @@ async def store_domain_info(content: str, source: str = "imperator") -> str:
         source: How this was learned (default: "imperator").
     """
     try:
-        from app.config import async_load_config, get_embeddings_model
-
-        config = await async_load_config()
-        pool = get_pg_pool()
+        ctx = get_ctx()
+        config = await ctx.async_load_config()
+        pool = ctx.get_pool()
 
         # Embed the content
-        emb_model = get_embeddings_model(config)
+        emb_model = ctx.get_embeddings_model(config)
         vector = await emb_model.aembed_query(content)
         vec_str = "[" + ",".join(str(v) for v in vector) + "]"
 
@@ -63,13 +62,12 @@ async def search_domain_info(query: str, limit: int = 5) -> str:
         limit: Maximum results to return (default 5).
     """
     try:
-        from app.config import async_load_config, get_embeddings_model
-
-        config = await async_load_config()
-        pool = get_pg_pool()
+        ctx = get_ctx()
+        config = await ctx.async_load_config()
+        pool = ctx.get_pool()
 
         # Embed the query
-        emb_model = get_embeddings_model(config)
+        emb_model = ctx.get_embeddings_model(config)
         query_vec = await emb_model.aembed_query(query)
         vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
 
@@ -111,16 +109,15 @@ async def extract_domain_knowledge(content: str = "") -> str:
         content: Optional specific content to extract. Empty = process pending entries.
     """
     try:
-        from app.config import async_load_config
-
-        config = await async_load_config()
+        ctx = get_ctx()
+        config = await ctx.async_load_config()
         from context_broker_te.domain_mem0 import get_domain_mem0
 
         mem0 = await get_domain_mem0(config)
         if mem0 is None:
             return "Domain Mem0 client not available."
 
-        pool = get_pg_pool()
+        pool = ctx.get_pool()
 
         if content:
             # Extract specific content
@@ -196,9 +193,8 @@ async def search_domain_knowledge(query: str, limit: int = 5) -> str:
         limit: Maximum results to return (default 5).
     """
     try:
-        from app.config import async_load_config
-
-        config = await async_load_config()
+        ctx = get_ctx()
+        config = await ctx.async_load_config()
         from context_broker_te.domain_mem0 import get_domain_mem0
 
         mem0 = await get_domain_mem0(config)

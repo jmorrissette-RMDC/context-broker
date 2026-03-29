@@ -17,13 +17,16 @@ def register() -> dict:
     - purpose: What the Imperator is for
     - imperator_builder: callable that builds the compiled Imperator StateGraph
     - tools_required: MCP tools the Imperator needs from the AE
+    - initialize: callable(ctx) — AE bootstrap calls this before flow compilation
     """
+    from context_broker_te._ctx import initialize
     from context_broker_te.imperator_flow import build_imperator_flow
 
     return {
         "identity": "Context Broker Imperator",
         "purpose": "Context engineering and conversational memory management",
         "imperator_builder": build_imperator_flow,
+        "initialize": initialize,
         "tools_required": [
             "get_context",
             "store_message",

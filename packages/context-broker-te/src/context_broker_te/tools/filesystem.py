@@ -170,9 +170,9 @@ async def read_system_prompt() -> str:
 
     Returns the full content of the system prompt file.
     """
-    from app.config import load_merged_config
+    from context_broker_te._ctx import get_ctx
 
-    config = load_merged_config()
+    config = get_ctx().load_merged_config()
     prompt_name = config.get("imperator", {}).get("system_prompt", "imperator_identity")
     prompt_path = os.path.join(_PROMPTS_DIR, f"{prompt_name}.md")
     try:
@@ -200,9 +200,9 @@ async def update_system_prompt(content: str) -> str:
     if not content or len(content) < 20:
         return "System prompt too short — must be at least 20 characters."
 
-    from app.config import load_merged_config
+    from context_broker_te._ctx import get_ctx
 
-    config = load_merged_config()
+    config = get_ctx().load_merged_config()
     prompt_name = config.get("imperator", {}).get("system_prompt", "imperator_identity")
     prompt_path = os.path.join(_PROMPTS_DIR, f"{prompt_name}.md")
     try:

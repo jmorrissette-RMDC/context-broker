@@ -32,9 +32,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from typing_extensions import TypedDict
 
-from app.config import get_chat_model, get_tuning
-from app.database import get_pg_pool
-from app.prompt_loader import async_load_prompt
+from context_broker_te._ctx import get_ctx
 
 from context_broker_te.tools.admin import get_tools as get_admin_tools
 from context_broker_te.tools.alerting import get_tools as get_alerting_tools
@@ -81,9 +79,8 @@ _mem_search_flow_singleton = None
 def _get_conv_search_flow():
     global _conv_search_flow_singleton
     if _conv_search_flow_singleton is None:
-        from app.stategraph_registry import get_flow_builder
-
-        builder = get_flow_builder("conversation_search")
+        ctx = get_ctx()
+        builder = ctx.get_flow_builder("conversation_search")
         if builder is None:
             raise RuntimeError(
                 "AE package not loaded: conversation_search flow unavailable"
@@ -95,9 +92,8 @@ def _get_conv_search_flow():
 def _get_mem_search_flow():
     global _mem_search_flow_singleton
     if _mem_search_flow_singleton is None:
-        from app.stategraph_registry import get_flow_builder
-
-        builder = get_flow_builder("memory_search")
+        ctx = get_ctx()
+        builder = ctx.get_flow_builder("memory_search")
         if builder is None:
             raise RuntimeError("AE package not loaded: memory_search flow unavailable")
         _mem_search_flow_singleton = builder()
@@ -115,9 +111,8 @@ async def conv_search(query: str, limit: int = 5) -> str:
         query: The search query describing what to find.
         limit: Maximum number of results to return (default 5).
     """
-    from app.config import async_load_config
-
-    config = await async_load_config()
+    ctx = get_ctx()
+    config = await ctx.async_load_config()
     flow = _get_conv_search_flow()
     result = await flow.ainvoke(
         {
@@ -160,9 +155,8 @@ async def mem_search(query: str, user_id: str = "imperator", limit: int = 5) -> 
         user_id: The user whose memories to search (default: imperator).
         limit: Maximum number of results to return (default 5).
     """
-    from app.config import async_load_config
-
-    config = await async_load_config()
+    ctx = get_ctx()
+    config = await ctx.async_load_config()
     flow = _get_mem_search_flow()
     result = await flow.ainvoke(
         {
@@ -223,9 +217,8 @@ def _get_message_pipeline():
     """Lazy-init the standard message pipeline flow."""
     global _message_pipeline_singleton
     if _message_pipeline_singleton is None:
-        from app.stategraph_registry import get_flow_builder
-
-        builder = get_flow_builder("message_pipeline")
+        ctx = get_ctx()
+        builder = ctx.get_flow_builder("message_pipeline")
         if builder is None:
             raise RuntimeError(
                 "AE package not loaded: message_pipeline flow unavailable"
@@ -243,9 +236,10 @@ async def _load_conversation_history(context_window_id: str, config: dict) -> st
     ARCH-06: History comes from the DB, not a checkpointer.  Returns a
     formatted string to embed in the system prompt.
     """
-    history_limit = get_tuning(config, "imperator_history_limit", 20)
+    ctx = get_ctx()
+    history_limit = ctx.get_tuning(config, "imperator_history_limit", 20)
     try:
-        pool = get_pg_pool()
+        pool = ctx.get_pool()
         cw_row = await pool.fetchrow(
             "SELECT conversation_id FROM context_windows WHERE id = $1",
             uuid.UUID(context_window_id),
@@ -302,13 +296,15 @@ async def agent_node(state: ImperatorState) -> dict:
     """
     config = state["config"]
 
+    ctx = get_ctx()
+
     # R7-m14: Use the pre-bound LLM from graph compilation.
     # Falls back to runtime binding if _prebound_llm is not available (e.g., tests).
     llm_with_tools = _prebound_llm
     if llm_with_tools is None:
         imperator_config = config.get("imperator", {})
         active_tools = _collect_tools(imperator_config)
-        llm = get_chat_model(config, role="imperator")
+        llm = ctx.get_chat_model(config, role="imperator")
         llm_with_tools = llm.bind_tools(active_tools)
 
     messages = list(state["messages"])
@@ -320,7 +316,7 @@ async def agent_node(state: ImperatorState) -> dict:
         imperator_cfg = config.get("imperator", {})
         prompt_name = imperator_cfg.get("system_prompt", "imperator_identity")
         try:
-            system_content = await async_load_prompt(prompt_name)
+            system_content = await ctx.async_load_prompt(prompt_name)
         except RuntimeError as exc:
             _log.error("Failed to load system prompt '%s': %s", prompt_name, exc)
             return {
@@ -343,11 +339,8 @@ async def agent_node(state: ImperatorState) -> dict:
         domain_context = None
         if user_query:
             try:
-                from app.database import get_pg_pool
-                from app.config import get_embeddings_model
-
-                pool = get_pg_pool()
-                emb_model = get_embeddings_model(config)
+                pool = ctx.get_pool()
+                emb_model = ctx.get_embeddings_model(config)
                 query_vec = await emb_model.aembed_query(user_query[:500])
                 vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
 
@@ -373,8 +366,6 @@ async def agent_node(state: ImperatorState) -> dict:
         conversation_id = state.get("context_window_id")
         if conversation_id:
             try:
-                from app.flows.tool_dispatch import dispatch_tool
-
                 build_type = imperator_cfg.get("build_type", "tiered-summary")
                 budget = imperator_cfg.get("max_context_tokens", 8192)
                 if not isinstance(budget, int):
@@ -397,7 +388,7 @@ async def agent_node(state: ImperatorState) -> dict:
                     "api_key_env": imperator_cfg.get("api_key_env", ""),
                 }
 
-                ctx_result = await dispatch_tool(
+                ctx_result = await ctx.dispatch_tool(
                     "get_context",
                     get_context_args,
                     config,
@@ -425,7 +416,7 @@ async def agent_node(state: ImperatorState) -> dict:
         _first_call = False
 
     # CB-R3-06: Truncate older messages if the list exceeds the limit.
-    max_react_messages = get_tuning(config, "imperator_max_react_messages", 40)
+    max_react_messages = ctx.get_tuning(config, "imperator_max_react_messages", 40)
     if len(messages) > max_react_messages:
         from langchain_core.messages import ToolMessage
 
@@ -506,7 +497,7 @@ def should_continue(state: ImperatorState) -> str:
 
     last_message = messages[-1]
     if isinstance(last_message, AIMessage) and last_message.tool_calls:
-        max_iterations = get_tuning(
+        max_iterations = get_ctx().get_tuning(
             state.get("config", {}), "imperator_max_iterations", 5
         )
         if state.get("iteration_count", 0) >= max_iterations:
@@ -572,9 +563,8 @@ async def store_user_message(state: ImperatorState) -> dict:
     )
 
     try:
-        from app.flows.tool_dispatch import dispatch_tool
-
-        await dispatch_tool(
+        ctx = get_ctx()
+        await ctx.dispatch_tool(
             "store_message",
             {
                 "conversation_id": str(conversation_id),
@@ -638,9 +628,8 @@ async def store_assistant_message(state: ImperatorState) -> dict:
 
     if conversation_id and response_text:
         try:
-            from app.flows.tool_dispatch import dispatch_tool
-
-            await dispatch_tool(
+            ctx = get_ctx()
+            await ctx.dispatch_tool(
                 "store_message",
                 {
                     "conversation_id": str(conversation_id),
@@ -672,17 +661,16 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
     Tools are discovered from tools/ modules via get_tools().
     """
     # R6-M14: Build the ToolNode with only the tools that match the config.
+    ctx = get_ctx()
     if config is None:
-        from app.config import load_merged_config
-
-        config = load_merged_config()
+        config = ctx.load_merged_config()
     imperator_config = config.get("imperator", {})
     active_tools = _collect_tools(imperator_config)
     tool_node_instance = ToolNode(active_tools)
 
     # R7-m14: Pre-bind tools to the LLM at graph compilation time
     global _prebound_llm
-    llm = get_chat_model(config, role="imperator")
+    llm = ctx.get_chat_model(config, role="imperator")
     _prebound_llm = llm.bind_tools(active_tools)
 
     workflow = StateGraph(ImperatorState)

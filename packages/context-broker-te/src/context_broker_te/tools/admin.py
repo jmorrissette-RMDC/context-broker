@@ -11,7 +11,7 @@ import asyncpg
 import yaml
 from langchain_core.tools import tool
 
-from app.database import get_pg_pool
+from context_broker_te._ctx import get_ctx
 
 _log = logging.getLogger("context_broker.tools.admin")
 
@@ -55,10 +55,10 @@ async def config_read() -> str:
     """
     import asyncio
 
-    from app.config import CONFIG_PATH
+    ctx = get_ctx()
 
     def _sync_read():
-        with open(CONFIG_PATH, encoding="utf-8") as f:
+        with open(ctx.config_path, encoding="utf-8") as f:
             return yaml.safe_load(f)
 
     try:
@@ -82,7 +82,7 @@ async def db_query(sql: str) -> str:
         sql: A SQL query to execute (enforced read-only at the DB level).
     """
     try:
-        pool = get_pg_pool()
+        pool = get_ctx().get_pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute("SET TRANSACTION READ ONLY")
@@ -111,7 +111,7 @@ async def config_write(key: str, value: str) -> str:
         key: Dot-notation config path (e.g., "summarization.model", "tuning.verbose_logging").
         value: New value as a string. Numbers and booleans are auto-converted.
     """
-    from app.config import CONFIG_PATH
+    ctx = get_ctx()
 
     te_keys = ["imperator", "system_prompt", "identity", "purpose"]
     if any(key.startswith(k) for k in te_keys):
@@ -121,7 +121,7 @@ async def config_write(key: str, value: str) -> str:
         )
 
     try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
+        with open(ctx.config_path, encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
         parts = key.split(".")
@@ -149,7 +149,7 @@ async def config_write(key: str, value: str) -> str:
 
         target[parts[-1]] = value_typed
 
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        with open(ctx.config_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f, default_flow_style=False)
 
         return (
@@ -167,9 +167,8 @@ async def verbose_toggle() -> str:
     Reads the current value of tuning.verbose_logging from config and
     writes the opposite. Changes take effect immediately (hot-reload).
     """
-    from app.config import get_tuning, load_config
-
-    current = get_tuning(load_config(), "verbose_logging", False)
+    ctx = get_ctx()
+    current = ctx.get_tuning(ctx.load_config(), "verbose_logging", False)
     new_value = "false" if current else "true"
     return await config_write.ainvoke(
         {"key": "tuning.verbose_logging", "value": new_value}
@@ -242,9 +241,8 @@ async def change_inference(slot: str, provider: str = "", model: str = "") -> st
         if not slot_models:
             return f"No models in catalog for slot '{slot}'. Check inference-models.yml."
 
-        from app.config import async_load_config
-
-        config = await async_load_config()
+        ctx = get_ctx()
+        config = await ctx.async_load_config()
         if slot == "imperator":
             current = config.get("imperator", {}).get("model", "unknown")
         elif slot == "embeddings":
@@ -288,23 +286,22 @@ async def change_inference(slot: str, provider: str = "", model: str = "") -> st
         return f"Endpoint test failed: {err}. Model not switched."
 
     # Determine which config file to modify
+    ctx = get_ctx()
     if slot == "imperator":
-        from app.config import TE_CONFIG_PATH as target_path
+        target_path = ctx.te_config_path
         config_section = "imperator"
     else:
-        from app.config import CONFIG_PATH as target_path
+        target_path = ctx.config_path
         config_section = slot
 
     # For embeddings, warn about destructive migration
     if slot == "embeddings":
-        from app.config import async_load_config
-
-        config = await async_load_config()
+        config = await ctx.async_load_config()
         current_model = config.get("embeddings", {}).get("model", "unknown")
         current_dims = config.get("embeddings", {}).get("embedding_dims", "unknown")
         new_dims = match.get("embedding_dims", current_dims)
 
-        pool = get_pg_pool()
+        pool = ctx.get_pool()
         msg_count = await pool.fetchval(
             "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL"
         )
@@ -365,14 +362,13 @@ async def migrate_embeddings(
         new_dims: New embedding dimensions (e.g., 1536, 3072, 768).
         confirm: Set to true to actually execute. Default false (dry run).
     """
-    from app.config import CONFIG_PATH, async_load_config
-
-    config = await async_load_config()
+    ctx = get_ctx()
+    config = await ctx.async_load_config()
     current_model = config.get("embeddings", {}).get("model", "unknown")
     current_dims = config.get("embeddings", {}).get("embedding_dims", "unknown")
 
     if not confirm:
-        pool = get_pg_pool()
+        pool = ctx.get_pool()
         msg_count = await pool.fetchval(
             "SELECT COUNT(*) FROM conversation_messages WHERE embedding IS NOT NULL"
         )
@@ -404,17 +400,17 @@ async def migrate_embeddings(
 
     # Step 1: Update config.yml
     try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
+        with open(ctx.config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
         cfg.setdefault("embeddings", {})["model"] = new_model
         cfg["embeddings"]["embedding_dims"] = new_dims
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        with open(ctx.config_path, "w", encoding="utf-8") as f:
             yaml.dump(cfg, f, default_flow_style=False)
         results.append(f"Config updated: model={new_model}, dims={new_dims}")
     except (OSError, yaml.YAMLError) as exc:
         return f"Failed to update config: {exc}"
 
-    pool = get_pg_pool()
+    pool = ctx.get_pool()
 
     # Step 2: Alter vector columns
     try:

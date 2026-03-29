@@ -174,9 +174,10 @@ async def seed_domain_knowledge() -> int:
 
     Returns the number of articles seeded (0 if table already has content).
     """
-    from app.database import get_pg_pool
+    from context_broker_te._ctx import get_ctx
 
-    pool = get_pg_pool()
+    ctx = get_ctx()
+    pool = ctx.get_pool()
 
     # Check if table exists and has content
     try:
@@ -193,15 +194,13 @@ async def seed_domain_knowledge() -> int:
     # Seed the articles (without embeddings — the store_domain_info tool
     # handles embedding, but for seed we insert directly and let the
     # embedding worker pick them up if vectorization is enabled)
-    from app.config import async_load_config, get_embeddings_model
-
-    config = await async_load_config()
+    config = await ctx.async_load_config()
     seeded = 0
 
     for article in SEED_ARTICLES:
         try:
             # Generate embedding
-            embeddings_model = get_embeddings_model(config)
+            embeddings_model = ctx.get_embeddings_model(config)
             vectors = await embeddings_model.aembed_documents([article["content"]])
             vec_str = "[" + ",".join(str(v) for v in vectors[0]) + "]"
 

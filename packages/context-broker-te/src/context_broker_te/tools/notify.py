@@ -43,9 +43,9 @@ async def send_notification(
         title: Optional short title for the notification.
     """
     try:
-        from app.config import load_merged_config
+        from context_broker_te._ctx import get_ctx
 
-        config = load_merged_config()
+        config = get_ctx().load_merged_config()
         webhook_url = config.get("imperator", {}).get(
             "notification_webhook", "http://context-broker-alerter:8000/webhook"
         )

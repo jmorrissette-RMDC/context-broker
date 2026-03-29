@@ -47,14 +47,16 @@ def _build_domain_mem0(config: dict) -> object:
         VectorStoreConfig,
     )
 
-    from app.config import get_api_key
+    from context_broker_te._ctx import get_ctx
+
+    ctx = get_ctx()
 
     # Use the same LLM and embeddings config as the AE
     llm_config = config.get("extraction", {}) or config.get("llm", {})
     embeddings_config = config.get("embeddings", {})
 
-    llm_api_key = get_api_key(llm_config)
-    embeddings_api_key = get_api_key(embeddings_config)
+    llm_api_key = ctx.get_api_key(llm_config)
+    embeddings_api_key = ctx.get_api_key(embeddings_config)
 
     postgres_password = os.environ.get("POSTGRES_PASSWORD", "")
     neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
