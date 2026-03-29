@@ -348,32 +348,33 @@ async def hybrid_search_messages(state: MessageSearchState) -> dict:
     # This eliminates manual index tracking throughout the function.
     def _build_extra_filters(start_idx: int) -> tuple[str, list, int]:
         """Return (sql_fragment, args_list, next_idx) for the structured filters."""
-        filters: list[str] = []
-        args: list = []
-        if conversation_id:
-            filters.append("conversation_id = ${}::uuid")
-            args.append(uuid.UUID(conversation_id))
-        if filter_sender:
-            filters.append("sender = ${}")
-            args.append(filter_sender)
-        if filter_role:
-            filters.append("role = ${}")
-            args.append(filter_role)
-        if min_content_length > 0:
-            filters.append(f"length(content) > {min_content_length}")
-            # No parameter needed — literal integer in SQL
-        if parsed_date_from:
-            filters.append("created_at >= ${}::timestamptz")
-            args.append(parsed_date_from)
-        if parsed_date_to:
-            filters.append("created_at <= ${}::timestamptz")
-            args.append(parsed_date_to)
-        # Enumerate and format parameter indices
         clauses = ""
-        for i, f in enumerate(filters):
-            clauses += " AND " + f.format(start_idx + i)
-        next_idx = start_idx + len(filters)
-        return clauses, args, next_idx
+        args: list = []
+        idx = start_idx
+        if conversation_id:
+            clauses += f" AND conversation_id = ${idx}::uuid"
+            args.append(uuid.UUID(conversation_id))
+            idx += 1
+        if filter_sender:
+            clauses += f" AND sender = ${idx}"
+            args.append(filter_sender)
+            idx += 1
+        if filter_role:
+            clauses += f" AND role = ${idx}"
+            args.append(filter_role)
+            idx += 1
+        if min_content_length > 0:
+            clauses += f" AND length(content) > {min_content_length}"
+            # No parameter — literal integer, no idx increment
+        if parsed_date_from:
+            clauses += f" AND created_at >= ${idx}::timestamptz"
+            args.append(parsed_date_from)
+            idx += 1
+        if parsed_date_to:
+            clauses += f" AND created_at <= ${idx}::timestamptz"
+            args.append(parsed_date_to)
+            idx += 1
+        return clauses, args, idx
 
     if query_embedding is not None:
         vec_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
