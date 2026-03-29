@@ -155,12 +155,22 @@ def test_stack(http_client):
         print(
             f"[SETUP] Data already loaded ({existing_counts['total']:,} messages) — skipping bulk load"
         )
-        # Recover conversation IDs from DB
-        resp = mcp_call(http_client, "conv_list_conversations", {"limit": 10})
+        # Recover Phase 1 conversation IDs from DB.
+        # conv_list_conversations returns test-created conversations first,
+        # so use a large limit and filter by title prefix to find Phase 1 data.
+        resp = mcp_call(http_client, "conv_list_conversations", {"limit": 100})
         if resp.status_code == 200:
             convs = extract_mcp_result(resp).get("conversations", [])
             for c in convs:
-                loaded_conversations[c.get("title", c["id"])] = c["id"]
+                title = c.get("title") or ""
+                # Phase 1 conversations have titles like "claude-test-conversation-N"
+                if "claude-test-conversation" in title:
+                    loaded_conversations[title] = c["id"]
+        if not loaded_conversations:
+            # Fallback: take any conversation
+            for c in convs:
+                title = c.get("title") or c["id"]
+                loaded_conversations[title] = c["id"]
         total_messages = existing_counts["total"]
     else:
         conversation_files = sorted(PHASE1_DIR.glob("conversation-*.json"))
@@ -351,21 +361,17 @@ def any_conversation_id(loaded_conversations, http_client):
     """Return a Phase 1 conversation ID with substantial data.
 
     Quality tests need conversations with thousands of messages and
-    completed assembly. Filters out small test-created conversations
-    and the Imperator's system conversation.
+    completed assembly. Uses the loaded_conversations dict which maps
+    file stems (e.g., 'conversation-1') to conversation IDs. These
+    are always Phase 1 bulk data, not test-created conversations.
     """
-    # Query for conversations with >1000 messages (Phase 1 bulk data)
-    resp = mcp_call(
-        http_client,
-        "conv_list_conversations",
-        {"limit": 20},
-    )
-    if resp.status_code == 200:
-        result = extract_mcp_result(resp)
-        convs = result.get("conversations", [])
-        for c in convs:
-            msg_count = c.get("total_messages", 0)
-            if msg_count and msg_count > 1000:
-                return c["id"]
+    # loaded_conversations is populated during bulk load (Step 3).
+    # Keys are file stems like "conversation-1", "conversation-2", etc.
+    # These are always Phase 1 data with thousands of messages.
+    # When data is pre-loaded, keys come from conv_list_conversations
+    # titles like "claude-test-conversation-1".
+    for name, conv_id in loaded_conversations.items():
+        if "conversation" in name.lower() and "imperator" not in name.lower():
+            return conv_id
     # Fallback: return first loaded conversation
     return next(iter(loaded_conversations.values()))
