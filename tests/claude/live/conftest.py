@@ -296,17 +296,18 @@ def test_stack(http_client):
     # with tiered-summary build type so the assembly worker processes them.
     print("[SETUP] Creating context windows for all conversations...")
     for conv_name, conv_id in loaded_conversations.items():
-        resp = mcp_call(
-            http_client,
-            "get_context",
-            {
-                "conversation_id": conv_id,
-                "build_type": "tiered-summary",
-                "budget": 16000,
-            },
-        )
-        if resp.status_code != 200:
-            print(f"[SETUP] WARNING: get_context failed for {conv_name}: {resp.status_code}")
+        for build_type in ("tiered-summary", "enriched"):
+            resp = mcp_call(
+                http_client,
+                "get_context",
+                {
+                    "conversation_id": conv_id,
+                    "build_type": build_type,
+                    "budget": 16000,
+                },
+            )
+            if resp.status_code != 200:
+                print(f"[SETUP] WARNING: get_context ({build_type}) failed for {conv_name}: {resp.status_code}")
 
     # Wait for assembly to complete on the newly created windows
     print("[SETUP] Waiting for assembly to complete on new windows...")
