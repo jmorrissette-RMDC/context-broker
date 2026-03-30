@@ -6,6 +6,22 @@
 
 ***
 
+## Previous Session Transcript
+
+The full conversation transcript from the session that produced this handoff is available at:
+
+```
+C:\Users\j\.claude\projects\C--Users-j-projects-portfolio-ContextBroker\fd13932c-363e-43d9-a968-48144b0dbcba.jsonl
+```
+
+If you have questions about decisions made, context behind a fix, or why something was done a certain way, you can read this file. It contains the complete conversation including all tool calls and results.
+
+You can also resume that session directly to ask it questions:
+
+```bash
+claude -r "fd13932c-363e-43d9-a968-48144b0dbcba"
+```
+
 ## First Thing: Write Your Own Plan File
 
 Before doing anything else, read this document completely, then write a plan file. The plan should cover Phases 2-5 below with enough detail to execute without this handoff doc.
