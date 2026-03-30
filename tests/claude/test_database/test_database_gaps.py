@@ -306,3 +306,53 @@ class TestRunMigrations:
             await mig_mod.run_migrations()
 
         mig_fn.assert_not_awaited()
+
+
+# ── RB-25: Migration 013 drops correct index name ────────────────
+
+
+class TestMigration013:
+    """RB-25: Migration 013 must drop idx_windows_conv_participant_build
+    (from migration 010), not idx_context_windows_unique (wrong name).
+
+    The bug: migration 013 tried to drop an index that doesn't exist,
+    leaving two conflicting unique indexes on context_windows.
+    """
+
+    @pytest.mark.asyncio
+    async def test_drops_correct_index_name(self, mock_conn):
+        """Migration 013 SQL references idx_windows_conv_participant_build."""
+        await mig_mod._migration_013(mock_conn)
+
+        # Check all SQL that was executed
+        executed_sql = " ".join(
+            str(call.args[0]) for call in mock_conn.execute.call_args_list
+        )
+
+        assert "idx_windows_conv_participant_build" in executed_sql, (
+            "Migration 013 must drop idx_windows_conv_participant_build (from migration 010)"
+        )
+        # The wrong name should NOT appear in executable SQL
+        # (it may appear in comments, but not in DROP INDEX/DROP CONSTRAINT)
+        for call in mock_conn.execute.call_args_list:
+            sql = str(call.args[0])
+            if "DROP INDEX" in sql or "DROP CONSTRAINT" in sql:
+                assert "idx_context_windows_unique" not in sql, (
+                    f"Migration 013 still references wrong index name: {sql}"
+                )
+
+    @pytest.mark.asyncio
+    async def test_creates_new_identity_index(self, mock_conn):
+        """Migration 013 creates idx_context_windows_identity on D-03 columns."""
+        await mig_mod._migration_013(mock_conn)
+
+        executed_sql = " ".join(
+            str(call.args[0]) for call in mock_conn.execute.call_args_list
+        )
+
+        assert "idx_context_windows_identity" in executed_sql, (
+            "Migration 013 must create idx_context_windows_identity"
+        )
+        assert "conversation_id, build_type, max_token_budget" in executed_sql, (
+            "New index must be on (conversation_id, build_type, max_token_budget)"
+        )

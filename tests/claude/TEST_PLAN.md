@@ -62,14 +62,29 @@ The fastest cloud models, baked into `config-test/`:
 
 ## Session Setup (automatic)
 
-The `conftest_live.py` session fixture:
-1. Deploys test stack: `docker compose -f docker-compose.claude-test.yml up -d --build`
+The `conftest.py` session fixture:
+
+0. **(Opt-in) Phase 0: Fresh Deploy** — set `FRESH_DEPLOY=1` to tear down everything
+   (`docker compose down -v --remove-orphans`), rebuild from scratch
+   (`docker compose up -d --build`), and verify the clean deploy works per
+   REQ-002 §5.1.1. Checks: all containers healthy, /health 200, MCP responding,
+   database tables created by migrations. Without this flag, tests run against
+   the existing stack (faster iteration).
+1. Checks if stack is already running; deploys via deploy.sh if not
 2. Waits for `/health` 200 (max 180s)
 3. Bulk loads all 10,430 Phase 1 messages via MCP `store_message`
 4. Waits for pipeline completion (embeddings, extraction, assembly — max 3600s)
-5. Runs all live tests
-6. Generates `ISSUES.md` from `issues.json`
-7. Tears down stack: `docker compose -f docker-compose.claude-test.yml down -v`
+5. Creates context windows for all conversations
+6. Runs all live tests
+7. Generates `ISSUES.md` from `issues.json`
+
+```bash
+# Full suite with fresh deploy (catches infrastructure bugs)
+FRESH_DEPLOY=1 pytest tests/claude/ -v
+
+# Full suite against existing stack (faster)
+pytest tests/claude/ -v
+```
 
 ## Issues Log
 
@@ -120,6 +135,7 @@ tests/claude/
 
 | Phase | File | Tests | Covers |
 |-------|------|-------|--------|
+| 0 | conftest.py (`_fresh_deploy`) | — | Fresh deploy: teardown, rebuild, health, MCP, schema (opt-in via `FRESH_DEPLOY=1`) |
 | A | test_phase_a_infrastructure.py | 23 | Health, metrics, MCP protocol, SSE, startup, migrations |
 | B | test_phase_b_core_tools.py | 11 | get_context, store_message, search_messages, search_knowledge |
 | C | test_phase_c_management.py | 23 | All conv_*, mem_*, imperator_chat, logs, install |

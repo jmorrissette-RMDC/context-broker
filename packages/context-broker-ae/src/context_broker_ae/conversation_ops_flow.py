@@ -524,13 +524,15 @@ async def find_or_create_window_node(state: GetContextState) -> dict:
     # Create new window — ON CONFLICT handles the race where two requests
     # pass the SELECT above concurrently. If the INSERT conflicts, fetch
     # the existing row instead.
+    # D-03: ON CONFLICT must match idx_context_windows_identity
+    # (conversation_id, build_type, max_token_budget).
     window_id = uuid.uuid4()
     row = await pool.fetchrow(
         """
         INSERT INTO context_windows
             (id, conversation_id, participant_id, build_type, max_token_budget)
         VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (conversation_id, participant_id, build_type) DO NOTHING
+        ON CONFLICT (conversation_id, build_type, max_token_budget) DO NOTHING
         RETURNING id
         """,
         window_id,
@@ -549,15 +551,17 @@ async def find_or_create_window_node(state: GetContextState) -> dict:
         )
         return {"context_window_id": str(row["id"])}
 
-    # INSERT was a no-op (concurrent create won the race) — fetch the winner
+    # INSERT was a no-op (concurrent create won the race) — fetch the winner.
+    # Match ON CONFLICT columns: conversation_id, build_type, max_token_budget.
     row = await pool.fetchrow(
         """
         SELECT id FROM context_windows
-        WHERE conversation_id = $1 AND participant_id = 'auto' AND build_type = $2
+        WHERE conversation_id = $1 AND build_type = $2 AND max_token_budget = $3
         LIMIT 1
         """,
         conv_id,
         build_type,
+        snapped_budget,
     )
     _log.info("get_context: reusing window %s (concurrent create)", row["id"])
     return {"context_window_id": str(row["id"])}

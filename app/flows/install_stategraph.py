@@ -8,6 +8,7 @@ After installation, rescans entry_points to discover and register new StateGraph
 
 import asyncio
 import logging
+import os
 import subprocess
 
 _log = logging.getLogger("context_broker.flows.install_stategraph")
@@ -39,13 +40,24 @@ async def install_stategraph(
             cmd.extend(["--index-url", devpi_url])
         cmd.append(pkg_spec)
     elif source == "local":
-        # Install directly from the source directory on the bind mount.
-        # --find-links only works with wheels/sdists, not source directories.
-        # The bind mount at local_path contains source directories like
-        # context-broker-ae/ and context-broker-te/ with pyproject.toml.
+        # Install from the source directory on the bind mount.
+        # RB-34: bind mount is :ro — copy source to /tmp before pip install
+        # to avoid polluting host repo with build artifacts.
         local_path = packages_config.get("local_path", "/app/packages")
         source_dir = f"{local_path}/{package_name}/"
-        cmd.extend(["--force-reinstall", source_dir])
+        tmp_dir = f"/tmp/sg-install-{package_name}"
+        import shutil
+
+        if os.path.isdir(source_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            shutil.copytree(source_dir, tmp_dir)
+            cmd.extend(["--force-reinstall", tmp_dir])
+        else:
+            return {
+                "status": "error",
+                "package": pkg_spec,
+                "error": f"Source directory not found: {source_dir}",
+            }
     else:
         # pypi: no extra flags needed
         cmd.append(pkg_spec)
@@ -65,6 +77,12 @@ async def install_stategraph(
         }
 
     _log.info("pip install succeeded for %s", pkg_spec)
+
+    # Clean up /tmp copy if local source was used
+    if source == "local":
+        import shutil
+
+        shutil.rmtree(f"/tmp/sg-install-{package_name}", ignore_errors=True)
 
     # Rescan entry_points to discover the new/updated package
     from app.stategraph_registry import scan

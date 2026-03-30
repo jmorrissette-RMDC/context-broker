@@ -447,3 +447,78 @@ class TestCredentialsHotReload:
             creds = config_mod._load_credentials()
 
         assert creds == {}
+
+
+# ── RB-32c: Cache invalidation after config_write ────────────────
+
+
+class TestCacheInvalidation:
+    """Tests for invalidate_config_cache() — RB-32c.
+
+    The bug: config_write changes the file on disk, but if mtime
+    resolution is coarse (same second), the mtime-based cache fast
+    path returns stale data. invalidate_config_cache() must force a
+    re-read regardless of mtime.
+    """
+
+    def test_invalidate_clears_all_cache_state(self):
+        """invalidate_config_cache zeroes out cache, mtime, and hash."""
+        config_mod._config_cache = {"some": "config"}
+        config_mod._config_mtime = 1234567890.123
+        config_mod._config_content_hash = "abc123"
+
+        config_mod.invalidate_config_cache()
+
+        assert config_mod._config_cache is None
+        assert config_mod._config_mtime == 0.0
+        assert config_mod._config_content_hash == ""
+
+    def test_load_after_invalidate_rereads_even_with_same_mtime(self, ae_yaml):
+        """After invalidation, load_config re-reads even if mtime unchanged."""
+        raw = yaml.dump(ae_yaml)
+        mtime = 1234567890.0  # Fixed mtime
+
+        # Prime the cache
+        with (
+            patch("os.stat") as mock_stat,
+            patch.object(config_mod, "_read_and_parse_config", return_value=(ae_yaml, raw)),
+            patch("os.path.exists", return_value=False),  # no TE config
+        ):
+            mock_stat.return_value = MagicMock(st_mtime=mtime)
+            result1 = config_mod.load_config()
+            assert result1 == ae_yaml
+
+        # Cache is now primed at this mtime
+        assert config_mod._config_cache is not None
+        assert config_mod._config_mtime == mtime
+
+        # Invalidate
+        config_mod.invalidate_config_cache()
+
+        # Now load again with the SAME mtime — must re-read, not return stale cache
+        new_config = {"database": {"pool_max_size": 20}, "llm": {"model": "gpt-4o"}}
+        new_raw = yaml.dump(new_config)
+        with (
+            patch("os.stat") as mock_stat,
+            patch.object(config_mod, "_read_and_parse_config", return_value=(new_config, new_raw)),
+            patch("os.path.exists", return_value=False),
+        ):
+            mock_stat.return_value = MagicMock(st_mtime=mtime)  # Same mtime!
+            result2 = config_mod.load_config()
+
+        assert result2["database"]["pool_max_size"] == 20, (
+            "load_config returned stale data after invalidation with same mtime"
+        )
+
+    def test_concurrent_invalidate_is_safe(self):
+        """Multiple rapid invalidations don't corrupt state."""
+        config_mod._config_cache = {"a": 1}
+        config_mod._config_mtime = 999.0
+        config_mod._config_content_hash = "hash"
+
+        for _ in range(100):
+            config_mod.invalidate_config_cache()
+
+        assert config_mod._config_cache is None
+        assert config_mod._config_mtime == 0.0
+        assert config_mod._config_content_hash == ""

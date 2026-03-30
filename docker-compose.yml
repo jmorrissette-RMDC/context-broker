@@ -40,8 +40,8 @@ services:
       - context-broker-net
     volumes:
       - ./config:/config
-      - context-broker-downloads:/data/downloads
-      - ./packages:/app/packages
+      - context-broker-data:/data
+      - ./packages:/app/packages:ro
     env_file:
       - ./config/credentials/.env
     environment:
@@ -215,7 +215,7 @@ services:
       - ./config:/config:ro
 
 volumes:
-  context-broker-downloads:
+  context-broker-data:
 
 networks:
   context-broker-net:

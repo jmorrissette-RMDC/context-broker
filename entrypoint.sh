@@ -51,6 +51,7 @@ except Exception:
         local)
             # Requirements are already installed at build time from PyPI.
             # Only StateGraph packages come from the local path (handled below).
+            # RB-34: packages mount is :ro — source copied to /tmp for install.
             echo "Package source is local — using build-time requirements"
             ;;
         devpi)
@@ -94,12 +95,16 @@ for pkg in $SG_PACKAGES; do
     case "$PKG_SOURCE" in
         local)
             # Install from source directory on the bind mount.
-            # The bind mount at PKG_LOCAL_PATH contains source directories
-            # (context-broker-ae/, context-broker-te/) with pyproject.toml.
+            # RB-34: bind mount is :ro — copy source to /tmp before pip install
+            # to avoid polluting host repo with build artifacts.
             SG_SOURCE_DIR="$PKG_LOCAL_PATH/$pkg"
             if [ -d "$SG_SOURCE_DIR" ]; then
-                echo "Installing $pkg from source: $SG_SOURCE_DIR"
-                pip install --user --no-cache-dir "$SG_SOURCE_DIR"
+                SG_TMP_DIR="/tmp/sg-install-$pkg"
+                rm -rf "$SG_TMP_DIR"
+                cp -r "$SG_SOURCE_DIR" "$SG_TMP_DIR"
+                echo "Installing $pkg from source: $SG_SOURCE_DIR (via /tmp copy)"
+                pip install --user --no-cache-dir "$SG_TMP_DIR"
+                rm -rf "$SG_TMP_DIR"
             else
                 echo "WARNING: Source directory not found: $SG_SOURCE_DIR — skipping $pkg"
             fi

@@ -329,3 +329,79 @@ class TestRerankerFallback:
 
         result = await rerank_results(state)
         assert len(result["reranked_results"]) == 5
+
+
+# ---------------------------------------------------------------------------
+# RB-11: Search SQL parameter index tracking
+# ---------------------------------------------------------------------------
+
+
+class TestParameterIndexTracking:
+    """RB-11: _build_extra_filters must track parameter indices correctly.
+
+    The bug: min_content_length is a literal SQL value (no $N parameter),
+    but the old code used enumerate() which incremented the index anyway,
+    causing all subsequent parameters (date_from, date_to) to use wrong
+    $N indices. This produced IndeterminateDatatypeError at runtime.
+    """
+
+    @pytest.mark.asyncio
+    async def test_filters_with_min_content_length_and_dates(self, search_config):
+        """Parameters after min_content_length use correct $N indices."""
+        mock_pool = AsyncMock()
+        # Track the SQL and args that get executed
+        executed_queries = []
+
+        async def capture_fetch(sql, *args, **kwargs):
+            executed_queries.append((sql, args))
+            return []
+
+        mock_pool.fetch = capture_fetch
+
+        mock_emb_model = AsyncMock()
+        mock_emb_model.aembed_query = AsyncMock(return_value=[0.1] * 1024)
+
+        state = {
+            "query": "test query",
+            "conversation_id": str(uuid.uuid4()),
+            "filter_sender": None,
+            "filter_role": "user",
+            "min_content_length": 50,
+            "date_from": "2026-01-01T00:00:00Z",
+            "date_to": "2026-12-31T00:00:00Z",
+            "limit": 10,
+            "config": search_config,
+            "embedding": None,
+            "candidates": [],
+            "reranked_results": [],
+            "error": None,
+            "warning": None,
+        }
+
+        with (
+            patch("context_broker_ae.search_flow.get_pg_pool", return_value=mock_pool),
+            patch("context_broker_ae.search_flow.get_embeddings_model", return_value=mock_emb_model),
+        ):
+            result = await hybrid_search_messages(state)
+
+        # The query should have been executed. Check that min_content_length
+        # is a literal (no $N) and subsequent params use correct indices.
+        assert len(executed_queries) > 0, "No SQL queries were executed"
+        sql, args = executed_queries[0]
+
+        # min_content_length should appear as a literal integer, not $N
+        assert "length(content) > 50" in sql, (
+            f"min_content_length should be a literal in SQL, got: {sql}"
+        )
+
+        # Verify no IndeterminateDatatypeError would occur:
+        # count $N placeholders and verify they match the number of args
+        import re
+        placeholders = re.findall(r'\$\d+', sql)
+        # Each unique $N should have a corresponding arg
+        unique_indices = set(int(p[1:]) for p in placeholders)
+        max_idx = max(unique_indices) if unique_indices else 0
+        assert len(args) >= max_idx, (
+            f"SQL has ${max_idx} but only {len(args)} args provided. "
+            f"Parameter index tracking is broken."
+        )

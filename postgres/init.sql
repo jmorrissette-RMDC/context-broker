@@ -112,10 +112,10 @@ CREATE INDEX idx_windows_participant
 CREATE INDEX idx_windows_build_type
     ON context_windows(build_type);
 
--- G5-08: Unique constraint for idempotent context window creation.
--- Prevents duplicate windows for the same (conversation, participant, build_type).
-CREATE UNIQUE INDEX IF NOT EXISTS idx_windows_conv_participant_build
-    ON context_windows(conversation_id, participant_id, build_type);
+-- D-03: Unique constraint for idempotent context window creation.
+-- Window identity is (conversation, build_type, budget_bucket).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_context_windows_identity
+    ON context_windows(conversation_id, build_type, max_token_budget);
 
 -- ============================================================
 -- conversation_summaries

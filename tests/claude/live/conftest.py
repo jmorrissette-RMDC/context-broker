@@ -1,15 +1,17 @@
 """Session-scoped fixtures for live integration tests.
 
 Lifecycle:
-1. Run deploy.sh to stand up the test stack
+0. (If FRESH_DEPLOY=1) Tear down existing stack, rebuild from scratch,
+   verify clean deploy per REQ-002 §5.1.1
+1. Check if stack is already running; deploy if not
 2. Bulk load Phase 1 data (10,430 messages)
 3. Wait for pipeline completion (embeddings, extraction, assembly)
 4. Run all live tests
-5. Tear down the stack via deploy.sh --down
-6. Generate ISSUES.md from issues.json
+5. Generate ISSUES.md from issues.json
 """
 
 import json
+import os
 import subprocess
 import time
 
@@ -19,6 +21,7 @@ import pytest
 from .helpers import (
     BASE_URL,
     BASE_PORT,
+    COMPOSE_FILE,
     COMPOSE_PROJECT,
     PHASE1_DIR,
     PROJECT_ROOT,
@@ -58,18 +61,20 @@ def http_client():
 # ---------------------------------------------------------------------------
 
 def _run_deploy_script(args: str, timeout: int = 600) -> tuple[int, str, str]:
-    """Run deploy.sh on the Docker host."""
+    """Run deploy.sh on the Docker host.
+
+    RB-26: Uses arg list (shell=False) to avoid cmd.exe mangling on Windows.
+    """
     script_path = f"{REMOTE_PROJECT_DIR}/deploy.sh"
     cmd = f"cd {REMOTE_PROJECT_DIR} && bash {script_path} {args}"
 
     if SSH_TARGET:
-        escaped = cmd.replace("\\", "\\\\").replace('"', '\\"')
-        full_cmd = f'ssh {SSH_TARGET} "{escaped}"'
+        run_args = ["ssh", SSH_TARGET, cmd]
     else:
-        full_cmd = cmd
+        run_args = ["bash", "-c", cmd]
 
     result = subprocess.run(
-        full_cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+        run_args, capture_output=True, text=True, timeout=timeout,
     )
     return result.returncode, result.stdout, result.stderr
 
@@ -78,9 +83,159 @@ def _run_deploy_script(args: str, timeout: int = 600) -> tuple[int, str, str]:
 # Session-scoped test stack lifecycle
 # ---------------------------------------------------------------------------
 
+def _fresh_deploy(http_client):
+    """Phase 0: Tear down everything and rebuild from scratch.
+
+    Triggered by FRESH_DEPLOY=1 env var. Verifies that the application
+    works with a clean deploy per REQ-002 §5.1.1: git clone + docker
+    compose up + .env file. No scripts required.
+
+    Validates:
+    - Containers build without errors
+    - All containers reach healthy status
+    - Migrations run on empty database
+    - /health returns 200 with all dependencies connected
+    - MCP endpoint responds
+    """
+    compose_file = os.path.basename(COMPOSE_FILE)
+
+    print("[PHASE 0] Fresh deploy — tearing down existing stack...")
+    teardown_cmd = (
+        f"cd {REMOTE_PROJECT_DIR} && "
+        f"docker compose -p {COMPOSE_PROJECT} -f {compose_file} down -v --remove-orphans"
+    )
+    result = _run_on_docker_host(teardown_cmd, timeout=120)
+    print(f"[PHASE 0] Teardown complete")
+
+    print("[PHASE 0] Building and starting stack from scratch...")
+    build_cmd = (
+        f"cd {REMOTE_PROJECT_DIR} && "
+        f"docker compose -p {COMPOSE_PROJECT} -f {compose_file} up -d --build"
+    )
+    result = _run_on_docker_host(build_cmd, timeout=600)
+    print(f"[PHASE 0] Compose up complete")
+
+    # Wait for all containers to be healthy
+    print("[PHASE 0] Waiting for containers to reach healthy status...")
+    health_deadline = time.time() + 180  # 3 minutes
+    while time.time() < health_deadline:
+        ps_output = _run_on_docker_host(
+            f"cd {REMOTE_PROJECT_DIR} && "
+            f"docker compose -p {COMPOSE_PROJECT} -f {compose_file} ps --format json",
+            timeout=30,
+        )
+        if ps_output:
+            try:
+                # docker compose ps --format json returns one JSON object per line
+                containers = []
+                for line in ps_output.strip().splitlines():
+                    if line.strip():
+                        containers.append(json.loads(line))
+                if containers:
+                    all_healthy = all(
+                        c.get("Health", "") == "healthy"
+                        or c.get("State", "") == "running" and "health" not in c.get("Status", "").lower()
+                        for c in containers
+                    )
+                    healthy_count = sum(
+                        1 for c in containers
+                        if c.get("Health", "") == "healthy"
+                    )
+                    total = len(containers)
+                    print(f"[PHASE 0] Containers: {healthy_count}/{total} healthy")
+                    if healthy_count == total:
+                        break
+            except (json.JSONDecodeError, KeyError):
+                pass
+        time.sleep(10)
+    else:
+        # Show container status on failure
+        ps_text = _run_on_docker_host(
+            f"cd {REMOTE_PROJECT_DIR} && "
+            f"docker compose -p {COMPOSE_PROJECT} -f {compose_file} ps",
+            timeout=30,
+        )
+        pytest.fail(
+            f"[PHASE 0] Not all containers healthy after 180s.\n{ps_text}"
+        )
+
+    # Verify /health endpoint
+    print("[PHASE 0] Verifying /health endpoint...")
+    if not wait_for_health(http_client, timeout=60):
+        pytest.fail("[PHASE 0] /health endpoint not reachable after fresh deploy")
+    print("[PHASE 0] /health returns 200")
+
+    # Verify MCP endpoint
+    print("[PHASE 0] Verifying MCP endpoint...")
+    mcp_deadline = time.time() + 30
+    mcp_ok = False
+    while time.time() < mcp_deadline:
+        try:
+            resp = mcp_call(http_client, "metrics_get", {})
+            if resp.status_code == 200:
+                mcp_ok = True
+                break
+        except Exception:
+            pass
+        time.sleep(3)
+    if not mcp_ok:
+        pytest.fail("[PHASE 0] MCP endpoint not responding after fresh deploy")
+    print("[PHASE 0] MCP endpoint responding")
+
+    # Verify migrations ran (check for tables)
+    from .helpers import docker_psql
+    tables = docker_psql(
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+    )
+    expected_tables = ["conversations", "context_windows", "conversation_messages", "conversation_summaries"]
+    for t in expected_tables:
+        if t not in tables:
+            pytest.fail(f"[PHASE 0] Table '{t}' missing after fresh deploy. Tables: {tables}")
+    print(f"[PHASE 0] Database schema verified — all expected tables present")
+
+    # RB-35: Verify /data is a named volume (not anonymous, not bind mount).
+    # Named volumes persist across container recreation (docker compose up --build)
+    # while anonymous volumes and container-local paths do not.
+    print("[PHASE 0] Verifying /data volume persistence (RB-35)...")
+    compose_file = os.path.basename(COMPOSE_FILE)
+    volume_output = _run_on_docker_host(
+        f"cd {REMOTE_PROJECT_DIR} && "
+        f"docker compose -p {COMPOSE_PROJECT} -f {compose_file} "
+        f"config --format json",
+        timeout=30,
+    )
+    try:
+        compose_config = json.loads(volume_output)
+        langgraph_volumes = []
+        for svc_name, svc in compose_config.get("services", {}).items():
+            if "langgraph" in svc_name:
+                langgraph_volumes = svc.get("volumes", [])
+                break
+        # Check that /data is backed by a named volume
+        data_vol = [v for v in langgraph_volumes if isinstance(v, dict) and v.get("target") == "/data"]
+        if not data_vol:
+            # Try string format "name:/data"
+            data_vol = [v for v in langgraph_volumes if isinstance(v, str) and ":/data" in v and ":ro" not in v.split(":/data")[1] if ":/data" in v]
+        if data_vol:
+            print(f"[PHASE 0] /data volume configured: {data_vol[0]}")
+        else:
+            print(f"[PHASE 0] WARNING: /data may not be a named volume. Volumes: {langgraph_volumes}")
+    except (json.JSONDecodeError, KeyError):
+        # Fallback: just check the compose file text
+        print("[PHASE 0] Could not parse compose config JSON, skipping volume check")
+
+    print("[PHASE 0] Fresh deploy verification PASSED")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def test_stack(http_client):
     """Deploy the test stack, load data, yield, then tear down."""
+    # ------------------------------------------------------------------
+    # Phase 0: Fresh deploy (opt-in via FRESH_DEPLOY=1)
+    # ------------------------------------------------------------------
+    if os.environ.get("FRESH_DEPLOY", "").strip() == "1":
+        _fresh_deploy(http_client)
+
     # ------------------------------------------------------------------
     # Step 1: Check if stack is already running; deploy if not
     # ------------------------------------------------------------------

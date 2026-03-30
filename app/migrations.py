@@ -301,15 +301,14 @@ async def _migration_013(conn) -> None:
     longer part of window identity — windows are shared by conversation +
     build strategy + budget bucket.
     """
-    # Drop old unique constraint (may be named differently depending on how it was created)
+    # Drop old unique constraint from migration 010 (G5-08).
+    # The actual index name is idx_windows_conv_participant_build, not idx_context_windows_unique.
     await conn.execute("""
         DO $$
         BEGIN
-            -- Drop the unique index created by migration 010
-            DROP INDEX IF EXISTS idx_context_windows_unique;
-            -- Also try the constraint form in case it was created as a constraint
+            DROP INDEX IF EXISTS idx_windows_conv_participant_build;
             ALTER TABLE context_windows
-                DROP CONSTRAINT IF EXISTS idx_context_windows_unique;
+                DROP CONSTRAINT IF EXISTS idx_windows_conv_participant_build;
         EXCEPTION WHEN undefined_object THEN
             NULL;
         END $$

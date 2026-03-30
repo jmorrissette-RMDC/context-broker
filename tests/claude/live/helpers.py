@@ -57,18 +57,16 @@ PIPELINE_STALL_SECONDS = 180
 def _run_on_docker_host(cmd: str, timeout: int = 120) -> str:
     """Run a shell command on the Docker host (via SSH if remote).
 
-    Uses double-quote wrapping for the SSH command so that single quotes
-    inside the command (e.g. SQL literals) pass through correctly.
+    RB-26: Uses arg list (shell=False) to avoid cmd.exe mangling shell
+    operators like '>' on Windows. The remote command is passed as a
+    single string to SSH, which hands it to the remote shell intact.
     """
     if SSH_TARGET:
-        # Escape any double quotes and backslashes in the command for the
-        # outer double-quote wrapping.
-        escaped = cmd.replace("\\", "\\\\").replace('"', '\\"')
-        full_cmd = f'ssh {SSH_TARGET} "{escaped}"'
+        args = ["ssh", SSH_TARGET, cmd]
     else:
-        full_cmd = cmd
+        args = ["bash", "-c", cmd]
     result = subprocess.run(
-        full_cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+        args, capture_output=True, text=True, timeout=timeout,
     )
     return result.stdout.strip()
 

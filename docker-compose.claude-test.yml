@@ -52,8 +52,8 @@ services:
       - claude-test-net
     volumes:
       - ./config-test:/config
-      - claude-test-downloads:/data/downloads
-      - ./packages:/app/packages
+      - claude-test-data:/data
+      - ./packages:/app/packages:ro
     env_file:
       - ./config/credentials/.env
     environment:
@@ -179,7 +179,7 @@ services:
       - ./config-test:/config:ro
 
 volumes:
-  claude-test-downloads:
+  claude-test-data:
 
 networks:
   claude-test-net:
