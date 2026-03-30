@@ -176,19 +176,30 @@ class TestTieredSummaryQuality:
         context_excerpt = context_text[:3000]
         raw_excerpt = raw_messages[:1500] if raw_messages else "(no raw messages available)"
 
+        # Extract tiers separately for the judge — the assembled context
+        # is 72% raw recent messages by design. The judge should evaluate
+        # the summarized tiers (archival + chunks), not the raw portion.
+        tiers = result.get("tiers", {})
+        archival = tiers.get("archival_summary", "") or ""
+        chunks = tiers.get("chunk_summaries", [])
+        chunks_text = "\n---\n".join(chunks) if chunks else "(no chunk summaries)"
+        summary_content = f"ARCHIVAL SUMMARY:\n{archival}\n\nCHUNK SUMMARIES:\n{chunks_text}"
+
         prompt = (
-            "You are evaluating the quality of a tiered-summary context assembly "
-            "for a conversational memory system. The system takes raw conversation "
-            "messages and produces a summarized context window.\n\n"
-            "ASSEMBLED CONTEXT (tiered-summary output):\n"
-            f"```\n{context_excerpt}\n```\n\n"
-            "SAMPLE ORIGINAL MESSAGES:\n"
+            "You are evaluating the quality of tiered context summaries "
+            "for a conversational memory system. The system compresses older "
+            "conversation messages into summaries at two levels:\n"
+            "- Archival summary: highly compressed overview of the oldest content\n"
+            "- Chunk summaries: moderate compression of intermediate content\n\n"
+            "SUMMARIES PRODUCED:\n"
+            f"```\n{summary_content[:3000]}\n```\n\n"
+            "SAMPLE ORIGINAL MESSAGES (for reference):\n"
             f"```\n{raw_excerpt}\n```\n\n"
             "Evaluate on these criteria:\n"
-            "1. Does the summary capture key topics and themes?\n"
-            "2. Is the summary coherent and well-structured?\n"
-            "3. Does it preserve important details while being concise?\n"
-            "4. Would this context be useful for an AI assistant continuing the conversation?\n\n"
+            "1. Do the summaries capture key topics and themes from the conversation?\n"
+            "2. Are the summaries coherent, well-structured, and concise?\n"
+            "3. Do they preserve important details while compressing?\n"
+            "4. Would these summaries be useful for providing context to an AI assistant?\n\n"
             "Rate the quality as exactly one of: GOOD, ACCEPTABLE, or POOR.\n"
             "Provide your reasoning, then end with your rating on its own line: Rating: GOOD/ACCEPTABLE/POOR"
         )

@@ -362,17 +362,24 @@ def any_conversation_id(loaded_conversations, http_client):
     """Return a Phase 1 conversation ID with substantial data.
 
     Quality tests need conversations with thousands of messages and
-    completed assembly. Uses the loaded_conversations dict which maps
-    file stems (e.g., 'conversation-1') to conversation IDs. These
-    are always Phase 1 bulk data, not test-created conversations.
+    completed assembly. Queries DB directly for conversations with
+    >1000 messages — conv_list_conversations doesn't reliably return
+    titles or filter by message count.
     """
-    # loaded_conversations is populated during bulk load (Step 3).
-    # Keys are file stems like "conversation-1", "conversation-2", etc.
-    # These are always Phase 1 data with thousands of messages.
-    # When data is pre-loaded, keys come from conv_list_conversations
-    # titles like "claude-test-conversation-1".
-    for name, conv_id in loaded_conversations.items():
-        if "conversation" in name.lower() and "imperator" not in name.lower():
-            return conv_id
+    # Query DB directly — MCP tool doesn't return titles reliably.
+    # Use BETWEEN instead of > to avoid shell redirection issues in
+    # the SSH/docker exec quoting chain.
+    from .helpers import docker_psql
+    try:
+        rows = docker_psql(
+            "SELECT id FROM conversations WHERE total_messages "
+            "BETWEEN 1000 AND 999999 ORDER BY total_messages DESC LIMIT 1"
+        ).strip()
+        if rows:
+            conv_id = rows.split("|")[0].strip()
+            if conv_id:
+                return conv_id
+    except Exception:
+        pass
     # Fallback: return first loaded conversation
     return next(iter(loaded_conversations.values()))

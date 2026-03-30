@@ -49,8 +49,9 @@ except Exception:
 
     case "$PKG_SOURCE" in
         local)
-            echo "Installing packages from local path: $PKG_LOCAL_PATH"
-            pip install --user --no-cache-dir --no-index --find-links="$PKG_LOCAL_PATH" -r /app/requirements.txt
+            # Requirements are already installed at build time from PyPI.
+            # Only StateGraph packages come from the local path (handled below).
+            echo "Package source is local — using build-time requirements"
             ;;
         devpi)
             if [ -n "$PKG_DEVPI_URL" ]; then

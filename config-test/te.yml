@@ -11,5 +11,5 @@ imperator:
   max_context_tokens: auto
   participant_id: imperator
   admin_tools: true
-  max_iterations: 5
+  max_iterations: 15
   temperature: 0.3
