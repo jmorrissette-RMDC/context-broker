@@ -38,6 +38,19 @@ _config_content_hash: str = ""
 _cache_lock = threading.Lock()
 
 
+def invalidate_config_cache() -> None:
+    """Force the next load_config/async_load_config to re-read from disk.
+
+    Called after config_write to ensure the new value is picked up
+    immediately, regardless of filesystem mtime resolution.
+    """
+    global _config_cache, _config_mtime, _config_content_hash
+    with _cache_lock:
+        _config_cache = None
+        _config_mtime = 0.0
+        _config_content_hash = ""
+
+
 def _read_and_parse_config() -> tuple[dict[str, Any], str]:
     """Read config.yml from disk and return (parsed_dict, raw_text).
 

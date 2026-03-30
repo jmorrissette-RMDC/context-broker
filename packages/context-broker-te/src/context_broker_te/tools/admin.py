@@ -160,7 +160,12 @@ async def config_write(key: str, value: str) -> str:
 
     try:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _sync_write)
+        result = await loop.run_in_executor(None, _sync_write)
+        # Invalidate config cache so next read picks up the new value
+        # immediately, regardless of filesystem mtime resolution.
+        from app.config import invalidate_config_cache
+        invalidate_config_cache()
+        return result
     except (FileNotFoundError, OSError, yaml.YAMLError, ValueError) as exc:
         return f"Config write error: {exc}"
 
