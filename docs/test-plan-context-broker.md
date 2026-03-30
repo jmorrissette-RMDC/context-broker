@@ -193,12 +193,12 @@ These tests verify that each supported inference provider works correctly with t
 
 - **Test Case:** Verify tool discovery from modules.
   - **Input:** Call `_collect_tools` with `admin_tools: false` and `admin_tools: true`.
-  - **Expected Outcome:** With `false`: returns core + diagnostic + scheduling tools. With `true`: additionally returns admin tools. Tool names match expected set.
+  - **Expected Outcome:** With `false`: returns core + diagnostic tools. With `true`: additionally returns admin tools. Tool names match expected set.
 - **Test Case:** Verify tool gating for operational tools.
   - **Input:** Call `get_operational_tools` with `domain_information.enabled: true/false` and `domain_knowledge.enabled: true/false`.
   - **Expected Outcome:** Tools are included or excluded based on config flags.
 - **Test Case:** Verify each tool module exports valid tools.
-  - **Input:** Import `get_tools()` from each module (`diagnostic`, `admin`, `operational`, `scheduling`).
+  - **Input:** Import `get_tools()` from each module (`diagnostic`, `admin`, `operational`).
   - **Expected Outcome:** Each returns a list of callable tool objects with `.name` attributes.
 
 ### 4.14 Message Identity — Sender/Recipient (REQ §3.5.1)
@@ -290,24 +290,6 @@ These tests verify that each supported inference provider works correctly with t
 - **Test Case:** Verify domain knowledge tools gated by config.
   - **Input:** Call `get_operational_tools` with `domain_knowledge.enabled: false`.
   - **Expected Outcome:** Domain knowledge tools not in returned tools.
-
-### 4.20 Scheduler (HLD-core-services §Scheduler)
-
-- **Test Case:** Verify cron expression parsing.
-  - **Input:** Test `_cron_is_due` with various cron expressions and timestamps.
-  - **Expected Outcome:** Correctly identifies when expressions match: `* * * * *` always matches, `*/10 * * * *` matches on multiples of 10, specific values match exact times.
-- **Test Case:** Verify schedule CRUD via Imperator tools.
-  - **Input:** Call `create_schedule`, `list_schedules`, `enable_schedule`, `disable_schedule`.
-  - **Expected Outcome:** Schedules are created, listed, enabled, and disabled correctly.
-- **Test Case:** Verify scheduler fires due schedules.
-  - **Input:** Create an interval schedule with a short interval. Wait for it to fire.
-  - **Expected Outcome:** `schedule_history` table contains a record with `status: completed`.
-- **Test Case:** Verify scheduler doesn't double-fire cron schedules.
-  - **Input:** Create a `* * * * *` schedule. Wait through one minute.
-  - **Expected Outcome:** Only one execution per minute, not one per poll cycle.
-- **Test Case:** Verify interval schedule minimum (30 seconds).
-  - **Input:** Attempt to create an interval schedule with `schedule_expr: "10"`.
-  - **Expected Outcome:** Returns error explaining minimum is 30 seconds.
 
 ### 4.21 Embedding Migration Tool (REQ-core-imperator-tools)
 
@@ -451,11 +433,6 @@ The test environment is fully defined and provisioned by Docker and Docker Compo
 | T-19.2 | search_domain_knowledge returns results | 4.19 | Integration | | Not started | | Not run | |
 | T-19.3 | Domain Mem0 uses separate collection | 4.19 | Unit | | Not started | | Not run | |
 | T-19.4 | Domain knowledge tools gated by config | 4.19 | Unit | | Not started | | Not run | |
-| T-20.1 | Cron expression parsing | 4.20 | Unit | | Not started | | Not run | |
-| T-20.2 | Schedule CRUD via tools | 4.20 | Integration | | Not started | | Not run | |
-| T-20.3 | Scheduler fires due schedules | 4.20 | Integration | | Not started | | Not run | |
-| T-20.4 | No double-fire on cron | 4.20 | Integration | | Not started | | Not run | |
-| T-20.5 | Interval minimum enforcement | 4.20 | Unit | | Not started | | Not run | |
 | T-21.1 | Migration tool dry run | 4.21 | Unit | test_migration_tool.py::TestMigrationToolDryRun | Written | 2026-03-26 | Pass | |
 | T-21.2 | Migration tool confirmed execution | 4.21 | Integration | | Not started | | Not run | |
 | T-21.3 | Migration updates config.yml | 4.21 | Integration | | Not started | | Not run | |

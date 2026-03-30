@@ -26,17 +26,6 @@ SEED_ARTICLES = [
     {
         "source": "seed",
         "content": (
-            "MANAGING SCHEDULES: I can create recurring tasks using the scheduling "
-            "tools: list_schedules, create_schedule, enable_schedule, disable_schedule. "
-            "Schedules are stored in the database with cron-style timing. Each schedule "
-            "has a name, cron expression, and action. The scheduler worker checks for "
-            "due schedules on each poll cycle using optimistic locking to prevent "
-            "duplicate firing."
-        ),
-    },
-    {
-        "source": "seed",
-        "content": (
             "MONITORING HEALTH: I can check system health via the pipeline_status "
             "tool, which shows pending embedding, extraction, and assembly jobs. "
             "I can also user_prompt container logs using log_query (SQL-based filtering "

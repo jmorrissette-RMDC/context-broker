@@ -635,12 +635,9 @@ async def start_background_worker(config: dict) -> None:
     """Start all background worker loops concurrently."""
     _log.info("Background worker starting (DB-driven, no Redis)")
 
-    from app.workers.scheduler import scheduler_worker
-
     await asyncio.gather(
         _embedding_worker(config),
         _extraction_worker(config),
         _assembly_worker(config),
         _log_embedding_worker(config),
-        scheduler_worker(config),
     )

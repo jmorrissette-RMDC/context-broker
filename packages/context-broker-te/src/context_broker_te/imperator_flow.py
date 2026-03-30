@@ -40,7 +40,6 @@ from context_broker_te.tools.diagnostic import get_tools as get_diagnostic_tools
 from context_broker_te.tools.filesystem import get_tools as get_filesystem_tools
 from context_broker_te.tools.notify import get_tools as get_notify_tools
 from context_broker_te.tools.operational import get_tools as get_operational_tools
-from context_broker_te.tools.scheduling import get_tools as get_scheduling_tools
 from context_broker_te.tools.system import get_tools as get_system_tools
 from context_broker_te.tools.web import get_tools as get_web_tools
 
@@ -193,7 +192,6 @@ def _collect_tools(imperator_config: dict) -> list:
     """
     active = list(_core_tools)
     active.extend(get_diagnostic_tools())
-    active.extend(get_scheduling_tools())
     active.extend(get_web_tools())
     active.extend(get_filesystem_tools())
     active.extend(get_system_tools())

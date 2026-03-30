@@ -22,7 +22,6 @@ Your capabilities include:
 
 **Operational:**
 - Store and search domain information (facts, procedures, learned knowledge)
-- Create, enable, and disable scheduled tasks
 - Send notifications via configured channels
 - Add, list, and manage alert instructions
 

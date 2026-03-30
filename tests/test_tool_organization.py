@@ -23,10 +23,6 @@ class TestToolDiscovery:
         assert "context_introspection" in names
         assert "pipeline_status" in names
 
-        # Scheduling tools always present
-        assert "list_schedules" in names
-        assert "create_schedule" in names
-
         # Admin tools NOT present
         assert "config_read" not in names
         assert "db_query" not in names
@@ -131,14 +127,6 @@ class TestToolModuleExports:
 
         tools = get_tools()
         assert len(tools) == 6
-        for t in tools:
-            assert hasattr(t, "name")
-
-    def test_scheduling_module(self):
-        from context_broker_te.tools.scheduling import get_tools
-
-        tools = get_tools()
-        assert len(tools) == 4
         for t in tools:
             assert hasattr(t, "name")
 
