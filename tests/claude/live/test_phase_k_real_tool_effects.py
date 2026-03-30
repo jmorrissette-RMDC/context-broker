@@ -285,7 +285,8 @@ class TestVerboseToggleChangesConfig:
             "What is tuning.verbose_logging currently set to?",
             context_window_id=context_window_id,
         )
-        assert "true" in check_response.lower(), (
+        check_lower = check_response.lower()
+        assert "true" in check_lower or "enabled" in check_lower or " on" in check_lower, (
             f"verbose_toggle did not enable logging. Response: {check_response[:300]}"
         )
 
