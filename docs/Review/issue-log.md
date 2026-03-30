@@ -586,13 +586,13 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | DEP-16 | Docker | minor | pgvector/pgvector:0.7.0-pg16 — check if 0.8.0-pg16 exists | `docker-compose.yml` | FIXED | pgvector 0.8 adds performance improvements. Stay on pg16. |
 | DEP-17 | Docker | minor | neo4j:5.26.0 → 5.28.0 | `docker-compose.yml` | FIXED | 2 patch versions behind. Stay on 5.x (Mem0 constraint). |
 | DEP-18 | Docker | minor | ollama:0.6.2 → 0.9+ — 3 minor versions behind | `docker-compose.yml` | FIXED | OpenAI-compat API is stable. Model format may differ. |
-| DEP-19 | Python | major | **DEFERRED.** langgraph 0.2.60 → 1.1.3, langchain 0.3.13 → 1.2.13, langchain-core 0.3.28 → 1.2.23, langchain-openai 0.2.14 → 1.1.12 — entire LangChain ecosystem jumped to 1.x. Major breaking changes expected in StateGraph API, message types, tool binding, checkpointing. | `requirements.txt` | DEFERRED | Needs dedicated session. Full test coverage required after upgrade. The biggest single piece of technical debt. |
-| DEP-20 | Python | minor | **DEFERRED.** sse-starlette 2.2.1 → 3.3.3 — major version, SSE session API may differ | `requirements.txt` | DEFERRED | Test SSE session handling before upgrading. |
+| DEP-19 | Python | major | **DEFERRED.** langgraph 0.2.60 → 1.1.3, langchain 0.3.13 → 1.2.13, langchain-core 0.3.28 → 1.2.23, langchain-openai 0.2.14 → 1.1.12 — entire LangChain ecosystem jumped to 1.x. Major breaking changes expected in StateGraph API, message types, tool binding, checkpointing. | `requirements.txt` | DEFERRED | Deferred to future session. Needs dedicated session with full test coverage. |
+| DEP-20 | Python | minor | **DEFERRED.** sse-starlette 2.2.1 → 3.3.3 — major version, SSE session API may differ | `requirements.txt` | DEFERRED | Deferred to future session. |
 | DEP-21 | Python | minor | duckduckgo-search 7.5.1 → 8.1.1 — major version. Core API (DDGS.text) unchanged. | `requirements.txt` | FIXED | Update — API is stable across major versions. |
-| DEP-22 | Python | minor | **DEFERRED.** neo4j driver 5.27.0 → 6.1.0 — major version. Mem0 does not list neo4j as a direct dependency; uses it optionally for graph store. Cannot verify 6.x compatibility without testing. | `requirements.txt` | DEFERRED | Defer until Mem0 explicitly supports neo4j 6.x or we can test in isolation. |
+| DEP-22 | Python | minor | **DEFERRED.** neo4j driver 5.27.0 → 6.1.0 — major version. Mem0 does not list neo4j as a direct dependency; uses it optionally for graph store. Cannot verify 6.x compatibility without testing. | `requirements.txt` | DEFERRED | Deferred to future session. Blocked by Mem0 neo4j 6.x support. |
 | DEP-24 | Python | minor | fastapi 0.115.6 → 0.135.2 — 20 minor versions | `requirements.txt` | FIXED | Generally safe — FastAPI maintains backward compat. But large gap warrants testing. |
 | DEP-25 | Python | minor | uvicorn 0.34.0 → 0.42.0 — 8 minor versions | `requirements.txt` | FIXED | Generally safe — ASGI server. |
-| DEP-26 | Python | minor | **DEFERRED.** langchain-neo4j 0.3.0 → 0.8.0 — 5 minor versions. Part of LangChain ecosystem, may require langchain-core 1.x. | `requirements.txt` | DEFERRED | Defer with DEP-19 (LangChain 1.x upgrade). |
+| DEP-26 | Python | minor | **DEFERRED.** langchain-neo4j 0.3.0 → 0.8.0 — 5 minor versions. Part of LangChain ecosystem, may require langchain-core 1.x. | `requirements.txt` | DEFERRED | Deferred to future session. Blocked by DEP-19 (LangChain 1.x). |
 | DEP-27 | Python | minor | aiodocker 0.23.0 → 0.26.0 | `log_shipper/requirements.txt` | FIXED | 3 minor versions. Log shipper only. |
 | DEP-28 | Dev tools | minor | black 24.10.0 → 26.3.1, ruff 0.8.6 → 0.15.8, pytest 8.3.4 → 9.0.2, pytest-mock 3.14.0 → 3.15.1 | `requirements.txt` | FIXED | Dev tools only, not runtime. Safe to update. |
 
@@ -602,14 +602,14 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 |----|-------|----------|-------------|---------|--------|-------|
 | RB-01 | Rebuild | blocker | irina git stale — code never pulled after commits. Deploy host had code from March 24, all code review changes (98 files, 4974 lines) never deployed. Previous session's hot-reload edits were local modifications, not git-tracked. | `/mnt/storage/projects/portfolio/` on irina | FIXED | `git pull origin main` on irina. Stashed local hot-reload edits. All 98 files updated. Root cause: deployment workflow assumed shared filesystem = auto-sync, but irina has its own local ZFS copy — git pull is required. |
 | RB-02 | Rebuild | blocker | Log shipper Dockerfile `usermod -aG docker shipper` fails — no docker group exists inside the container image | `log_shipper/Dockerfile` | FIXED | CR-M12 fix added USER/COPY ordering but included `usermod -aG docker` which doesn't work in the image. Docker socket access is via host-side GID matching, not in-container group membership. |
-| RB-03 | Rebuild | blocker | Log shipper docker socket permission denied — container user can't access `/run/docker.sock` | `log_shipper/Dockerfile` | FIXED | Host docker socket is GID 125. Created docker group with matching GID inside container via `ARG DOCKER_GID=125; addgroup --gid ${DOCKER_GID} docker; usermod -aG docker shipper`. |
+| RB-03 | Rebuild | blocker | Log shipper docker socket permission denied. | `log_shipper/Dockerfile` | FIXED | **Root cause investigated (3 CLIs). Verdict: fixed correctly.** group_add is correct mechanism. GID default 125 is host-specific — document DOCKER_GID requirement. `:ro` mount may need removal for connect(). NOT individually tested. |
 | RB-04 | Rebuild | blocker | `langchain-community==0.4.1` requires `langchain-core>=1.0.1` — incompatible with pinned `langchain-core==0.3.28` | `requirements.txt` | FIXED | DEP-11 upgrade was never tested. 0.4.x jumped to the 1.x ecosystem. Reverted to 0.3.13. |
 | RB-05 | Rebuild | blocker | `langchain-community==0.3.31` requires `langchain-core>=0.3.78` — still incompatible with `0.3.28` | `requirements.txt` | FIXED | Even the latest 0.3.x requires a newer core than we pin. Reverted to 0.3.13 (the working version). |
 | RB-06 | Rebuild | blocker | `pytest==9.0.2` incompatible with `pytest-asyncio==0.24.0` (requires `pytest<9`) | `requirements.txt` | FIXED | DEP-28 upgrade was never tested. Reverted to 8.3.4. |
 | RB-07 | Rebuild | blocker | `mem0ai==1.0.9` requires `openai>=1.90.0` but `langchain-openai==0.2.14` requires `openai<2.0.0` | `requirements.txt` | FIXED | DEP-03 upgrade was never tested. Reverted to 1.0.8. |
 | RB-08 | Rebuild | blocker | `crawl4ai==0.8.6` pulls `unclecode-litellm` requiring `openai>=2.8.0` — conflicts with langchain | `requirements.txt` | FIXED | DEP-13 upgrade was never tested. Reverted to 0.6.1. |
 | RB-09 | Rebuild | blocker | `neo4j:5.28.0` Docker image does not exist on Docker Hub | `docker-compose.claude-test.yml`, `docker-compose.yml` | FIXED | DEP-17 upgrade was never tested. Reverted to 5.26.0 in both compose files. |
-| RB-10 | Rebuild | blocker | Nginx crashes on startup — `/ui/` location block references `context-broker-ui` which doesn't exist in test stack | `nginx/nginx.conf` | FIXED | CR-A05 fix added `/ui/` route but used hard upstream reference. Nginx resolves all upstreams at startup — missing container = crash. Fixed with `resolver 127.0.0.11; set $ui_upstream` pattern for lazy resolution. |
+| RB-10 | Rebuild | blocker | Nginx crashes on startup — static upstream resolution. | `nginx/nginx.conf` | FIXED | **Root cause investigated (3 CLIs). Verdict: fixed correctly.** Variable + resolver defers DNS to request time. Gemini improved: all upstreams use variables, resolver at http block. |
 | RB-11 | Rebuild | blocker | Search SQL `IndeterminateDatatypeError: could not determine data type of parameter $4` — all search_messages calls return 500 | `search_flow.py` | FIXED | TA-06 fix added `min_content_length` as literal SQL filter but the index enumeration counted it as a parameterized filter, offsetting all subsequent `$N` indices. Fixed by tracking indices per-filter instead of using enumerate. |
 | RB-12 | Rebuild | blocker | Alerter `sys.exit(1)` at module level when `POSTGRES_DSN` not set — crashes pytest collection | `alerter/alerter.py` | FIXED | Module-level `sys.exit()` kills the entire test process during import. Changed to default empty string; startup validates at runtime. |
 | RB-13 | Rebuild | blocker | Log shipper `sys.exit(1)` at module level when `POSTGRES_DSN` not set — crashes pytest collection | `log_shipper/shipper.py` | FIXED | Same pattern as RB-12. Changed to default empty string. |
@@ -621,20 +621,31 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | RB-19 | Rebuild | major | LLM judge rates tiered-summary as POOR — "verbatim log, not a tiered summary" — summarization pipeline not compressing | `test_phase_l_quality_eval.py` | FIXED | Judge says context is raw transcript dump with no summarization applied. This may mean assembly is only returning tier 3 (recent messages) and tiers 1-2 (summaries) are empty. Needs investigation of what the assembly pipeline actually produced. |
 | RB-20 | Rebuild | major | LLM judge rates knowledge extraction as POOR — vague memories with metadata artifacts | `test_phase_l_quality_eval.py` | FIXED | Extraction producing garbage like session IDs and conversation acts instead of factual memories. May be related to extraction model (GPT-4.1 vs GPT-4.1-mini) or extraction prompt quality. |
 
-| RB-21 | Rebuild | major | UID mismatch: container runs as UID 1001 but host files owned by UID 1000 — `/data/downloads` can't be created, config files can't be written. Breaks `file_write`, `config_write`, `migrate_embeddings` on every fresh deploy. | `Dockerfile`, `docker-compose.yml` | FIXED | Root cause: Dockerfile creates user with UID 1001, host user aristotle9 is UID 1000. Every bind mount has wrong ownership. Must fix structurally in Dockerfile (change to UID 1000) — not with chmod band-aids in deploy.sh. |
-| RB-22 | Rebuild | major | `entrypoint.sh` silently swallows `/data/downloads` creation failure with `2>/dev/null \|\| true` — tool fails at runtime with no indication why | `entrypoint.sh` | FIXED | The `mkdir -p /data/downloads 2>/dev/null \|\| true` hides the permission error. The container starts, looks healthy, and then `file_write` fails silently. Should fail-fast if critical directories can't be created. |
-| RB-23 | Rebuild | major | `deploy.sh --down` uses Alpine container to clean up data directories — band-aid for UID mismatch | `deploy.sh` | FIXED | `docker run --rm alpine sh -c "rm -rf /cleanup/*"` exists because the host user can't delete container-owned files. This is the UID mismatch problem (RB-21) in reverse. Fix RB-21 and this workaround becomes unnecessary. |
-| RB-24 | Rebuild | major | `deploy.sh` has `chmod` band-aids for config file permissions — should not be necessary | `deploy.sh` | FIXED | Previous sessions added manual `chmod 666` on config files to work around UID mismatch. This is not a deployment step — it's a symptom of RB-21. Fix RB-21 structurally. |
+| RB-21 | Rebuild | major | UID mismatch: container UID 1001 vs host UID 1000. | `Dockerfile`, `docker-compose.yml` | FIXED | **Root cause investigated (3 CLIs). Verdict: fixed correctly.** UID 1000 default via build ARG. Overridable. Pre-existing data needs one-time chown. |
+| RB-22 | Rebuild | major | `entrypoint.sh` silently swallows `/data/downloads` creation failure. | `entrypoint.sh` | FIXED | **Root cause investigated (3 CLIs). Verdict: fixed correctly.** Error suppression removed. mkdir-p is now a no-op with named volume but fails loud if permissions wrong. Full bind-mount fix (root+gosu) deferred — named volume is current approach. |
+| RB-23 | Rebuild | major | `deploy.sh --down` cleanup — rm -rf fails on postgres/neo4j data. | `deploy.sh` | CLOSED | Not a bug. deploy.sh is a test convenience tool, not part of the app. Data cleanup is the user's responsibility via standard `docker compose down -v`. The app must work with just `docker compose up` per REQ-002 §5.1.1. No deployment script should be required. | `docker run --rm alpine sh -c "rm -rf /cleanup/*"` exists because the host user can't delete container-owned files. This is the UID mismatch problem (RB-21) in reverse. Fix RB-21 and this workaround becomes unnecessary. |
+| RB-24 | Rebuild | major | `deploy.sh` chmod band-aids for config permissions. | `deploy.sh` | FIXED | **Root cause investigated (3 CLIs). Verdict: fixed correctly.** chmod was symptom of UID mismatch. UID 1000 fix (RB-21) eliminates need. |
 
-| RB-25 | Rebuild | major | `conv_create_context_window` fallback SELECT uses wrong columns — ON CONFLICT is on `(conversation_id, build_type, max_token_budget)` but fallback queries `(conversation_id, participant_id, build_type)`. When a window exists with different participant_id but same budget, the fallback finds nothing and returns error. | `conversation_ops_flow.py` | FIXED | Changed fallback SELECT to match ON CONFLICT columns. |
-| RB-26 | Rebuild | major | `any_conversation_id` test fixture returns Imperator system conversation (10 messages) instead of Phase 1 data (2000+ messages) — quality tests evaluate trivial content | `conftest.py` | FIXED | Fixture now queries for conversations with >1000 messages. |
-| RB-27 | Rebuild | major | Conftest doesn't create context windows during setup — `get_context` creates windows on demand, but assembly runs in background. Quality tests call `get_context` on conversations with no windows, get empty tiers. | `conftest.py` | FIXED | Added Step 5: call `get_context` for all conversations during setup, wait for assembly to produce summaries. |
+| RB-25 | Rebuild | major | `conv_create_context_window` fallback SELECT uses wrong columns. | `conversation_ops_flow.py` | OPEN | **Root cause investigated (3 CLIs). Verdict: real code issue.** Fallback fix is correct but Gemini found deeper bug: migration 013 used wrong index name so TWO conflicting unique indexes exist. Two functions use different ON CONFLICT columns. Schema conflict must be resolved. |
+| RB-26 | Rebuild | major | `any_conversation_id` fixture returns wrong conversation. | `conftest.py` | OPEN | **Root cause investigated (3 CLIs). Verdict: test issue.** BETWEEN workaround works but real fix is _run_on_docker_host using arg list not shell=True (cmd.exe on Windows mangles `>`). BETWEEN 1000 should be 1001 (inclusive). |
+| RB-27 | Rebuild | major | Conftest doesn't create context windows during setup. | `conftest.py` | OPEN | **Root cause investigated (3 CLIs). Verdict: deferred to compaction redesign.** Step 5 workaround is fragile (global check, wrong conversations). Real fix is inline assembly in get_context, planned in compaction redesign. |
 
 | RB-28 | Rebuild | major | `test_disable_schedule_persists` fails — no `schedule_create` MCP tool exists. Scheduling tool removed entirely — will be reimplemented as separate container. | TE package, tool_dispatch.py | FIXED | User directed: remove all scheduling code. Removed scheduling.py, scheduler.py, all tests, imports, system prompt mention. |
 | RB-29 | Rebuild | major | Imperator message duplication — `init_context_node` appended user message to history but V2 `get_context` already stores it. Message appeared twice in prompt, confusing tool invocation. Found by Gemini CLI. | `imperator_flow.py` | FIXED | Added deduplication logic: detect when last history message matches last input message, skip the duplicate. |
 | RB-30 | Rebuild | major | Broken tool-call history — `AIMessage.tool_calls` lost during history loading, `ToolMessage` coerced to `HumanMessage`. Broke ReAct tool-call sequence. Found by Gemini CLI. | `imperator_flow.py` | FIXED | History loading now preserves `tool_calls` on `AIMessage` and correctly creates `ToolMessage` with `tool_call_id`. |
 | RB-31 | Rebuild | major | Phase K test isolation — all tests shared one Imperator conversation. Each test now gets unique `context_window_id`. Found by all 3 CLIs (Claude, Gemini, Codex). | `test_phase_k_real_tool_effects.py` | FIXED | Added `context_window_id` fixture, passed to all `_chat()` calls. |
-| RB-32 | Rebuild | major | 4 remaining intermittent failures after Phase K fix — `test_imperator_multi_turn_continuity`, `test_mad_client_chat_stream`, `test_verbose_toggle_changes_config`, `test_imperator_coherence`. May be related to message deduplication logic change. | Multiple test files | OPEN | Under investigation with CLIs. |
+| RB-33 | Rebuild | major | Entrypoint `local` source reinstalls ALL requirements with `--no-index`. | `entrypoint.sh` | FIXED | **Root cause investigated (3 CLIs). Verdict: fixed correctly.** --no-index applied to all requirements but local path only has StateGraph packages. Skip requirements for local, install StateGraph packages only. |
+| RB-34 | Rebuild | major | Packages bind mount `:ro` prevents pip install from source. | `docker-compose.yml`, `docker-compose.claude-test.yml` | OPEN | **Root cause investigated (3 CLIs). Verdict: real code issue — fix is WRONG.** rw mount pollutes host repo. Correct fix: keep :ro, copy source to /tmp then install. Or use pre-built wheels. Must fix entrypoint.sh and install_stategraph.py. |
+| RB-35 | Rebuild | major | Named Docker volume for /data/downloads. | `Dockerfile`, `docker-compose.yml` | OPEN | **Root cause investigated (3 CLIs). Verdict: real code issue.** Named volume works for downloads but Gemini found imperator_state.json at /data/ is NOT in a volume — lost on container recreation. Must persist /data or add separate volume. |
+| RB-32a | Rebuild | major | Rating parser checked POOR before GOOD in fallback. Found by Claude CLI. | `test_phase_l_quality_eval.py` | OPEN | Fix applied (last-occurrence logic). CLI-consulted: YES. NOT individually tested — tests pass due to other fixes. |
+| RB-32b | Rebuild | major | System message blanket skip dropped ALL system-role messages. Found by Claude CLI. | `imperator_flow.py` | OPEN | Fix applied (skip identity prompt only). CLI-consulted: YES. NOT individually tested. |
+| RB-32c | Rebuild | major | Cache invalidation after config_write. Found by all 3 CLIs. | `app/config.py`, `tools/admin.py` | OPEN | Fix applied (invalidate_config_cache). CLI-consulted: YES. NOT individually tested — config_write test may have passed due to assertion fix. |
+| RB-32d | Rebuild | major | Dedup simplification — V2 user message dedup. | `imperator_flow.py` | OPEN | **Root cause investigated (3 CLIs). Verdict: deferred to compaction redesign.** Current dedup is fragile (position-based). Should compare against user_query. Will be rewritten in compaction redesign. |
+| RB-32e | Rebuild | minor | max_iterations 5 → 15 for multi-step prompts. Found by Gemini CLI. | `config-test/te.yml` | FIXED | Config change, verified by coherence test passing. |
+| RB-32f | Rebuild | minor | Test assertions accept "enabled"/"disabled"/"on"/"off" not just "true"/"false". | `test_phase_k_real_tool_effects.py` | FIXED | Verified by individual test runs. |
+| RB-32g | Rebuild | minor | Enriched test missing user_prompt — KG enrichment disabled without it. Found by Claude CLI. | `test_phase_l_quality_eval.py` | FIXED | Verified by individual test run. |
+| RB-32h | Rebuild | minor | any_conversation_id returned wrong conversation — conv_list_conversations doesn't return titles. Fixed with docker_psql BETWEEN query. | `conftest.py` | FIXED | Verified by individual test runs. |
+| RB-32i | Rebuild | minor | Tiered summary judge prompt evaluated raw+summary mix. Changed to evaluate summaries only (archival + chunks). | `test_phase_l_quality_eval.py` | FIXED | Verified by individual test run. |
 
 ### Dependency Audit Status Corrections
 
@@ -642,36 +653,36 @@ The following DEP entries were incorrectly marked FIXED. They were committed but
 
 | ID | Previous Status | Corrected Status | Notes |
 |----|----------------|-----------------|-------|
-| DEP-03 | FIXED | REVERTED | mem0ai 1.0.9 requires openai>=1.90.0, conflicts with langchain. Back to 1.0.8. |
-| DEP-04 | FIXED | REVERTED | pydantic 2.12.5 reverted to 2.10.4 (part of full revert). |
-| DEP-05 | FIXED | REVERTED | pydantic-settings 2.13.1 reverted to 2.7.1. |
-| DEP-06 | FIXED | REVERTED | prometheus-client 0.24.1 reverted to 0.21.1. |
-| DEP-07 | FIXED | REVERTED | python-dotenv 1.2.2 reverted to 1.0.1. |
-| DEP-08 | FIXED | REVERTED | pyyaml 6.0.3 reverted to 6.0.2. |
-| DEP-09 | FIXED | REVERTED | tiktoken 0.12.0 reverted to 0.8.0. |
-| DEP-10 | FIXED | REVERTED | tenacity 9.1.4 reverted to 9.0.0. |
-| DEP-11 | FIXED | REVERTED | langchain-community 0.4.1 requires core>=1.0.1. Back to 0.3.13. |
-| DEP-13 | FIXED | REVERTED | crawl4ai 0.8.6 pulls openai>=2.8.0 via litellm. Back to 0.6.1. |
-| DEP-17 | FIXED | REVERTED | neo4j 5.28.0 doesn't exist. Back to 5.26.0. |
-| DEP-21 | FIXED | REVERTED | duckduckgo-search 8.1.1 reverted to 7.5.1 (part of full revert). |
-| DEP-24 | FIXED | REVERTED | fastapi 0.135.2 reverted to 0.115.6. |
-| DEP-25 | FIXED | REVERTED | uvicorn 0.42.0 reverted to 0.34.0. |
-| DEP-28 | FIXED | REVERTED | pytest 9.0.2 requires pytest-asyncio>=1.0. Back to 8.3.4. black/ruff also reverted. |
+| DEP-03 | FIXED | DEFERRED | mem0ai 1.0.9 requires openai>=1.90.0, conflicts with langchain. Back to 1.0.8. |
+| DEP-04 | FIXED | DEFERRED | pydantic 2.12.5 reverted to 2.10.4. |
+| DEP-05 | FIXED | DEFERRED | pydantic-settings 2.13.1 reverted to 2.7.1. |
+| DEP-06 | FIXED | DEFERRED | prometheus-client 0.24.1 reverted to 0.21.1. |
+| DEP-07 | FIXED | DEFERRED | python-dotenv 1.2.2 reverted to 1.0.1. |
+| DEP-08 | FIXED | DEFERRED | pyyaml 6.0.3 reverted to 6.0.2. |
+| DEP-09 | FIXED | DEFERRED | tiktoken 0.12.0 reverted to 0.8.0. |
+| DEP-10 | FIXED | DEFERRED | tenacity 9.1.4 reverted to 9.0.0. |
+| DEP-11 | FIXED | DEFERRED | langchain-community 0.4.1 requires core>=1.0.1. Back to 0.3.13. Blocked by DEP-19. |
+| DEP-13 | FIXED | DEFERRED | crawl4ai 0.8.6 pulls openai>=2.8.0 via litellm. Back to 0.6.1. |
+| DEP-17 | FIXED | DEFERRED | neo4j 5.28.0 doesn't exist on Docker Hub. Back to 5.26.0. |
+| DEP-21 | FIXED | DEFERRED | duckduckgo-search 8.1.1 reverted to 7.5.1. |
+| DEP-24 | FIXED | DEFERRED | fastapi 0.135.2 reverted to 0.115.6. |
+| DEP-25 | FIXED | DEFERRED | uvicorn 0.42.0 reverted to 0.34.0. |
+| DEP-28 | FIXED | DEFERRED | pytest 9.0.2 requires pytest-asyncio>=1.0. Back to 8.3.4. black/ruff also reverted. |
 
 ---
 
 ## Summary
 
-Updated 2026-03-30. 503 tests (317 mock + 186 live). 317/317 mock passing. 185/186 live passing. 1 failure: schedule tool not implemented (RB-28).
+Updated 2026-03-30. 482 tests (299 mock + 183 live). All passing. 17 open issues (fixes applied but missing CLI consultation and/or individual testing). 20 deferred dependencies.
 
 | Status | Count |
 |--------|-------|
-| FIXED | 291 |
-| OPEN | 1 |
+| FIXED | 367 |
+| OPEN | 17 |
 | WONTFIX | 36 |
 | FALSE_POSITIVE | 2 |
 | REMOVED | 1 |
 | NOTE | 6 |
 | EXCEPTION | 1 |
-| REVERTED | 15 |
+| REVERTED | 0 |
 | DEFERRED | 5 |
