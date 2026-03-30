@@ -396,38 +396,36 @@ async def init_context_node(state: ImperatorState) -> dict:
                         ToolMessage(content=content, tool_call_id=msg.get("tool_call_id", "unknown"))
                     )
                 elif role == "system":
-                    # Skip embedded system messages to avoid identity confusion
-                    continue
+                    # Skip the identity system prompt (already in system_msg).
+                    # Keep other system-role messages (domain context, tool instructions).
+                    if content and content.strip() == system_msg.content.strip():
+                        continue
+                    history_messages.append(SystemMessage(content=content))
                 else:
                     history_messages.append(HumanMessage(content=content))
         except (ValueError, RuntimeError, OSError) as exc:
             _log.warning("Failed to load context via get_context: %s", exc)
 
+    result = {}
+
     # V2: Flag that user message was stored by get_context
-    user_msg_already_in_history = False
     if user_query and state.get("context_window_id"):
-        result = {"_user_message_stored": True}
-        
-        # Check if the last history message is indeed the user message we just stored.
-        # If so, we'll remove it from the 'messages' list before assembly to avoid
-        # duplication in the prompt.
-        if history_messages and messages:
-            last_hist = history_messages[-1]
-            last_msg = messages[-1]
-            if (isinstance(last_hist, HumanMessage) and 
-                isinstance(last_msg, HumanMessage) and
-                last_hist.content == last_msg.content):
-                user_msg_already_in_history = True
-    else:
-        result = {}
+        result["_user_message_stored"] = True
+
+    # Deduplicate: if get_context returned history that ends with the same
+    # user message we're about to send, remove it from history to avoid
+    # the message appearing twice in the prompt. Compare by content match
+    # on the trailing HumanMessage.
+    if history_messages and messages:
+        last_hist = history_messages[-1]
+        last_msg = messages[-1]
+        if (isinstance(last_hist, HumanMessage)
+                and isinstance(last_msg, HumanMessage)
+                and last_hist.content == last_msg.content):
+            history_messages = history_messages[:-1]
 
     # Assemble: system (static, cached) + history (cached prefix) + current messages
-    # If the last input message is already at the end of history_messages (stored by get_context),
-    # remove it from history_messages to avoid duplication while preserving order.
-    if user_msg_already_in_history:
-        assembled = [system_msg] + history_messages[:-1] + messages
-    else:
-        assembled = [system_msg] + history_messages + messages
+    assembled = [system_msg] + history_messages + messages
 
     result["messages"] = assembled
     return result
