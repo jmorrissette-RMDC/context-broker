@@ -119,9 +119,14 @@ async def chat_completions(request: Request):
         if cls is ToolMessage:
             # ToolMessage requires a tool_call_id; use the one from the
             # request body if available, otherwise fall back to a placeholder.
-            tool_call_id = getattr(m, "tool_call_id", None) or "unknown"
+            tool_call_id = m.tool_call_id or "unknown"
             lc_messages.append(
                 ToolMessage(content=m.content, tool_call_id=tool_call_id)
+            )
+        elif cls is AIMessage:
+            # R7-M14: Pass tool_calls if present for AIMessage (G5-28)
+            lc_messages.append(
+                AIMessage(content=m.content, tool_calls=m.tool_calls or [])
             )
         else:
             lc_messages.append(cls(content=m.content))

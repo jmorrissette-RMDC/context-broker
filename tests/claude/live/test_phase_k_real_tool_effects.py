@@ -47,11 +47,17 @@ def _imperator_chat(http_client, message: str, timeout: int = 120) -> str:
     return result.get("response", "")
 
 
-def _chat(http_client, message: str, timeout: int = 120) -> str:
+def _chat(http_client, message: str, timeout: int = 120, context_window_id: str | None = None) -> str:
     """Send a message via /v1/chat/completions and return the content."""
-    result = chat_call(http_client, message, timeout=timeout)
+    result = chat_call(http_client, message, timeout=timeout, context_window_id=context_window_id)
     assert not result.get("error"), f"chat_call error: {result}"
     return result["choices"][0]["message"]["content"]
+
+
+@pytest.fixture
+def context_window_id():
+    """Generate a unique context window ID for each test."""
+    return str(uuid.uuid4())
 
 
 # ===========================================================================
@@ -62,7 +68,7 @@ class TestFileWriteCreatesFile:
     """K-01: file_write via Imperator creates a file on disk."""
 
     @pytest.mark.live
-    def test_file_write_creates_file(self, http_client):
+    def test_file_write_creates_file(self, http_client, context_window_id):
         """Write a file via Imperator, then verify it exists via docker_exec."""
         tag = uuid.uuid4().hex[:8]
         filename = f"test-k01-{tag}.txt"
@@ -73,6 +79,7 @@ class TestFileWriteCreatesFile:
         response = _chat(
             http_client,
             f"Write a file to {filepath} with the exact content: {content}",
+            context_window_id=context_window_id,
         )
         if not any(
             kw in response.lower()
@@ -103,9 +110,9 @@ class TestFileWriteCreatesFile:
 class TestRunCommandReturnsOutput:
     """K-02: run_command via Imperator returns real command output."""
 
-    def test_run_command_returns_output(self, http_client):
+    def test_run_command_returns_output(self, http_client, context_window_id):
         """Ask Imperator to run uptime, verify response contains uptime data."""
-        response = _chat(http_client, "Run the uptime command and show me the raw output")
+        response = _chat(http_client, "Run the uptime command and show me the raw output", context_window_id=context_window_id)
         # Uptime output typically contains 'up', 'load average', 'users', etc.
         response_lower = response.lower()
         has_uptime_data = any(
@@ -123,9 +130,9 @@ class TestRunCommandReturnsOutput:
 class TestCalculateReturnsCorrectAnswer:
     """K-03: calculate tool returns mathematically correct result."""
 
-    def test_calculate_returns_correct_answer(self, http_client):
+    def test_calculate_returns_correct_answer(self, http_client, context_window_id):
         """Ask Imperator to calculate 1024 * 0.85, verify 870.4 in response."""
-        response = _chat(http_client, "Calculate 1024 * 0.85 and tell me the exact result")
+        response = _chat(http_client, "Calculate 1024 * 0.85 and tell me the exact result", context_window_id=context_window_id)
         assert "870" in response, (
             f"calculate did not return 870.4: {response[:300]}"
         )
@@ -142,7 +149,7 @@ class TestAddAlertInstructionPersists:
     """K-06: add_alert_instruction creates a row in alert_instructions table."""
 
     @pytest.mark.live
-    def test_add_alert_instruction_persists(self, http_client):
+    def test_add_alert_instruction_persists(self, http_client, context_window_id):
         """Add an alert instruction via Imperator, verify count increases in DB."""
         tag = uuid.uuid4().hex[:8]
         description = f"k06-test-alert-{tag}"
@@ -156,6 +163,7 @@ class TestAddAlertInstructionPersists:
             f"Add an alert instruction with description '{description}', "
             f"instruction 'Format alerts for testing', "
             f"channels [{{'type': 'log'}}]",
+            context_window_id=context_window_id,
         )
         time.sleep(2)
 
@@ -168,7 +176,7 @@ class TestAddAlertInstructionPersists:
         )
 
         # Cleanup: delete it
-        _chat(http_client, f"Delete the alert instruction for '{description}'")
+        _chat(http_client, f"Delete the alert instruction for '{description}'", context_window_id=context_window_id)
 
 
 # ===========================================================================
@@ -179,7 +187,7 @@ class TestStoreDomainInfoPersists:
     """K-07: store_domain_info creates a row in domain_information table."""
 
     @pytest.mark.live
-    def test_store_domain_info_persists(self, http_client):
+    def test_store_domain_info_persists(self, http_client, context_window_id):
         """Store domain info via Imperator, verify count increases in domain_information table."""
         tag = uuid.uuid4().hex[:8]
         content = f"K07 test fact: The Context Broker uses {tag} as a marker"
@@ -191,6 +199,7 @@ class TestStoreDomainInfoPersists:
         _chat(
             http_client,
             f"Store this as domain information: {content}",
+            context_window_id=context_window_id,
         )
         time.sleep(2)
 
@@ -211,16 +220,17 @@ class TestConfigWriteTakesEffect:
     """K-08: config_write changes a setting that config_read can verify."""
 
     @pytest.mark.live
-    def test_config_write_takes_effect(self, http_client):
+    def test_config_write_takes_effect(self, http_client, context_window_id):
         """Set verbose_logging to true, verify via config_read, then restore."""
         # Enable verbose logging
-        _chat(http_client, "Set tuning.verbose_logging to true in the config")
+        _chat(http_client, "Set tuning.verbose_logging to true in the config", context_window_id=context_window_id)
         time.sleep(1)
 
         # Verify via Imperator
         verify_response = _chat(
             http_client,
             "Read the current config and tell me the value of tuning.verbose_logging",
+            context_window_id=context_window_id,
         )
         assert "true" in verify_response.lower(), (
             f"config_write did not take effect. Response: {verify_response[:300]}"
@@ -230,13 +240,14 @@ class TestConfigWriteTakesEffect:
         # resolution is 1 second; two writes within the same second get the same
         # mtime and the config loader returns the stale cached version)
         time.sleep(1.5)
-        _chat(http_client, "Set tuning.verbose_logging to false in the config")
+        _chat(http_client, "Set tuning.verbose_logging to false in the config", context_window_id=context_window_id)
         time.sleep(1.5)
 
         # Verify restored
         restore_response = _chat(
             http_client,
             "Read the current config and tell me the value of tuning.verbose_logging",
+            context_window_id=context_window_id,
         )
         assert "false" in restore_response.lower(), (
             f"config_write restore failed. Response: {restore_response[:300]}"
@@ -250,16 +261,17 @@ class TestConfigWriteTakesEffect:
 class TestVerboseToggleChangesConfig:
     """K-09: verbose_toggle flips the verbose_logging config value."""
 
-    def test_verbose_toggle_changes_config(self, http_client):
+    def test_verbose_toggle_changes_config(self, http_client, context_window_id):
         """Toggle verbose logging on and off, verify change via config_read."""
         # First, ensure we know the current state by setting to false
-        _chat(http_client, "Set tuning.verbose_logging to false in the config")
+        _chat(http_client, "Set tuning.verbose_logging to false in the config", context_window_id=context_window_id)
         time.sleep(1)
 
         # Toggle on
         toggle_response = _chat(
             http_client,
             "Toggle verbose logging on",
+            context_window_id=context_window_id,
         )
         time.sleep(1)
 
@@ -267,13 +279,14 @@ class TestVerboseToggleChangesConfig:
         check_response = _chat(
             http_client,
             "What is tuning.verbose_logging currently set to?",
+            context_window_id=context_window_id,
         )
         assert "true" in check_response.lower(), (
             f"verbose_toggle did not enable logging. Response: {check_response[:300]}"
         )
 
         # Restore by toggling off
-        _chat(http_client, "Toggle verbose logging off")
+        _chat(http_client, "Toggle verbose logging off", context_window_id=context_window_id)
         time.sleep(1)
 
 
@@ -284,11 +297,12 @@ class TestVerboseToggleChangesConfig:
 class TestDbQueryReturnsRealData:
     """K-10: db_query returns actual database row counts."""
 
-    def test_db_query_returns_real_data(self, http_client):
+    def test_db_query_returns_real_data(self, http_client, context_window_id):
         """Run SELECT COUNT(*) FROM conversations via Imperator, verify numeric result."""
         response = _chat(
             http_client,
             "Run this exact database query and give me only the number: SELECT COUNT(*) FROM conversations",
+            context_window_id=context_window_id,
         )
         # Extract any number from the response
         numbers = re.findall(r"\d+", response)
@@ -308,12 +322,13 @@ class TestDbQueryReturnsRealData:
 class TestChangeInferenceListsModels:
     """K-11: change_inference in list mode returns model catalog."""
 
-    def test_change_inference_lists_models(self, http_client):
+    def test_change_inference_lists_models(self, http_client, context_window_id):
         """Ask what models are available for summarization slot, verify catalog."""
         response = _chat(
             http_client,
             "What models are available for the summarization inference slot? "
             "Just list the model names.",
+            context_window_id=context_window_id,
         )
         response_lower = response.lower()
         # Should contain at least one known model family
@@ -333,7 +348,7 @@ class TestChangeInferenceListsModels:
 class TestSendNotificationReachesAlerter:
     """K-12: send_notification dispatches an event visible in alerter logs."""
 
-    def test_send_notification_reaches_alerter(self, http_client):
+    def test_send_notification_reaches_alerter(self, http_client, context_window_id):
         """Send a notification via Imperator, check alerter logs for the event."""
         tag = uuid.uuid4().hex[:8]
         notification_msg = f"K12 test notification {tag}"
@@ -341,6 +356,7 @@ class TestSendNotificationReachesAlerter:
         _chat(
             http_client,
             f"Send a notification with type 'test.k12' and message '{notification_msg}'",
+            context_window_id=context_window_id,
         )
         time.sleep(3)
 

@@ -169,6 +169,7 @@ def chat_call(
     *,
     stream: bool = False,
     timeout: int = CHAT_TIMEOUT,
+    **kwargs,
 ) -> dict:
     """Send a message to the Imperator via /v1/chat/completions."""
     messages = list(history or [])
@@ -178,6 +179,9 @@ def chat_call(
         "messages": messages,
         "stream": stream,
     }
+    if kwargs.get("context_window_id"):
+        payload["context_window_id"] = str(kwargs["context_window_id"])
+
     try:
         resp = client.post("/v1/chat/completions", json=payload, timeout=timeout)
     except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout) as exc:
