@@ -630,6 +630,8 @@ Compiled from Gate 2 Rounds 1-7. Every finding verified against actual current c
 | RB-26 | Rebuild | major | `any_conversation_id` test fixture returns Imperator system conversation (10 messages) instead of Phase 1 data (2000+ messages) — quality tests evaluate trivial content | `conftest.py` | FIXED | Fixture now queries for conversations with >1000 messages. |
 | RB-27 | Rebuild | major | Conftest doesn't create context windows during setup — `get_context` creates windows on demand, but assembly runs in background. Quality tests call `get_context` on conversations with no windows, get empty tiers. | `conftest.py` | FIXED | Added Step 5: call `get_context` for all conversations during setup, wait for assembly to produce summaries. |
 
+| RB-28 | Rebuild | major | `test_disable_schedule_persists` fails — no `schedule_create` MCP tool exists. The test asks the Imperator to create a schedule via chat, but scheduling tools are not implemented in the TE package. The `schedules` table exists, the scheduler worker exists, but there are no MCP tools to create/enable/disable schedules. The system prompt mentions scheduling but the tools aren't bound. | TE package, tool_dispatch.py | OPEN | Need to decide: implement scheduling tools or remove test. Brought to user. |
+
 ### Dependency Audit Status Corrections
 
 The following DEP entries were incorrectly marked FIXED. They were committed but never build-tested, and all had breaking conflicts. Reverted to working versions.
@@ -656,12 +658,12 @@ The following DEP entries were incorrectly marked FIXED. They were committed but
 
 ## Summary
 
-Updated 2026-03-29 (evening). 503 tests (317 mock + 186 live). 317/317 mock passing. 186/186 live passing (pending full suite confirmation). All open rebuild items fixed.
+Updated 2026-03-30. 503 tests (317 mock + 186 live). 317/317 mock passing. 185/186 live passing. 1 failure: schedule tool not implemented (RB-28).
 
 | Status | Count |
 |--------|-------|
-| FIXED | 288 |
-| OPEN | 0 |
+| FIXED | 291 |
+| OPEN | 1 |
 | WONTFIX | 36 |
 | FALSE_POSITIVE | 2 |
 | REMOVED | 1 |
