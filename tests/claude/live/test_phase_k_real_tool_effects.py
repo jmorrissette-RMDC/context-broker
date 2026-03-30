@@ -265,7 +265,9 @@ class TestVerboseToggleChangesConfig:
         """Toggle verbose logging on and off, verify change via config_read."""
         # First, ensure we know the current state by setting to false
         _chat(http_client, "Set tuning.verbose_logging to false in the config", context_window_id=context_window_id)
-        time.sleep(1)
+        # Sleep >1s to avoid mtime cache collision (filesystem mtime
+        # resolution is 1 second — same pattern as K-08)
+        time.sleep(2)
 
         # Toggle on
         toggle_response = _chat(
@@ -273,7 +275,7 @@ class TestVerboseToggleChangesConfig:
             "Toggle verbose logging on",
             context_window_id=context_window_id,
         )
-        time.sleep(1)
+        time.sleep(2)
 
         # Check it changed
         check_response = _chat(
@@ -287,7 +289,7 @@ class TestVerboseToggleChangesConfig:
 
         # Restore by toggling off
         _chat(http_client, "Toggle verbose logging off", context_window_id=context_window_id)
-        time.sleep(1)
+        time.sleep(2)
 
 
 # ===========================================================================

@@ -67,13 +67,17 @@ def _extract_rating(response: str) -> str:
         if match:
             return match.group(1)
 
-    # Fall back to simple keyword presence (last occurrence wins for ambiguity)
-    if "POOR" in response_upper:
-        return "POOR"
-    if "ACCEPTABLE" in response_upper:
-        return "ACCEPTABLE"
-    if "GOOD" in response_upper:
-        return "GOOD"
+    # Fall back to last occurrence of a rating keyword.
+    # Check GOOD first — if the judge mentions "POOR" in reasoning
+    # ("this is not POOR") but rates GOOD, we must not return POOR.
+    # Find the last occurrence of each keyword and use the latest one.
+    last_positions = {}
+    for rating in ("GOOD", "ACCEPTABLE", "POOR"):
+        pos = response_upper.rfind(rating)
+        if pos >= 0:
+            last_positions[rating] = pos
+    if last_positions:
+        return max(last_positions, key=last_positions.get)
 
     # If no rating found, treat as ACCEPTABLE with a warning
     return "ACCEPTABLE"
@@ -209,6 +213,7 @@ class TestEnrichedQuality:
                 "build_type": "enriched",
                 "budget": 16000,
                 "conversation_id": any_conversation_id,
+                "user_prompt": "What are the key architectural decisions and design patterns discussed?",
             },
         )
         assert resp.status_code == 200
