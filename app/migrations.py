@@ -530,6 +530,27 @@ async def _migration_021(conn) -> None:
     _log.info("Migration 021 complete — tier 1→3 rename for compaction v2")
 
 
+async def _migration_022(conn) -> None:
+    """Migration 22: Create alert_instructions table for alerter sidecar tools.
+
+    The Imperator's alerting tools (add/list/update/delete_alert_instruction)
+    store instructions in this table. The alerter sidecar reads them to
+    decide how to format and route alerts.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS alert_instructions (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            description     TEXT NOT NULL,
+            instruction     TEXT NOT NULL,
+            channels        JSONB NOT NULL DEFAULT '[]'::jsonb,
+            embedding       vector,
+            created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+        )
+    """)
+    _log.info("Migration 022 complete — alert_instructions table")
+
+
 # Migration registry: version -> (description, migration_function)
 # Add new migrations here. Never modify existing entries.
 # IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
@@ -602,6 +623,11 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
         21,
         "Tier rename: archival tier 1→3, update check constraint (compaction v2)",
         _migration_021,
+    ),
+    (
+        22,
+        "Create alert_instructions table for alerter sidecar tools",
+        _migration_022,
     ),
 ]
 
