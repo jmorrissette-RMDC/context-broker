@@ -793,7 +793,11 @@ def route_after_compaction_state(state: StandardTieredAssemblyState) -> str:
 def route_after_compact_tier1(state: StandardTieredAssemblyState) -> str:
     if state.get("error"):
         return "release_assembly_lock"
-    return "run_full_compaction"
+    # Full compaction only triggers when tier 2 was at max capacity
+    # before the new chunk was added. If tier 2 had room, just finalize.
+    if state.get("tier2_at_max"):
+        return "run_full_compaction"
+    return "finalize_assembly"
 
 
 def build_standard_tiered_assembly():
@@ -847,6 +851,7 @@ def build_standard_tiered_assembly():
         route_after_compact_tier1,
         {
             "run_full_compaction": "run_full_compaction",
+            "finalize_assembly": "finalize_assembly",
             "release_assembly_lock": "release_assembly_lock",
         },
     )
