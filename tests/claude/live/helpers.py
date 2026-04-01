@@ -21,7 +21,9 @@ import httpx
 PROJECT_ROOT = Path(__file__).resolve().parents[3]  # ContextBroker/
 COMPOSE_FILE = str(PROJECT_ROOT / "docker-compose.claude-test.yml")
 COMPOSE_PROJECT = "claude-test"
-TEST_DATA_DIR = Path(r"Z:\test-data\conversational-memory")
+import platform
+_STORAGE_ROOT = Path("/mnt/storage") if platform.system() == "Linux" else Path("Z:\\")
+TEST_DATA_DIR = Path(os.environ.get("CB_TEST_DATA_DIR", str(_STORAGE_ROOT / "test-data" / "conversational-memory")))
 PHASE1_DIR = TEST_DATA_DIR / "phase1-bulk-load"
 PHASE2_DIR = TEST_DATA_DIR / "phase2-agent-conversation"
 PHASE3_DIR = TEST_DATA_DIR / "phase3-synthetic"
@@ -30,7 +32,7 @@ PHASE3_DIR = TEST_DATA_DIR / "phase3-synthetic"
 # commands are run remotely via SSH. Otherwise they run locally.
 SSH_TARGET = os.environ.get("CLAUDE_TEST_SSH", "aristotle9@192.168.1.110")
 DOCKER_HOST = os.environ.get("CLAUDE_TEST_HOST", "192.168.1.110")
-REMOTE_PROJECT_DIR = "/mnt/storage/projects/portfolio/ContextBroker"
+REMOTE_PROJECT_DIR = "/mnt/storage/projects/Joshua26/state_4_development/context_broker_pmad"
 
 BASE_PORT = int(os.environ.get("CLAUDE_TEST_PORT", "8081"))
 BASE_URL = f"http://{DOCKER_HOST}:{BASE_PORT}"
