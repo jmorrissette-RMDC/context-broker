@@ -323,7 +323,7 @@ class TestRunMem0Extraction:
             new_callable=AsyncMock,
             return_value=mock_mem0,
         ), patch(
-            "context_broker_ae.memory_extraction.load_prompt",
+            "app.prompt_loader.load_prompt",
             return_value="test-extraction-prompt",
         ):
             result = await run_mem0_extraction(state)
