@@ -1,7 +1,7 @@
 # Design: Context Compaction v2 — Deadband Tiered Compaction with Prefix Caching
 
 **Date:** 2026-03-30
-**Status:** Designed, validated by 3 CLIs (Claude, Gemini, Codex). Not yet implemented.
+**Status:** Implemented 2026-03-31. Validated by 3 CLIs (Claude, Gemini, Codex). Gate 2 review 2026-04-01.
 **Author:** Jason + Claude Opus 4.6
 
 ---
