@@ -110,9 +110,11 @@ class TestDeadbandImmutability:
             "tier1_floor_pct": 0.20,
             "tier2_chunk_pct": 0.02,
             "tier3_pct": 0.02,
+            "tier2_max_chunks": 6,
+            "effective_utilization": 0.85,
         }
         original = copy.deepcopy(config)
-        calculate_tier1_ceiling(config)
+        calculate_tier1_ceiling(1_000_000, config)
         _assert_state_unchanged(original, config, "calculate_tier1_ceiling")
 
     def test_should_trigger_compaction(self):
@@ -121,9 +123,11 @@ class TestDeadbandImmutability:
             "tier1_floor_pct": 0.20,
             "tier2_chunk_pct": 0.02,
             "tier3_pct": 0.02,
+            "tier2_max_chunks": 6,
+            "effective_utilization": 0.85,
         }
         original = copy.deepcopy(config)
-        should_trigger_compaction(config, tier1_token_pct=0.50)
+        should_trigger_compaction(500_000, 1_000_000, config)
         _assert_state_unchanged(original, config, "should_trigger_compaction")
 
 

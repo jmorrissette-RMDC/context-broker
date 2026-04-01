@@ -8,11 +8,11 @@ import pytest
 
 from context_broker_ae.build_types.standard_tiered import (
     acquire_assembly_lock,
-    calculate_tier_boundaries,
+    calculate_compaction_state,
+    compact_tier1,
     finalize_assembly,
     load_messages,
     release_assembly_lock,
-    summarize_message_chunks,
 )
 from context_broker_ae.build_types.tier_scaling import (
     calculate_tier1_ceiling,
@@ -121,7 +121,7 @@ class TestBudgetGuard:
             new_callable=AsyncMock,
             return_value="Summarize:",
         ):
-            result = await summarize_message_chunks(state)
+            result = await compact_tier1(state)
 
         # Should have stopped before processing all 10 chunks
         inserted_count = len(result["tier2_summaries"])
@@ -167,7 +167,7 @@ class TestBudgetGuard:
             new_callable=AsyncMock,
             return_value="Summarize:",
         ):
-            result = await summarize_message_chunks(state)
+            result = await compact_tier1(state)
 
         assert len(result["tier2_summaries"]) == 2
 
@@ -330,7 +330,7 @@ class TestTierBoundaryCalculation:
             "context_broker_ae.build_types.standard_tiered.get_pg_pool",
             return_value=pool,
         ):
-            result = await calculate_tier_boundaries(state)
+            result = await calculate_compaction_state(state)
 
         # All 20 messages * 100 tokens = 2000 tokens, well within budget
         assert len(result["tier1_messages"]) == 20
@@ -359,7 +359,7 @@ class TestTierBoundaryCalculation:
             "context_broker_ae.build_types.standard_tiered.get_pg_pool",
             return_value=pool,
         ):
-            result = await calculate_tier_boundaries(state)
+            result = await calculate_compaction_state(state)
 
         # Not all messages should fit in tier 1 (live)
         assert len(result["tier1_messages"]) < 100
@@ -383,15 +383,19 @@ class TestTierBoundaryCalculation:
         assert db["tier3_pct"] == 0.02
 
     def test_tier1_ceiling_calculation(self):
-        """Tier 1 ceiling = 85% - tier2 - tier3."""
+        """Tier 1 ceiling = (budget * util) - tier2_max - tier3, in tokens."""
         config = {
             "tier1_floor_pct": 0.20,
             "tier2_chunk_pct": 0.02,
             "tier3_pct": 0.02,
+            "tier2_max_chunks": 6,
+            "effective_utilization": 0.85,
         }
-        ceiling = calculate_tier1_ceiling(config)
-        expected = 0.85 - 0.02 - 0.02
-        assert abs(ceiling - expected) < 1e-6
+        budget = 8192
+        ceiling = calculate_tier1_ceiling(budget, config)
+        # 8192*0.85 - 8192*0.02*6 - 8192*0.02 = 6963 - 983 - 163 = 5817
+        expected = int(budget * 0.85) - int(budget * 0.02 * 6) - int(budget * 0.02)
+        assert ceiling == expected
 
 
 # ---------------------------------------------------------------------------
