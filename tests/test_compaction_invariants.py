@@ -370,10 +370,11 @@ class TestTier3HeaderPersistence:
         assert "3, 0, 0, 0" in header_sql, "Header INSERT should have tier=3, from_seq=0, to_seq=0, count=0"
 
         # Second INSERT: consolidated range covering the chunk span
+        # call_args[0] = (sql, $1=conv_id, $2=window_id, $3=text, $4=from_seq, $5=to_seq, $6=count, $7=model)
         range_call_args = insert_calls[1][0]
         # keep_recent = tier2_min_chunks - 1 = 2, so consolidate first 4 chunks
-        assert range_call_args[3] == active_t2[0]["summarizes_from_seq"]
-        assert range_call_args[4] == active_t2[3]["summarizes_to_seq"]
+        assert range_call_args[4] == active_t2[0]["summarizes_from_seq"]
+        assert range_call_args[5] == active_t2[3]["summarizes_to_seq"]
 
     @pytest.mark.asyncio
     async def test_existing_tier3_header_included_in_consolidation(self):
