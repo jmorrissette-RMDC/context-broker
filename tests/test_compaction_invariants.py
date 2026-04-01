@@ -365,10 +365,9 @@ class TestTier3HeaderPersistence:
             f"Expected 2 tier 3 INSERT calls, got {len(insert_calls)}"
         )
 
-        # First INSERT: historical header with seq 0, 0
-        header_call_args = insert_calls[0][0]  # positional args
-        assert header_call_args[3] == 0, "Header summarizes_from_seq should be 0"
-        assert header_call_args[4] == 0, "Header summarizes_to_seq should be 0"
+        # First INSERT: historical header — SQL contains hardcoded seq 0, 0
+        header_sql = insert_calls[0][0][0]  # first positional arg is the SQL string
+        assert "3, 0, 0, 0" in header_sql, "Header INSERT should have tier=3, from_seq=0, to_seq=0, count=0"
 
         # Second INSERT: consolidated range covering the chunk span
         range_call_args = insert_calls[1][0]
