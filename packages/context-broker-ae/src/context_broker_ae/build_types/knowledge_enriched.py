@@ -5,6 +5,14 @@ Extends standard-tiered with semantic retrieval and knowledge graph nodes.
 Full retrieval pipeline: episodic tiers + semantic vector search + KG traversal.
 
 Assembly is identical to standard-tiered (reuses the same graph builder).
+Assembly does NOT know about RAG budget reservations — it fills tier 1
+up to the standard-tiered ceiling (~71-77%). At retrieval time, tier 1 is
+capped at a smaller budget (~50%) to make room for semantic and knowledge
+graph layers. Messages between the assembly ceiling and the retrieval
+tier 1 cap are NOT lost — they are accessible via the semantic retrieval
+layer (pgvector vector search) when relevant to the user's query. This is
+by design: the RAG layers compensate for the smaller live tier.
+
 Retrieval adds inject_semantic_retrieval and inject_knowledge_graph nodes.
 
 F-06: Reads its own LLM config from config["build_types"]["knowledge-enriched"]["llm"],
