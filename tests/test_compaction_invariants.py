@@ -99,12 +99,14 @@ class _AsyncContextManager:
 def _mock_pg_pool():
     """Create a mock asyncpg pool with acquire/transaction context managers."""
     pool = MagicMock()
-    conn = AsyncMock()
+    conn = MagicMock()  # conn methods that return context managers must be MagicMock
 
-    # pool.acquire() must return an async context manager synchronously
-    # (asyncpg's pool.acquire() returns a PoolAcquireContext, not a coroutine)
+    # pool.acquire() and conn.transaction() return async context managers synchronously
     pool.acquire.return_value = _AsyncContextManager(conn)
     conn.transaction.return_value = _AsyncContextManager(None)
+
+    # async methods on conn (execute, fetch, etc.)
+    conn.execute = AsyncMock()
 
     # async methods on pool (fetch, fetchval, fetchrow, execute)
     pool.fetch = AsyncMock(return_value=[])
