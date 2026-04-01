@@ -507,14 +507,22 @@ async def llm_call_node(state: ImperatorState) -> dict:
 
 
 def needs_init(state: ImperatorState) -> str:
-    """Conditional edge at entry: route to init_context_node if no SystemMessage.
+    """Conditional edge at entry: route to init_context_node if no Imperator identity prompt.
 
     CR-A03: First call goes through init_context_node for setup,
     subsequent ReAct iterations skip directly to llm_call_node.
+
+    Checks for the Imperator's specific identity marker, not just any
+    SystemMessage. OpenAI-compatible clients may send their own system
+    messages which should NOT prevent identity initialization.
     """
-    has_system = any(isinstance(m, SystemMessage) for m in state.get("messages", []))
-    if has_system:
-        return "llm_call_node"
+    # The identity prompt contains "Imperator" — check for that marker
+    # rather than any SystemMessage, so client-supplied system messages
+    # don't skip initialization.
+    IDENTITY_MARKER = "Imperator"
+    for m in state.get("messages", []):
+        if isinstance(m, SystemMessage) and IDENTITY_MARKER in (m.content or ""):
+            return "llm_call_node"
     return "init_context_node"
 
 
