@@ -459,13 +459,13 @@ knowledge-enriched:
 The simplest path is to copy the passthrough build type and extend it. Each build type needs:
 
 1. **A config entry** in `config.yml` under `build_types`.
-2. **A Python module** in `app/flows/build_types/` that defines assembly and retrieval StateGraphs.
+2. **A Python module** in `packages/context-broker-ae/src/context_broker_ae/build_types/` that defines assembly and retrieval StateGraphs.
 3. **Registration** via `register_build_type()` at module import time.
-4. **An import** in `app/flows/build_types/__init__.py` to trigger registration.
+4. **An import** in `packages/context-broker-ae/src/context_broker_ae/build_types/__init__.py` to trigger registration.
 
 **Step-by-step using passthrough as a starting point:**
 
-1. Copy `app/flows/build_types/passthrough.py` to `app/flows/build_types/my_build_type.py`.
+1. Copy `packages/context-broker-ae/src/context_broker_ae/build_types/passthrough.py` to `packages/context-broker-ae/src/context_broker_ae/build_types/my_build_type.py`.
 
 2. Define your assembly and retrieval StateGraph state classes. Your graphs must accept the standard input contracts (`AssemblyInput` / `RetrievalInput` from `app/flows/contracts.py`) and produce the standard output contracts (`AssemblyOutput` / `RetrievalOutput`):
 
@@ -485,7 +485,7 @@ The simplest path is to copy the passthrough build type and extend it. Each buil
    register_build_type("my-build-type", build_my_assembly, build_my_retrieval)
    ```
 
-5. Add the import to `app/flows/build_types/__init__.py`:
+5. Add the import to `packages/context-broker-ae/src/context_broker_ae/build_types/__init__.py`:
 
    ```python
    import app.flows.build_types.my_build_type  # noqa: F401
@@ -507,7 +507,7 @@ The registry (`app/flows/build_type_registry.py`) lazily compiles graphs on firs
 
 All application logic lives in StateGraph flows under `app/flows/`. To modify a flow:
 
-1. **Locate the flow module.** Build-type-specific flows are in `app/flows/build_types/`. Cross-cutting flows (search, embedding, memory) are directly in `app/flows/`.
+1. **Locate the flow module.** Build-type-specific flows are in `packages/context-broker-ae/src/context_broker_ae/build_types/`. Cross-cutting flows (search, embedding, memory) are directly in `app/flows/`.
 
 2. **Understand the state contract.** Each flow defines a `TypedDict` state class. Node functions receive the full state and return a dict containing only the keys they update. Node functions must not modify input state in-place.
 
