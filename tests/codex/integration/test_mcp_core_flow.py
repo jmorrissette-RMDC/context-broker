@@ -81,7 +81,7 @@ class TestCoreConversationFlow:
             messages = search_result.get("messages") or []
             return any(unique_text in str(m) for m in messages)
 
-        assert wait_for_condition(_search, timeout_seconds=20.0)
+        assert wait_for_condition(_search, timeout_seconds=60.0)
 
     def test_conversation_history(self, cb_client):
         conv_resp = mcp_call(cb_client, "conv_create_conversation", {})

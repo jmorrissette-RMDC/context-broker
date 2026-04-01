@@ -322,13 +322,17 @@ class TestRunMem0Extraction:
             "context_broker_ae.memory.mem0_client.get_mem0_client",
             new_callable=AsyncMock,
             return_value=mock_mem0,
+        ), patch(
+            "context_broker_ae.memory_extraction.load_prompt",
+            return_value="test-extraction-prompt",
         ):
             result = await run_mem0_extraction(state)
-        mock_mem0.add.assert_called_once_with(
-            "The sky is blue.",
-            user_id="user123",
-            run_id=conv_id,
-        )
+        mock_mem0.add.assert_called_once()
+        call_args, call_kwargs = mock_mem0.add.call_args
+        assert call_args[0] == "The sky is blue."
+        assert call_kwargs["user_id"] == "user123"
+        assert call_kwargs["run_id"] == conv_id
+        assert call_kwargs["prompt"] == "test-extraction-prompt"
         assert result.get("error") is None
 
     @pytest.mark.asyncio
@@ -358,8 +362,8 @@ class TestRunMem0Extraction:
         mock_reset.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_mem0_silent_failure_not_detected(self):
-        """KNOWN BUG: If mem0.add() succeeds but doesn't persist, we return error=None."""
+    async def test_mem0_none_result_returns_error(self):
+        """TA-04: mem0.add() returning None is treated as an error to prevent silent data loss."""
         mock_mem0 = MagicMock()
         mock_mem0.add.return_value = None
         state = {
@@ -377,7 +381,8 @@ class TestRunMem0Extraction:
             return_value=mock_mem0,
         ):
             result = await run_mem0_extraction(state)
-        assert result.get("error") is None
+        assert result["error"] is not None
+        assert "Mem0 returned None" in result["error"]
 
 
 # ── mark_messages_extracted ──────────────────────────────────────────

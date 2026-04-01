@@ -17,15 +17,13 @@ class TestMigrationToolDryRun:
         mock_pool = AsyncMock()
         mock_pool.fetchval = AsyncMock(return_value=100)
 
-        with (
-            patch(
-                "app.config.async_load_config", new_callable=AsyncMock
-            ) as mock_config,
-            patch("context_broker_te.tools.admin.get_pg_pool", return_value=mock_pool),
-        ):
-            mock_config.return_value = {
-                "embeddings": {"model": "old-model", "embedding_dims": 768}
-            }
+        mock_ctx = AsyncMock()
+        mock_ctx.get_pool.return_value = mock_pool
+        mock_ctx.async_load_config = AsyncMock(return_value={
+            "embeddings": {"model": "old-model", "embedding_dims": 768}
+        })
+
+        with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx):
             result = await migrate_embeddings.ainvoke(
                 {"new_model": "new-model", "new_dims": 1536, "confirm": False}
             )
@@ -44,15 +42,13 @@ class TestMigrationToolDryRun:
         mock_pool.fetchval = AsyncMock(return_value=0)
         mock_pool.execute = AsyncMock()
 
-        with (
-            patch(
-                "app.config.async_load_config", new_callable=AsyncMock
-            ) as mock_config,
-            patch("context_broker_te.tools.admin.get_pg_pool", return_value=mock_pool),
-        ):
-            mock_config.return_value = {
-                "embeddings": {"model": "m", "embedding_dims": 768}
-            }
+        mock_ctx = AsyncMock()
+        mock_ctx.get_pool.return_value = mock_pool
+        mock_ctx.async_load_config = AsyncMock(return_value={
+            "embeddings": {"model": "m", "embedding_dims": 768}
+        })
+
+        with patch("context_broker_te.tools.admin.get_ctx", return_value=mock_ctx):
             await migrate_embeddings.ainvoke(
                 {"new_model": "new", "new_dims": 1536, "confirm": False}
             )
