@@ -120,6 +120,24 @@ class TestTier1Ceiling:
         expected = int(STANDARD_BUDGET * 0.85) - int(STANDARD_BUDGET * 0.02 * 6) - int(STANDARD_BUDGET * 0.02)
         assert ceiling == expected
 
+    def test_dynamic_ceiling_with_fewer_chunks(self):
+        """When tier 2 has fewer chunks, ceiling rises (wider deadband swing)."""
+        db = extract_deadband_config(_base_config())
+        # With 3 chunks (post full compaction): 850K - 60K - 20K = 770K
+        ceiling_3 = calculate_tier1_ceiling(STANDARD_BUDGET, db, current_tier2_chunks=3)
+        # With 6 chunks (max): 850K - 120K - 20K = 710K
+        ceiling_6 = calculate_tier1_ceiling(STANDARD_BUDGET, db, current_tier2_chunks=6)
+        assert ceiling_3 > ceiling_6
+        expected_3 = int(STANDARD_BUDGET * 0.85) - int(STANDARD_BUDGET * 0.02 * 3) - int(STANDARD_BUDGET * 0.02)
+        assert ceiling_3 == expected_3
+
+    def test_default_uses_max_chunks(self):
+        """Without current_tier2_chunks, uses tier2_max_chunks (conservative)."""
+        db = extract_deadband_config(_base_config())
+        ceiling_default = calculate_tier1_ceiling(STANDARD_BUDGET, db)
+        ceiling_max = calculate_tier1_ceiling(STANDARD_BUDGET, db, current_tier2_chunks=6)
+        assert ceiling_default == ceiling_max
+
     def test_enriched_ceiling(self):
         """Enriched: same calculation — RAG layers don't affect ceiling directly."""
         db = extract_deadband_config(_enriched_config())

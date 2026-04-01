@@ -278,7 +278,21 @@ async def calculate_compaction_state(state: StandardTieredAssemblyState) -> dict
     max_budget = state["max_token_budget"]
     db = extract_deadband_config(build_type_config)
 
-    tier1_ceiling_tokens = calculate_tier1_ceiling(max_budget, db)
+    # Query current tier 2 chunk count for dynamic ceiling calculation
+    pool = get_pg_pool()
+    current_t2_count = await pool.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM conversation_summaries
+        WHERE context_window_id = $1
+          AND tier = 2
+          AND is_active = TRUE
+        """,
+        uuid.UUID(state["context_window_id"]),
+    )
+    current_t2_count = current_t2_count or 0
+
+    tier1_ceiling_tokens = calculate_tier1_ceiling(max_budget, db, current_t2_count)
     tier1_floor_tokens = int(max_budget * db["tier1_floor_pct"])
 
     # Walk backwards to fill tier 1 up to the ceiling
@@ -340,18 +354,8 @@ async def calculate_compaction_state(state: StandardTieredAssemblyState) -> dict
         for i in range(0, len(unsummarized), chunk_size)
     ]
 
-    # Check if tier 2 is at max capacity
-    t2_count = await pool.fetchval(
-        """
-        SELECT COUNT(*)
-        FROM conversation_summaries
-        WHERE context_window_id = $1
-          AND tier = 2
-          AND is_active = TRUE
-        """,
-        uuid.UUID(state["context_window_id"]),
-    )
-    tier2_at_max = (t2_count or 0) >= db["tier2_max_chunks"]
+    # Check if tier 2 is at max capacity (reuse count from ceiling calc)
+    tier2_at_max = current_t2_count >= db["tier2_max_chunks"]
 
     if max_summarized_seq > 0:
         _log.info(
@@ -1036,7 +1040,8 @@ async def ret_load_recent_messages(state: StandardTieredRetrievalState) -> dict:
     max_budget = state["max_token_budget"]
     db = extract_deadband_config(build_type_config)
 
-    tier1_ceiling_tokens = calculate_tier1_ceiling(max_budget, db)
+    current_t2_chunks = len(state.get("tier2_summaries") or [])
+    tier1_ceiling_tokens = calculate_tier1_ceiling(max_budget, db, current_t2_chunks)
 
     # Calculate tokens already used by summaries
     summary_tokens = 0

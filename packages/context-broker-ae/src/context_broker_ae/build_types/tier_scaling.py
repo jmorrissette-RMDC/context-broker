@@ -23,19 +23,31 @@ def extract_deadband_config(build_type_config: dict) -> dict:
     }
 
 
-def calculate_tier1_ceiling(max_budget: int, db_config: dict) -> int:
+def calculate_tier1_ceiling(
+    max_budget: int,
+    db_config: dict,
+    current_tier2_chunks: int | None = None,
+) -> int:
     """Calculate the tier 1 (live) ceiling in tokens.
 
-    Ceiling = (max_budget * effective_utilization) - tier2_max - tier3.
-    This is the maximum tier 1 can hold before compaction triggers.
+    Ceiling = (max_budget * effective_utilization) - tier2_current - tier3.
+    Dynamic: when tier 2 has fewer chunks (e.g., 3 after full compaction),
+    the ceiling rises, widening the deadband swing. When tier 2 is full
+    (6 chunks), the ceiling is at its lowest.
+
+    Args:
+        max_budget: Total token budget for the window.
+        db_config: Deadband config from extract_deadband_config().
+        current_tier2_chunks: Actual number of active tier 2 chunks.
+            If None, uses tier2_max_chunks (conservative/static fallback).
+
     Never drops below the floor.
     """
     util = db_config["effective_utilization"]
     tier3_tokens = int(max_budget * db_config["tier3_pct"])
-    tier2_max_tokens = int(
-        max_budget * db_config["tier2_chunk_pct"] * db_config["tier2_max_chunks"]
-    )
-    ceiling = int(max_budget * util) - tier2_max_tokens - tier3_tokens
+    chunk_count = current_tier2_chunks if current_tier2_chunks is not None else db_config["tier2_max_chunks"]
+    tier2_tokens = int(max_budget * db_config["tier2_chunk_pct"] * chunk_count)
+    ceiling = int(max_budget * util) - tier2_tokens - tier3_tokens
     floor = int(max_budget * db_config["tier1_floor_pct"])
     return max(ceiling, floor)
 
@@ -44,7 +56,8 @@ def should_trigger_compaction(
     tier1_tokens: int,
     max_budget: int,
     db_config: dict,
+    current_tier2_chunks: int | None = None,
 ) -> bool:
     """Check if tier 1 has exceeded its ceiling and compaction should trigger."""
-    ceiling = calculate_tier1_ceiling(max_budget, db_config)
+    ceiling = calculate_tier1_ceiling(max_budget, db_config, current_tier2_chunks)
     return tier1_tokens > ceiling
