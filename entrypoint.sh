@@ -10,6 +10,9 @@ set -e
 # ERQ-005 §2.4: umask 000 for world-writable file creation
 umask 000
 
+# Ensure /data/downloads exists (bind mount may not have it)
+mkdir -p /data/downloads 2>/dev/null || true
+
 CONFIG_FILE="${CONFIG_PATH:-/config/config.yml}"
 
 if [ -f "$CONFIG_FILE" ]; then
