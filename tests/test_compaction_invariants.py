@@ -84,16 +84,25 @@ def _assembly_config() -> dict:
     }
 
 
+class _AsyncContextManager:
+    """Helper for mocking async context managers (async with)."""
+    def __init__(self, return_value):
+        self._return_value = return_value
+
+    async def __aenter__(self):
+        return self._return_value
+
+    async def __aexit__(self, *args):
+        return False
+
+
 def _mock_pg_pool():
     """Create a mock asyncpg pool with acquire/transaction context managers."""
     pool = AsyncMock()
     conn = AsyncMock()
 
-    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-
-    conn.transaction.return_value.__aenter__ = AsyncMock(return_value=None)
-    conn.transaction.return_value.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = _AsyncContextManager(conn)
+    conn.transaction.return_value = _AsyncContextManager(None)
 
     return pool, conn
 
