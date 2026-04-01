@@ -144,9 +144,14 @@ async def ke_load_window(state: KnowledgeEnrichedRetrievalState) -> dict:
 async def ke_wait_for_assembly(state: KnowledgeEnrichedRetrievalState) -> dict:
     """Block if context assembly is in progress, with timeout.
 
-    R6-M9: If Redis is unavailable, proceed without waiting rather than crashing.
+    If Postgres advisory lock is unavailable, proceed without waiting.
     """
-    pool = get_pg_pool()
+    try:
+        pool = get_pg_pool()
+    except RuntimeError:
+        _log.warning("Retrieval: pool not available, proceeding without assembly wait")
+        return {"assembly_status": "ready"}
+
     lock_id = stable_lock_id(state["context_window_id"])
 
     timeout = get_tuning(state["config"], "assembly_wait_timeout_seconds", 50)
@@ -154,14 +159,18 @@ async def ke_wait_for_assembly(state: KnowledgeEnrichedRetrievalState) -> dict:
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        # Try to acquire lock — if we can, assembly is NOT in progress
-        acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
-        if acquired:
-            # Release immediately — we just wanted to check
-            await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
-            in_progress = False
-        else:
-            in_progress = True
+        try:
+            # Try to acquire lock — if we can, assembly is NOT in progress
+            acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
+            if acquired:
+                # Release immediately — we just wanted to check
+                await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+                in_progress = False
+            else:
+                in_progress = True
+        except (ConnectionError, OSError, RuntimeError) as exc:
+            _log.warning("Retrieval: advisory lock error during assembly wait, proceeding: %s", exc)
+            return {"assembly_status": "ready"}
         if not in_progress:
             return {"assembly_status": "ready"}
 

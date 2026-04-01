@@ -382,18 +382,11 @@ def get_build_type_config(
 
     # Validate tier allocation does not exceed utilization cap.
     # Deadband builds: tier1_floor + tier2_chunk * max_chunks + tier3 + RAG layers
-    # Fixed builds (legacy): tier1_pct + tier2_pct + tier3_pct + RAG layers
-    if "tier1_floor_pct" in bt_config:
-        # Deadband config
-        floor = bt_config.get("tier1_floor_pct", 0.20)
-        tier2_max = bt_config.get("tier2_chunk_pct", 0.02) * bt_config.get("tier2_max_chunks", 6)
-        tier3 = bt_config.get("tier3_pct", 0.02)
-        rag = (bt_config.get("semantic_retrieval_pct", 0) or 0) + (bt_config.get("knowledge_graph_pct", 0) or 0)
-        total_pct = floor + tier2_max + tier3 + rag
-    else:
-        # Legacy fixed percentage config
-        pct_keys = ["tier1_pct", "tier2_pct", "tier3_pct", "semantic_retrieval_pct", "knowledge_graph_pct"]
-        total_pct = sum(bt_config.get(k, 0) or 0 for k in pct_keys)
+    floor = bt_config.get("tier1_floor_pct", 0.20)
+    tier2_max = bt_config.get("tier2_chunk_pct", 0.02) * bt_config.get("tier2_max_chunks", 6)
+    tier3 = bt_config.get("tier3_pct", 0.02)
+    rag = (bt_config.get("semantic_retrieval_pct", 0) or 0) + (bt_config.get("knowledge_graph_pct", 0) or 0)
+    total_pct = floor + tier2_max + tier3 + rag
     util = bt_config.get("effective_utilization", 0.85)
     if total_pct > util:
         raise ValueError(

@@ -551,7 +551,7 @@ async def compact_tier1(state: StandardTieredAssemblyState) -> dict:
                         "messages": chunk,
                     })
                 )
-        except Exception as exc:
+        except (ImportError, RuntimeError, ValueError, OSError) as exc:
             _log.debug("Compaction-time extraction skipped: %s", exc)
 
     _log.info(
