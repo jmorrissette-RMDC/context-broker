@@ -345,6 +345,7 @@ class TestTierBoundaryCalculation:
         messages = [_make_message(i, content="x" * 800, token_count=200) for i in range(100)]
 
         pool.fetch.return_value = []  # no existing t2 summaries
+        pool.fetchval.return_value = 0  # no existing tier 2 chunks
 
         state = {
             "context_window_id": WINDOW_ID,

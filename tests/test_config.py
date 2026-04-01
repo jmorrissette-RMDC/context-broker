@@ -172,7 +172,7 @@ class TestGetBuildTypeConfig:
                 },
             },
         }
-        with pytest.raises(ValueError, match="exceeds 1.0"):
+        with pytest.raises(ValueError, match="exceeds effective utilization"):
             get_build_type_config(config, "bad-type")
 
     def test_percentages_include_all_five_keys(self):
@@ -188,7 +188,7 @@ class TestGetBuildTypeConfig:
                 },
             },
         }
-        with pytest.raises(ValueError, match="exceeds 1.0"):
+        with pytest.raises(ValueError, match="exceeds effective utilization"):
             get_build_type_config(config, "over-budget")
 
     def test_knowledge_enriched_valid(self, sample_config):
