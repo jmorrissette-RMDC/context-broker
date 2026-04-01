@@ -25,6 +25,9 @@ from context_broker_ae.build_types.tier_scaling import (
 # ------------------------------------------------------------------
 
 
+STANDARD_BUDGET = 1_000_000  # 1M token window for test calculations
+
+
 def _base_config() -> dict:
     """Return a tiered-summary build type config with deadband settings."""
     return {
@@ -34,6 +37,7 @@ def _base_config() -> dict:
         "tier2_min_chunks": 3,
         "tier2_max_chunks": 6,
         "tier3_header_pct": 0.0025,
+        "effective_utilization": 0.85,
         "max_context_tokens": "auto",
         "fallback_tokens": 8192,
     }
@@ -48,6 +52,7 @@ def _enriched_config() -> dict:
         "tier2_min_chunks": 3,
         "tier2_max_chunks": 6,
         "tier3_header_pct": 0.0025,
+        "effective_utilization": 0.85,
         "knowledge_graph_pct": 0.15,
         "semantic_retrieval_pct": 0.15,
         "fallback_tokens": 16000,
@@ -101,40 +106,47 @@ class TestDeadbandConfigExtraction:
 
 
 class TestTier1Ceiling:
-    """Tests for tier 1 (live) ceiling = 85% - tier2 - tier3."""
+    """Tests for tier 1 (live) ceiling in tokens.
+
+    ceiling = (budget * utilization) - (tier2_chunk * max_chunks * budget) - (tier3 * budget)
+    Never drops below floor.
+    """
 
     def test_standard_ceiling(self):
-        """Standard config: ceiling = 0.85 - 0.02 - 0.02 = 0.81."""
-        config = _base_config()
-        ceiling = calculate_tier1_ceiling(config)
-        expected = 0.85 - 0.02 - 0.02
-        assert abs(ceiling - expected) < 1e-6
+        """Standard: ceiling = 1M * 0.85 - 1M * 0.02 * 6 - 1M * 0.02 = 710K."""
+        db = extract_deadband_config(_base_config())
+        ceiling = calculate_tier1_ceiling(STANDARD_BUDGET, db)
+        # 850K - 120K - 20K = 710K
+        expected = int(STANDARD_BUDGET * 0.85) - int(STANDARD_BUDGET * 0.02 * 6) - int(STANDARD_BUDGET * 0.02)
+        assert ceiling == expected
 
     def test_enriched_ceiling(self):
-        """Enriched config: ceiling accounts for knowledge/semantic pcts."""
-        config = _enriched_config()
-        ceiling = calculate_tier1_ceiling(config)
-        # 0.85 - 0.02 - 0.02 - 0.15 - 0.15 = 0.51
-        expected = 0.85 - 0.02 - 0.02 - 0.15 - 0.15
-        assert abs(ceiling - expected) < 1e-6
+        """Enriched: same calculation — RAG layers don't affect ceiling directly."""
+        db = extract_deadband_config(_enriched_config())
+        ceiling = calculate_tier1_ceiling(STANDARD_BUDGET, db)
+        # Same formula: 850K - 120K - 20K = 710K
+        expected = int(STANDARD_BUDGET * 0.85) - int(STANDARD_BUDGET * 0.02 * 6) - int(STANDARD_BUDGET * 0.02)
+        assert ceiling == expected
 
     def test_ceiling_always_positive(self):
         """Ceiling should never go negative even with large tier allocations."""
         config = {
             "tier1_floor_pct": 0.20,
             "tier2_chunk_pct": 0.30,
+            "tier2_max_chunks": 6,
             "tier3_pct": 0.30,
-            "knowledge_graph_pct": 0.10,
-            "semantic_retrieval_pct": 0.10,
+            "effective_utilization": 0.85,
         }
-        ceiling = calculate_tier1_ceiling(config)
+        db = extract_deadband_config(config)
+        ceiling = calculate_tier1_ceiling(STANDARD_BUDGET, db)
         assert ceiling >= 0
 
     def test_ceiling_exceeds_floor(self):
         """Under standard config, tier 1 ceiling should exceed the floor."""
-        config = _base_config()
-        ceiling = calculate_tier1_ceiling(config)
-        assert ceiling > config["tier1_floor_pct"]
+        db = extract_deadband_config(_base_config())
+        ceiling = calculate_tier1_ceiling(STANDARD_BUDGET, db)
+        floor = int(STANDARD_BUDGET * db["tier1_floor_pct"])
+        assert ceiling > floor
 
 
 # ------------------------------------------------------------------
@@ -143,34 +155,39 @@ class TestTier1Ceiling:
 
 
 class TestCompactionTrigger:
-    """Tests for detecting when tier 1 exceeds its ceiling."""
+    """Tests for detecting when tier 1 exceeds its ceiling.
+
+    should_trigger_compaction(tier1_tokens, max_budget, db_config) -> bool
+    """
 
     def test_below_ceiling_no_trigger(self):
         """When tier 1 usage is below ceiling, no compaction needed."""
-        config = _base_config()
-        # tier1 at 50% of budget, ceiling is ~81%
-        assert should_trigger_compaction(config, tier1_token_pct=0.50) is False
+        db = extract_deadband_config(_base_config())
+        tier1_tokens = int(STANDARD_BUDGET * 0.50)  # 50% — well below 71% ceiling
+        assert should_trigger_compaction(tier1_tokens, STANDARD_BUDGET, db) is False
 
     def test_at_ceiling_triggers(self):
-        """When tier 1 usage equals the ceiling, compaction triggers."""
-        config = _base_config()
-        ceiling = calculate_tier1_ceiling(config)
-        assert should_trigger_compaction(config, tier1_token_pct=ceiling) is True
+        """When tier 1 usage exceeds the ceiling, compaction triggers."""
+        db = extract_deadband_config(_base_config())
+        ceiling = calculate_tier1_ceiling(STANDARD_BUDGET, db)
+        assert should_trigger_compaction(ceiling + 1, STANDARD_BUDGET, db) is True
 
     def test_above_ceiling_triggers(self):
-        """When tier 1 usage exceeds ceiling, compaction triggers."""
-        config = _base_config()
-        assert should_trigger_compaction(config, tier1_token_pct=0.90) is True
+        """When tier 1 usage greatly exceeds ceiling, compaction triggers."""
+        db = extract_deadband_config(_base_config())
+        tier1_tokens = int(STANDARD_BUDGET * 0.90)  # 90% — way above ceiling
+        assert should_trigger_compaction(tier1_tokens, STANDARD_BUDGET, db) is True
 
     def test_zero_usage_no_trigger(self):
         """Zero tier 1 usage should not trigger compaction."""
-        config = _base_config()
-        assert should_trigger_compaction(config, tier1_token_pct=0.0) is False
+        db = extract_deadband_config(_base_config())
+        assert should_trigger_compaction(0, STANDARD_BUDGET, db) is False
 
     def test_at_floor_no_trigger(self):
-        """Tier 1 at exactly the floor percentage should not trigger."""
-        config = _base_config()
-        assert should_trigger_compaction(config, tier1_token_pct=0.20) is False
+        """Tier 1 at exactly the floor should not trigger."""
+        db = extract_deadband_config(_base_config())
+        tier1_tokens = int(STANDARD_BUDGET * 0.20)  # floor
+        assert should_trigger_compaction(tier1_tokens, STANDARD_BUDGET, db) is False
 
 
 # ------------------------------------------------------------------
@@ -220,14 +237,14 @@ class TestImmutability:
 
     def test_ceiling_does_not_mutate(self):
         """calculate_tier1_ceiling does not modify its input."""
-        config = _base_config()
-        original = copy.deepcopy(config)
-        calculate_tier1_ceiling(config)
-        assert config == original
+        db = extract_deadband_config(_base_config())
+        original = copy.deepcopy(db)
+        calculate_tier1_ceiling(STANDARD_BUDGET, db)
+        assert db == original
 
     def test_trigger_does_not_mutate(self):
         """should_trigger_compaction does not modify its input."""
-        config = _base_config()
-        original = copy.deepcopy(config)
-        should_trigger_compaction(config, tier1_token_pct=0.50)
-        assert config == original
+        db = extract_deadband_config(_base_config())
+        original = copy.deepcopy(db)
+        should_trigger_compaction(500_000, STANDARD_BUDGET, db)
+        assert db == original
