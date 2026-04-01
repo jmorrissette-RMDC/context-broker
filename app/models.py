@@ -134,7 +134,7 @@ class SearchContextWindowsInput(BaseModel):
 
 
 class MemSearchInput(BaseModel):
-    """Input for mem_search (management tool)."""
+    """Input for knowledge_search (management tool)."""
 
     query: str = Field(..., min_length=1, max_length=2000)
     user_id: str = Field(..., min_length=1, max_length=255)
@@ -142,7 +142,7 @@ class MemSearchInput(BaseModel):
 
 
 class MemGetContextInput(BaseModel):
-    """Input for mem_get_context (management tool — superseded by search_knowledge)."""
+    """Input for knowledge_get_context (management tool — superseded by search_knowledge)."""
 
     query: str = Field(..., min_length=1, max_length=2000)
     user_id: str = Field(..., min_length=1, max_length=255)
@@ -208,21 +208,21 @@ class SearchKnowledgeInput(BaseModel):
 
 
 class MemAddInput(BaseModel):
-    """Input for mem_add — directly add a memory to Mem0."""
+    """Input for knowledge_add — directly add a memory to Mem0."""
 
     content: str = Field(..., min_length=1, max_length=10000)
     user_id: str = Field(..., min_length=1, max_length=255)
 
 
 class MemListInput(BaseModel):
-    """Input for mem_list — list all memories for a user."""
+    """Input for knowledge_list — list all memories for a user."""
 
     user_id: str = Field(..., min_length=1, max_length=255)
     limit: int = Field(50, ge=1, le=500)
 
 
 class MemDeleteInput(BaseModel):
-    """Input for mem_delete — delete a specific memory by ID."""
+    """Input for knowledge_delete — delete a specific memory by ID."""
 
     memory_id: str = Field(..., min_length=1, max_length=255)
 

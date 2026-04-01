@@ -251,12 +251,11 @@ async def _extraction_worker(config: dict) -> None:
                 await asyncio.sleep(poll_interval)
                 continue
 
-            # Find conversations with unextracted messages
+            # Find all conversations with unextracted messages
             conv_rows = await pool.fetch("""
                 SELECT DISTINCT conversation_id
                 FROM conversation_messages
                 WHERE memory_extracted IS NOT TRUE
-                LIMIT 5
                 """)
 
             for conv_row in conv_rows:
@@ -460,7 +459,7 @@ async def _assembly_worker(config: dict) -> None:
             config = await async_load_config()
             pool = get_pg_pool()
 
-            # Find windows where new messages exist since last assembly
+            # Find ALL windows where new messages exist since last assembly
             windows = await pool.fetch("""
                 SELECT cw.id, cw.conversation_id, cw.build_type,
                        cw.max_token_budget, cw.last_assembled_at
@@ -471,7 +470,6 @@ async def _assembly_worker(config: dict) -> None:
                     AND (cw.last_assembled_at IS NULL OR cm.created_at > cw.last_assembled_at)
                 )
                 ORDER BY cw.last_assembled_at ASC NULLS FIRST
-                LIMIT 5
                 """)
 
             ASSEMBLY_QUEUE_DEPTH.set(len(windows))
@@ -482,12 +480,22 @@ async def _assembly_worker(config: dict) -> None:
                 )  # Poll less frequently for assembly
                 continue
 
-            for window in windows:
-                conv_id = str(window["conversation_id"])
-                window_id = str(window["id"])
-                await _run_assembly(
-                    pool, config, window_id, conv_id, window["build_type"]
-                )
+            # Concurrent assembly bounded by configurable concurrency limit.
+            # Advisory locks prevent conflicts on the same window.
+            assembly_concurrency = get_tuning(config, "assembly_concurrency", 4)
+            semaphore = asyncio.Semaphore(assembly_concurrency)
+
+            async def _bounded_assembly(w):
+                async with semaphore:
+                    await _run_assembly(
+                        pool, config, str(w["id"]),
+                        str(w["conversation_id"]), w["build_type"]
+                    )
+
+            await asyncio.gather(
+                *[_bounded_assembly(w) for w in windows],
+                return_exceptions=True,
+            )
 
             await asyncio.sleep(poll_interval)
 

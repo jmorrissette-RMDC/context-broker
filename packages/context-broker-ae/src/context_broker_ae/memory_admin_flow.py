@@ -1,5 +1,5 @@
 """
-Memory Admin Flows — LangGraph StateGraph flows for mem_add, mem_list, mem_delete.
+Memory Admin Flows — LangGraph StateGraph flows for knowledge_add, knowledge_list, knowledge_delete.
 
 M-18: These flows wrap Mem0 calls in StateGraphs to comply with the
 LangGraph mandate. Previously these operations were called directly
@@ -17,12 +17,12 @@ _log = logging.getLogger("context_broker.flows.memory_admin")
 
 
 # ============================================================
-# mem_add flow
+# knowledge_add flow
 # ============================================================
 
 
 class MemAddState(TypedDict):
-    """State for the mem_add flow."""
+    """State for the knowledge_add flow."""
 
     content: str
     user_id: str
@@ -60,12 +60,12 @@ async def add_memory(state: MemAddState) -> dict:
         OSError,
     ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
-        _log.warning("mem_add failed: %s", exc)
+        _log.warning("knowledge_add failed: %s", exc)
         return {"error": str(exc), "degraded": True}
 
 
 def build_mem_add_flow() -> StateGraph:
-    """Build and compile the mem_add StateGraph."""
+    """Build and compile the knowledge_add StateGraph."""
     workflow = StateGraph(MemAddState)
     workflow.add_node("add_memory", add_memory)
     workflow.set_entry_point("add_memory")
@@ -74,12 +74,12 @@ def build_mem_add_flow() -> StateGraph:
 
 
 # ============================================================
-# mem_list flow
+# knowledge_list flow
 # ============================================================
 
 
 class MemListState(TypedDict):
-    """State for the mem_list flow."""
+    """State for the knowledge_list flow."""
 
     user_id: str
     limit: int
@@ -124,12 +124,12 @@ async def list_memories(state: MemListState) -> dict:
         OSError,
     ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
-        _log.warning("mem_list failed: %s", exc)
+        _log.warning("knowledge_list failed: %s", exc)
         return {"memories": [], "error": str(exc), "degraded": True}
 
 
 def build_mem_list_flow() -> StateGraph:
-    """Build and compile the mem_list StateGraph."""
+    """Build and compile the knowledge_list StateGraph."""
     workflow = StateGraph(MemListState)
     workflow.add_node("list_memories", list_memories)
     workflow.set_entry_point("list_memories")
@@ -138,12 +138,12 @@ def build_mem_list_flow() -> StateGraph:
 
 
 # ============================================================
-# mem_delete flow
+# knowledge_delete flow
 # ============================================================
 
 
 class MemDeleteState(TypedDict):
-    """State for the mem_delete flow."""
+    """State for the knowledge_delete flow."""
 
     memory_id: str
     config: dict
@@ -180,12 +180,12 @@ async def delete_memory(state: MemDeleteState) -> dict:
         OSError,
     ) as exc:
         # G5-18: Broad exception handling for Mem0/Neo4j failures.
-        _log.warning("mem_delete failed: %s", exc)
+        _log.warning("knowledge_delete failed: %s", exc)
         return {"deleted": False, "error": str(exc), "degraded": True}
 
 
 def build_mem_delete_flow() -> StateGraph:
-    """Build and compile the mem_delete StateGraph."""
+    """Build and compile the knowledge_delete StateGraph."""
     workflow = StateGraph(MemDeleteState)
     workflow.add_node("delete_memory", delete_memory)
     workflow.set_entry_point("delete_memory")

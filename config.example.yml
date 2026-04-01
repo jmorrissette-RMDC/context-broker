@@ -56,24 +56,37 @@ build_types:
     effective_utilization: 0.85     # D-10: models degrade past ~85% fill
 
   standard-tiered:
-    tier1_pct: 0.08
-    tier2_pct: 0.20
-    tier3_pct: 0.72
+    # Deadband compaction — tiers swing within ranges, not fixed percentages.
+    # Tier 1 (live): swings between floor (20%) and ceiling (85% - tier2 - tier3).
+    # Tier 2 (chunks): 3-6 chunks of 2% each (swings 6%-12%).
+    # Tier 3 (archival): fixed 2% (historical header 0.25% + recent archival 1.75%).
+    tier1_floor_pct: 0.20           # minimum live content after compaction
+    tier2_chunk_pct: 0.02           # each chunk is 2% of window
+    tier2_min_chunks: 3             # floor = 6%
+    tier2_max_chunks: 6             # ceiling = 12%
+    tier3_pct: 0.02                 # archival total
+    tier3_header_pct: 0.0025        # historical header portion of archival
     max_context_tokens: auto
     fallback_tokens: 8192
-    effective_utilization: 0.85     # D-10: models degrade past ~85% fill
+    effective_utilization: 0.85     # models degrade past ~85% fill
     initial_lookback_multiplier: 3  # D-09: how far back to look for initial assembly
+    max_lookback_tokens: 400000     # cap lookback for large budgets
 
   knowledge-enriched:
-    tier1_pct: 0.05
-    tier2_pct: 0.15
-    tier3_pct: 0.50
+    # Same deadband compaction as standard-tiered, plus RAG layers.
+    tier1_floor_pct: 0.15           # smaller live floor — RAG layers take budget
+    tier2_chunk_pct: 0.02
+    tier2_min_chunks: 3
+    tier2_max_chunks: 6
+    tier3_pct: 0.02
+    tier3_header_pct: 0.0025
     knowledge_graph_pct: 0.15
     semantic_retrieval_pct: 0.15
     max_context_tokens: auto
     fallback_tokens: 16000
     effective_utilization: 0.85
     initial_lookback_multiplier: 3
+    max_lookback_tokens: 400000
 
 # ============================================================
 # Package Source (build-time only)

@@ -407,7 +407,7 @@ async def _dispatch_tool_inner(
                 "build_type_config": None,
                 "conversation_id": None,
                 "max_token_budget": 0,
-                "tier1_summary": None,
+                "tier3_summary": None,
                 "tier2_summaries": [],
                 "recent_messages": [],
                 "semantic_messages": [],
@@ -685,7 +685,7 @@ async def _dispatch_tool_inner(
             )
         return {"entries": entries, "count": len(entries)}
 
-    elif tool_name == "mem_search":
+    elif tool_name == "knowledge_search":
         validated = MemSearchInput(**arguments)
         result = await _get_flow("memory_search").ainvoke(
             {
@@ -707,7 +707,7 @@ async def _dispatch_tool_inner(
             "degraded": result.get("degraded", False),
         }
 
-    elif tool_name == "mem_get_context":
+    elif tool_name == "knowledge_get_context":
         validated = MemGetContextInput(**arguments)
         result = await _get_flow("memory_context").ainvoke(
             {
@@ -759,10 +759,10 @@ async def _dispatch_tool_inner(
             "response": result.get("response_text", ""),
         }
 
-    elif tool_name == "mem_add":
+    elif tool_name == "knowledge_add":
         # M-18: Routed through StateGraph flow instead of direct Mem0 call
         validated = MemAddInput(**arguments)
-        result = await _get_flow("mem_add").ainvoke(
+        result = await _get_flow("knowledge_add").ainvoke(
             {
                 "content": validated.content,
                 "user_id": validated.user_id,
@@ -776,10 +776,10 @@ async def _dispatch_tool_inner(
             raise ValueError(result["error"])
         return {"status": "added", "result": result.get("result")}
 
-    elif tool_name == "mem_list":
+    elif tool_name == "knowledge_list":
         # M-18: Routed through StateGraph flow instead of direct Mem0 call
         validated = MemListInput(**arguments)
-        result = await _get_flow("mem_list").ainvoke(
+        result = await _get_flow("knowledge_list").ainvoke(
             {
                 "user_id": validated.user_id,
                 "limit": validated.limit,
@@ -793,10 +793,10 @@ async def _dispatch_tool_inner(
             raise ValueError(result["error"])
         return {"memories": result.get("memories", [])}
 
-    elif tool_name == "mem_delete":
+    elif tool_name == "knowledge_delete":
         # M-18: Routed through StateGraph flow instead of direct Mem0 call
         validated = MemDeleteInput(**arguments)
-        result = await _get_flow("mem_delete").ainvoke(
+        result = await _get_flow("knowledge_delete").ainvoke(
             {
                 "memory_id": validated.memory_id,
                 "config": config,

@@ -124,7 +124,7 @@ The Nginx gateway (`context-broker`) routes external traffic to the LangGraph co
 Programmatic access for agents, running on `/mcp`. Exposes core capabilities as tools:
 - `get_context`, `store_message`, `search_messages`, `search_knowledge` (core tools)
 - `conv_create_conversation`, `conv_list_conversations` (with `participant` filter), `conv_get_history`, `conv_search_context_windows`
-- `mem_add`, `mem_list`, `mem_delete`
+- `knowledge_add`, `knowledge_list`, `knowledge_delete`
 - `query_logs` (SQL-based log filtering), `search_logs` (semantic log search, requires log vectorization)
 - `imperator_chat`
 - `metrics_get`, `install_stategraph`
@@ -152,6 +152,7 @@ Configuration is separated into AE (infrastructure) and TE (cognitive) concerns 
 - **Per-Use Inference:** Different cognitive functions use different LLM configurations. The Imperator's conversational model, summarization model, and extraction model are independently configurable. This enables cost/quality trade-offs (e.g., a capable model for the Imperator, a fast/cheap model for bulk summarization).
 - **Provider Abstraction:** Each LLM slot supports a `provider` field (`"openai"` for OpenAI-compatible providers, `"anthropic"` for Anthropic's native API). Defaults to `"openai"`.
 - **Token Budget Resolution:** When a context window requests `auto` max tokens, the system queries the configured provider's model endpoint to automatically resolve the context length, falling back to a configured default if unavailable. Callers may override the build type's default token budget with an explicit `max_tokens` at window creation time. Once resolved, the token budget is stored with the window and remains immutable; subsequent model changes do not retroactively affect existing windows.
+- **Deadband Compaction Parameters:** Build type definitions in `te.yml` expose the deadband tuning knobs: `tier1_floor_pct` (tier 1 floor after compaction, default 20), `tier2_chunk_pct` (size of each tier 2 chunk as % of window, default 2), `tier2_min_chunks` / `tier2_max_chunks` (deadband range for tier 2, defaults 3/6), `tier3_pct` (total tier 3 allocation, default 2), `tier3_header_pct` (historical header portion within tier 3, default 0.25), `max_lookback_tokens` (cap on initial assembly lookback, default 400000), `assembly_concurrency` (max concurrent assembly tasks, default 4).
 - **Credential Management:** API keys are never hardcoded in configuration files. They are stored in `/config/credentials/.env` and loaded into the container environment via `env_file` in `docker-compose.yml`. Each inference provider slot includes an `api_key_env` field naming the environment variable that holds its API key. This explicit indirection ensures every provider's key source is visible in config — no magic defaults or auto-detection. Keyless providers (Ollama, Infinity) use `api_key_env: ""`.
 
 ## 8. Build Types and Retrieval
@@ -162,20 +163,36 @@ A **build type** is a registered pair of StateGraphs (assembly + retrieval) that
 Returns recent verbatim messages up to the token budget with no summarization or compression. Zero inference cost. Useful for short conversations, testing, or scenarios where full fidelity of recent messages is preferred over historical depth.
 
 ### 8.2 `standard-tiered` (Episodic Only)
-Focuses entirely on chronological history with a three-tier progressive compression model. It avoids vector search and knowledge graph queries to minimize inference cost.
-- **Tier 1 (8% budget):** Deep archival summary.
-- **Tier 2 (20% budget):** Rolling chunk summaries.
-- **Tier 3 (72% budget):** Recent verbatim messages.
+Focuses entirely on chronological history with no vector search or knowledge graph queries, minimizing inference cost. The standard-tiered build type uses **deadband compaction** — a three-tier progressive compression model where tiers operate within ranges (deadbands) rather than at fixed percentages.
+
+**Tier Layout:**
+- **Tier 1 (Live):** Unsummarized verbatim messages. Swings between 20% (floor after compaction) and ~73% (ceiling depends on tier 2 fullness). The most recent content.
+- **Tier 2 (Chunks):** First-generation chunk summaries. Swings between 6% (3 chunks) and 12% (6 chunks). Each chunk is 2% of the window.
+- **Tier 3 (Archival):** Fixed at 2%. Split into historical header (~0.25% — brief factual record of origin, participants, major topics) and recent archival (~1.75% — summary of last batch of compacted tier 2 chunks, replaced each full compaction cycle).
+
+15% buffer keeps total under 85% effective utilization.
+
+**Compaction Rhythm (steady state):**
+1. Tier 1 fills from 20% to ~73% (~53% swing of new content accumulates)
+2. Tier 1 compacts: artifacts stripped, oldest content summarized to a 2% chunk, appended to tier 2. Tier 1 resets to 20%.
+3. After 4 tier 1 compactions, tier 2 has 6 chunks (12%) and can't accept more.
+4. Next tier 1 compaction triggers full compaction: 4 oldest tier 2 chunks consolidated into tier 3 recent archival (replaces previous), historical header re-summarized with displaced content, 2 newest tier 2 chunks kept + new chunk = back to 3 chunks (6%).
+
+**Compaction Preprocessing:** Before sending content to the summarization LLM, artifacts are stripped (code blocks, JSON blobs, file listings, markdown formatting) while preserving identifiers (file paths, function names, entity names) as retrieval hooks. The LLM summarizes the discussion about artifacts, not the artifacts themselves.
+
+**Prompt Ordering for Prefix Caching:** Assembled context is ordered most-static-first: tier 3 (archival, changes once per ~2.1M tokens) → tier 2 (chunks, grows monotonically between full compactions) → tier 1 (live, changes every turn). This maximizes LLM provider prefix cache hits.
+
+**Lookback Cap for Large Budgets:** On initial assembly into a long conversation: `min(budget * initial_lookback_multiplier, max_lookback_tokens)`. Default max_lookback_tokens is 400K — prevents minutes-long initial assembly on very large windows.
 
 ### 8.3 `knowledge-enriched` (Full Pipeline)
-Combines episodic layers with semantically retrieved messages and knowledge graph facts.
-- **Episodic Layers (70%):** Tier 1 (5%), Tier 2 (15%), Tier 3 (50%).
-- **Semantic Retrieval (15%):** Uses `langchain_postgres.PGVector` to dynamically find past messages similar to the most recent verbatim messages, but outside the Tier 3 window.
-- **Knowledge Graph (15%):** Dynamically traverses Mem0/Neo4j to extract structural facts and relationships pertinent to the entities identified in the recent context. At retrieval time, entities are extracted from the recent verbatim messages to serve as graph traversal seeds. Knowledge graph retrieval uses Mem0's native APIs for proper edge-following traversal — this is a justified deviation from the LangChain-first constraint (REQ §4.5) because graph traversal (following entity relationships) is architecturally distinct from vector similarity search, and no standard LangChain retriever supports it.
+Combines the same deadband compaction tiers as standard-tiered with semantically retrieved messages and knowledge graph facts.
+- **Episodic Layers:** Same three-tier deadband layout as standard-tiered (tier 1 live, tier 2 chunks, tier 3 archival) with the same compaction rhythm.
+- **Semantic Retrieval:** Uses `langchain_postgres.PGVector` to dynamically find past messages similar to the most recent verbatim messages, but outside the tier 1 window.
+- **Knowledge Graph:** Dynamically traverses Mem0/Neo4j to extract structural facts and relationships pertinent to the entities identified in the recent context. At retrieval time, entities are extracted from the recent verbatim messages to serve as graph traversal seeds. Knowledge graph retrieval uses Mem0's native APIs for proper edge-following traversal — this is a justified deviation from the LangChain-first constraint (REQ §4.5) because graph traversal (following entity relationships) is architecturally distinct from vector similarity search, and no standard LangChain retriever supports it.
 
-**Dynamic Tier Scaling:** Tier percentages define target allocations, but actual content may not fill a tier (e.g., a new conversation has no archival summary). Unused budget from under-filled tiers is redistributed to lower tiers (Tier 3 absorbs unused Tier 1/2 budget), ensuring the full token budget is utilized.
+**Prompt Ordering:** Semantic retrieval and knowledge graph layers are injected between tier 2 and tier 1 in the assembled context: tier 3 (archival) → tier 2 (chunks) → semantic retrieval → knowledge graph → tier 1 (live). This preserves prefix caching for the most stable layers while placing dynamic retrieval adjacent to the live context it augments.
 
-**Effective Utilization:** The token budget represents the model's full context size. Build types calculate tier allocations against an effective budget (budget × utilization percentage, default 85%). Models degrade in quality past approximately 85% context fill — the build type enforces this threshold, not the caller.
+**Effective Utilization:** The 85% effective utilization cap is enforced by the deadband ceiling calculation — tier 1's ceiling is dynamically computed as `85% - tier3_pct - current_tier2_pct`, not by a separate multiplier applied after allocation.
 
 **Initial Assembly on Long Conversations:** When a new window is created on an existing long conversation, the assembly does not summarize the entire history. It looks back a configurable multiple (e.g., 3×) of the effective budget into the raw messages, summarizes that range into tier 2 and tier 1, and ignores everything older. Older messages remain in the database and are reachable via `search_messages` and `search_knowledge`. Subsequent assemblies are incremental — new messages push into tier 3, displaced messages are summarized into tier 2, and accumulated tier 2 summaries consolidate into tier 1. The pipeline never re-reads raw messages that have already been summarized.
 
@@ -186,8 +203,9 @@ Combines episodic layers with semantically retrieved messages and knowledge grap
 Background processing is driven by database state, not external queues. The database is the single source of truth for both data and processing state — no external queue system is required.
 
 - **Embedding Worker:** Polls `SELECT FROM conversation_messages WHERE embedding IS NULL ORDER BY priority DESC LIMIT batch_size`. Embeds messages in batches using the configured embedding API. After embedding, checks for context windows that need reassembly.
-- **Extraction Worker:** Polls `SELECT FROM conversation_messages WHERE memory_extracted IS NOT TRUE ORDER BY priority DESC`. Sends message batches to Mem0 for knowledge extraction into the Neo4j graph. Marks messages as extracted after successful processing.
-- **Assembly Worker:** Triggered after embedding batches complete. Checks context windows where new tokens have accumulated since last assembly and runs the build-type-specific assembly graph.
+- **Extraction Worker:** Polls `SELECT FROM conversation_messages WHERE memory_extracted IS NOT TRUE ORDER BY priority DESC` — processes all pending conversations (no limit). Additionally, memory extraction runs at compaction time: when tier 1 compacts, the full chunk context is fed to the Mem0 pipeline for higher quality extraction from summarized content. Marks messages as extracted after successful processing.
+- **Assembly Worker:** Triggered after embedding batches complete. Processes all pending windows (no limit), running concurrent assembly via `asyncio.gather` with configurable `assembly_concurrency`. Checks context windows where new tokens have accumulated since last assembly and runs the build-type-specific assembly graph.
+- **Immediate Assembly on Window Creation:** When `get_context` creates a new context window, assembly runs inline within the same request rather than waiting for the background worker. This ensures the first retrieval returns a fully assembled context without a round-trip delay.
 - **Concurrency & Locking:** PostgreSQL advisory locks prevent concurrent context assemblies on the same context window.
 - **Log Embedding Worker:** Polls `SELECT FROM system_logs WHERE embedding IS NULL`. Embeds log entries in batches using a separate, local embedding model (e.g., nomic-embed-text on Ollama). Configured independently from conversation embeddings via `log_embeddings` in `config.yml`. Disabled by default.
 - **Retry:** Workers naturally retry on the next poll cycle — unprocessed messages remain in the query results until successfully processed. No dead-letter handling needed.

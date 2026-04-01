@@ -439,14 +439,14 @@ class TestLogTools:
 
 
 class TestMemAdd:
-    """C-15: mem_add adds a memory."""
+    """C-15: knowledge_add adds a memory."""
 
-    def test_mem_add_succeeds(self, http_client):
-        """C-15: mem_add stores a memory and returns confirmation."""
+    def test_knowledge_add_succeeds(self, http_client):
+        """C-15: knowledge_add stores a memory and returns confirmation."""
         user_id = f"live-test-{uuid.uuid4().hex[:8]}"
         resp = mcp_call(
             http_client,
-            "mem_add",
+            "knowledge_add",
             {
                 "content": "The user prefers dark mode interfaces.",
                 "user_id": user_id,
@@ -456,8 +456,8 @@ class TestMemAdd:
         result = extract_mcp_result(resp)
         assert isinstance(result, dict)
 
-    def test_mem_add_embedding_persisted(self, http_client):
-        """C-15b: After mem_add, verify the row count in mem0_memories increases.
+    def test_knowledge_add_embedding_persisted(self, http_client):
+        """C-15b: After knowledge_add, verify the row count in mem0_memories increases.
 
         Proves Mem0 actually persisted data, not just accepted the call.
         Uses count-before/count-after to avoid SSH quoting issues with
@@ -477,7 +477,7 @@ class TestMemAdd:
         user_id = f"live-test-embed-{uuid.uuid4().hex[:8]}"
         resp = mcp_call(
             http_client,
-            "mem_add",
+            "knowledge_add",
             {
                 "content": f"User {user_id} works at Acme Corp and prefers dark mode.",
                 "user_id": user_id,
@@ -486,13 +486,13 @@ class TestMemAdd:
         assert resp.status_code == 200
         result = extract_mcp_result(resp)
 
-        # Verify mem_add returned actual results (not None or empty)
+        # Verify knowledge_add returned actual results (not None or empty)
         mem_result = result.get("result")
-        assert mem_result is not None, f"mem_add returned null result: {result}"
+        assert mem_result is not None, f"knowledge_add returned null result: {result}"
         if isinstance(mem_result, dict):
             added = mem_result.get("results", [])
             assert len(added) >= 1, (
-                f"mem_add extracted 0 facts from clear factual content: {mem_result}"
+                f"knowledge_add extracted 0 facts from clear factual content: {mem_result}"
             )
 
         # Count after — should have increased
@@ -507,16 +507,16 @@ class TestMemAdd:
 
 
 class TestMemSearch:
-    """C-16: mem_search finds previously added memories."""
+    """C-16: knowledge_search finds previously added memories."""
 
-    def test_mem_search_finds_added_memory(self, http_client):
+    def test_knowledge_search_finds_added_memory(self, http_client):
         """C-16: Add a memory, then search for it."""
         user_id = f"live-test-search-{uuid.uuid4().hex[:8]}"
 
         # Add a distinctive memory
         mcp_call(
             http_client,
-            "mem_add",
+            "knowledge_add",
             {
                 "content": "The user's favorite programming language is Rust.",
                 "user_id": user_id,
@@ -529,7 +529,7 @@ class TestMemSearch:
             time.sleep(2)
             resp = mcp_call(
                 http_client,
-                "mem_search",
+                "knowledge_search",
                 {"query": "favorite programming language", "user_id": user_id},
             )
             assert resp.status_code == 200
@@ -541,26 +541,26 @@ class TestMemSearch:
 
         if not found:
             log_issue(
-                "test_mem_search_finds_added_memory",
+                "test_knowledge_search_finds_added_memory",
                 "warning",
                 "mem0",
-                "mem_search returned no results for a just-added memory after retries; "
+                "knowledge_search returned no results for a just-added memory after retries; "
                 "Mem0 may not be fully functional (table schema mismatch)",
             )
-            assert False, "mem_search returned no results — Mem0 not functional"
+            assert False, "knowledge_search returned no results — Mem0 not functional"
 
 
-class TestMemGetContext:
-    """C-17: mem_get_context returns formatted text."""
+class TestKnowledgeGetContext:
+    """C-17: knowledge_get_context returns formatted text."""
 
-    def test_mem_get_context_returns_text(self, http_client):
-        """C-17: mem_get_context returns context and memories keys."""
+    def test_knowledge_get_context_returns_text(self, http_client):
+        """C-17: knowledge_get_context returns context and memories keys."""
         user_id = f"live-test-ctx-{uuid.uuid4().hex[:8]}"
 
         # Add a memory first
         mcp_call(
             http_client,
-            "mem_add",
+            "knowledge_add",
             {
                 "content": "The user works on distributed systems.",
                 "user_id": user_id,
@@ -570,7 +570,7 @@ class TestMemGetContext:
 
         resp = mcp_call(
             http_client,
-            "mem_get_context",
+            "knowledge_get_context",
             {"query": "distributed systems", "user_id": user_id},
         )
         assert resp.status_code == 200
@@ -580,21 +580,21 @@ class TestMemGetContext:
 
 
 class TestMemList:
-    """C-18: mem_list lists memories for a user."""
+    """C-18: knowledge_list lists memories for a user."""
 
-    def test_mem_list_returns_memories(self, http_client):
-        """C-18: mem_list returns the memories added for a user."""
+    def test_knowledge_list_returns_memories(self, http_client):
+        """C-18: knowledge_list returns the memories added for a user."""
         user_id = f"live-test-list-{uuid.uuid4().hex[:8]}"
 
         # Add memories
         mcp_call(
             http_client,
-            "mem_add",
+            "knowledge_add",
             {"content": "Memory one for listing.", "user_id": user_id},
         )
         mcp_call(
             http_client,
-            "mem_add",
+            "knowledge_add",
             {"content": "Memory two for listing.", "user_id": user_id},
         )
 
@@ -604,7 +604,7 @@ class TestMemList:
             time.sleep(2)
             resp = mcp_call(
                 http_client,
-                "mem_list",
+                "knowledge_list",
                 {"user_id": user_id},
             )
             assert resp.status_code == 200
@@ -616,26 +616,26 @@ class TestMemList:
 
         if found_count < 1:
             log_issue(
-                "test_mem_list_returns_memories",
+                "test_knowledge_list_returns_memories",
                 "warning",
                 "mem0",
-                f"Expected at least 1 memory from mem_list, got {found_count}; "
+                f"Expected at least 1 memory from knowledge_list, got {found_count}; "
                 "Mem0 may not be fully functional (table schema mismatch)",
             )
-            assert False, "mem_list returned no memories — Mem0 not functional"
+            assert False, "knowledge_list returned no memories — Mem0 not functional"
 
 
-class TestMemDelete:
-    """C-19: mem_delete removes a memory."""
+class TestKnowledgeDelete:
+    """C-19: knowledge_delete removes a memory."""
 
-    def test_mem_delete_removes_memory(self, http_client):
-        """C-19: Add a memory, delete it, verify it's gone from mem_list."""
+    def test_knowledge_delete_removes_memory(self, http_client):
+        """C-19: Add a memory, delete it, verify it's gone from knowledge_list."""
         user_id = f"live-test-del-{uuid.uuid4().hex[:8]}"
 
         # Add a memory with extractable facts
         add_resp = mcp_call(
             http_client,
-            "mem_add",
+            "knowledge_add",
             {
                 "content": f"User {user_id} drives a Tesla and lives in Boston.",
                 "user_id": user_id,
@@ -653,13 +653,13 @@ class TestMemDelete:
                 memory_id = results_list[0].get("id")
 
         assert memory_id is not None, (
-            f"mem_add did not return a memory ID. Result: {add_result}"
+            f"knowledge_add did not return a memory ID. Result: {add_result}"
         )
 
         # Delete
         del_resp = mcp_call(
             http_client,
-            "mem_delete",
+            "knowledge_delete",
             {"memory_id": str(memory_id)},
         )
         assert del_resp.status_code == 200
@@ -667,7 +667,7 @@ class TestMemDelete:
         # Verify gone
         time.sleep(2)
         list_resp = mcp_call(
-            http_client, "mem_list", {"user_id": user_id}
+            http_client, "knowledge_list", {"user_id": user_id}
         )
         list_result = extract_mcp_result(list_resp)
         remaining_ids = [

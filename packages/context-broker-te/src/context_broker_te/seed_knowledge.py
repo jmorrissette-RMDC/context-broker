@@ -39,7 +39,7 @@ SEED_ARTICLES = [
         "content": (
             "SEARCHING CONVERSATIONS: I can search across all conversations using "
             "conv_search (which runs hybrid vector + BM25 search with optional "
-            "reranking) or mem_search (which searches the Neo4j knowledge graph "
+            "reranking) or knowledge_search (which searches the Neo4j knowledge graph "
             "for extracted facts and relationships). For browsing, I can list "
             "conversations with conv_list_conversations and optionally filter by "
             "participant name."

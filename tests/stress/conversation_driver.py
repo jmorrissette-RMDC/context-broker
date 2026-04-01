@@ -117,5 +117,49 @@ class ConversationDriver:
             self._history.append({"role": "user", "content": fallback})
             return fallback
 
+    def reset_history(self):
+        """Clear conversation history for topic pivot.
+
+        The talker forgets everything, but the agent's context continues.
+        This creates semantic islands that stress compaction at boundaries.
+        """
+        self._history.clear()
+
+    def generate_pivot_message(self) -> str:
+        """Generate a message that asks the agent to pick a completely new topic.
+
+        Used during stress testing to create diverse semantic islands.
+        """
+        try:
+            resp = self._client.post(
+                f"{self.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": self.system_prompt},
+                        {
+                            "role": "user",
+                            "content": "Generate a message that asks the AI to pick a "
+                            "completely different topic from a vastly different field "
+                            "and time period. For example, if we were discussing "
+                            "software, switch to ancient history or marine biology. "
+                            "Reply ONLY with the message itself.",
+                        },
+                    ],
+                    "temperature": 1.0,
+                    "max_tokens": 200,
+                },
+            )
+            resp.raise_for_status()
+            content = resp.json()["choices"][0]["message"]["content"]
+            self._history.append({"role": "user", "content": content})
+            return content
+        except (httpx.HTTPError, KeyError, IndexError) as exc:
+            _log.warning("Driver pivot message failed: %s", exc)
+            fallback = "Let's change topics entirely. Pick something from a completely different field and time period and tell me about it in detail."
+            self._history.append({"role": "user", "content": fallback})
+            return fallback
+
     def close(self):
         self._client.close()

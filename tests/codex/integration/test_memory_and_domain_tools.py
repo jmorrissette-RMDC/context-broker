@@ -28,12 +28,12 @@ class TestMemoryAndKnowledge:
 
         add_resp = mcp_call(
             cb_client,
-            "mem_add",
+            "knowledge_add",
             {"content": content, "user_id": user_id},
         )
         assert add_resp.status_code == 200
         add_result = extract_mcp_result(add_resp)
-        assert not add_result.get("degraded", False), f"mem_add degraded: {add_result}"
+        assert not add_result.get("degraded", False), f"knowledge_add degraded: {add_result}"
         add_relations = []
         add_memory_id = None
         if isinstance(add_result, dict):
@@ -47,7 +47,7 @@ class TestMemoryAndKnowledge:
         def _search():
             search_resp = mcp_call(
                 cb_client,
-                "mem_search",
+                "knowledge_search",
                 {"query": "spicy ramen", "user_id": user_id, "limit": 5},
             )
             if search_resp.status_code != 200:
@@ -65,13 +65,13 @@ class TestMemoryAndKnowledge:
     def test_mem_get_context(self, cb_client):
         user_id = f"codex-user-{uuid.uuid4().hex[:8]}"
         content = f"Preference: likes dark mode {uuid.uuid4().hex[:6]}"
-        add_resp = mcp_call(cb_client, "mem_add", {"content": content, "user_id": user_id})
+        add_resp = mcp_call(cb_client, "knowledge_add", {"content": content, "user_id": user_id})
         assert add_resp.status_code == 200
 
         def _ctx():
             ctx_resp = mcp_call(
                 cb_client,
-                "mem_get_context",
+                "knowledge_get_context",
                 {"query": "dark mode", "user_id": user_id, "limit": 3},
             )
             if ctx_resp.status_code != 200:
@@ -84,7 +84,7 @@ class TestMemoryAndKnowledge:
     def test_search_knowledge(self, cb_client):
         user_id = f"codex-user-{uuid.uuid4().hex[:8]}"
         content = f"Codex knowledge {uuid.uuid4().hex}"
-        add_resp = mcp_call(cb_client, "mem_add", {"content": content, "user_id": user_id})
+        add_resp = mcp_call(cb_client, "knowledge_add", {"content": content, "user_id": user_id})
         assert add_resp.status_code == 200
 
         search_resp = mcp_call(
@@ -99,12 +99,12 @@ class TestMemoryAndKnowledge:
     def test_mem_list_and_delete(self, cb_client):
         user_id = f"codex-user-{uuid.uuid4().hex[:8]}"
         content = f"User likes spicy ramen ({uuid.uuid4().hex[:6]}). Remember this preference."
-        add_resp = mcp_call(cb_client, "mem_add", {"content": content, "user_id": user_id})
+        add_resp = mcp_call(cb_client, "knowledge_add", {"content": content, "user_id": user_id})
         assert add_resp.status_code == 200
         add_result = extract_mcp_result(add_resp)
 
         def _list():
-            list_resp = mcp_call(cb_client, "mem_list", {"user_id": user_id, "limit": 5})
+            list_resp = mcp_call(cb_client, "knowledge_list", {"user_id": user_id, "limit": 5})
             if list_resp.status_code != 200:
                 return []
             list_result = extract_mcp_result(list_resp)
@@ -134,7 +134,7 @@ class TestMemoryAndKnowledge:
         if not memory_id:
             search_resp = mcp_call(
                 cb_client,
-                "mem_search",
+                "knowledge_search",
                 {"query": content, "user_id": user_id, "limit": 5},
             )
             if search_resp.status_code == 200:
@@ -163,17 +163,17 @@ class TestMemoryAndKnowledge:
                 memory_id = match.group(0)
 
         if memory_id:
-            delete_resp = mcp_call(cb_client, "mem_delete", {"memory_id": memory_id})
+            delete_resp = mcp_call(cb_client, "knowledge_delete", {"memory_id": memory_id})
             assert delete_resp.status_code == 200
             delete_result = extract_mcp_result(delete_resp)
             assert "deleted" in str(delete_result).lower()
         else:
-            pytest.fail("mem_add did not return a memory id/target for deletion")
+            pytest.fail("knowledge_add did not return a memory id/target for deletion")
 
     def test_mem0_embedding_persisted(self, cb_client):
         user_id = f"codex-user-{uuid.uuid4().hex[:8]}"
         content = f"User likes espresso ({uuid.uuid4().hex[:6]}). Remember this preference."
-        add_resp = mcp_call(cb_client, "mem_add", {"content": content, "user_id": user_id})
+        add_resp = mcp_call(cb_client, "knowledge_add", {"content": content, "user_id": user_id})
         assert add_resp.status_code == 200
 
         escaped_content = content.replace("'", "''")

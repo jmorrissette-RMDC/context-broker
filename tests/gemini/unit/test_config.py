@@ -154,18 +154,18 @@ def test_get_api_key_no_file():
 def test_get_build_type_config():
     config = {
         "build_types": {
-            "test_bt": {"tier1_pct": 0.5, "tier2_pct": 0.5}
+            "test_bt": {"tier1_floor_pct": 0.5, "tier2_chunk_pct": 0.5}
         }
     }
     bt = get_build_type_config(config, "test_bt")
-    assert bt["tier1_pct"] == 0.5
+    assert bt["tier1_floor_pct"] == 0.5
 
     with pytest.raises(ValueError, match="not found"):
         get_build_type_config(config, "nonexistent")
 
     config_invalid = {
         "build_types": {
-            "test_bt": {"tier1_pct": 0.8, "tier2_pct": 0.3} # sum > 1.0
+            "test_bt": {"tier1_floor_pct": 0.8, "tier2_chunk_pct": 0.3} # sum > 1.0
         }
     }
     with pytest.raises(ValueError, match="exceeds 1.0"):

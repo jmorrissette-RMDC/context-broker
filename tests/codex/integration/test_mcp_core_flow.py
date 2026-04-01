@@ -33,8 +33,8 @@ class TestMCPProtocol:
             "conv_create_conversation",
             "conv_create_context_window",
             "conv_get_history",
-            "mem_add",
-            "mem_search",
+            "knowledge_add",
+            "knowledge_search",
             "metrics_get",
         }
         missing = expected - names

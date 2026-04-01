@@ -58,7 +58,7 @@ Only the LangGraph container is custom. All backing services use official images
 
 The Context Broker exposes two interfaces through the gateway:
 
--   **MCP (HTTP/SSE)** — Programmatic tool access. External agents and applications call `conv_*` and `mem_*` tools via standard MCP protocol.
+-   **MCP (HTTP/SSE)** — Programmatic tool access. External agents and applications call `conv_*` and `knowledge_*` tools via standard MCP protocol.
 -   **OpenAI-compatible HTTP (**`/v1/chat/completions`**)** — Conversational access to the Imperator. Any OpenAI-compatible client or chat UI can connect and talk to the Context Broker directly.
 
 Both interfaces are backed by the same internal StateGraph flows.
@@ -271,7 +271,7 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 -   `get_context` with `conversation_id` reuses the existing conversation. If no matching window exists for that `build_type` + `budget`, one is created automatically.
 -   `context_window_id` is an internal implementation detail — not exposed in the core tool interface. Window identity = conversation + build_type + budget_bucket.
 -   `build_type` is an enum populated dynamically from registered build types in config. `budget` is snapped to the nearest bucket (always up).
--   `search_knowledge` replaces both `mem_search` and `mem_get_context` — same search, one tool.
+-   `search_knowledge` replaces both `knowledge_search` and `knowledge_get_context` — same search, one tool.
 
 **Management tools** — used for administration and setup. Prefixed per naming convention:
 
@@ -281,9 +281,9 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 | `conv_list_conversations`     | List conversations. Optional `participant` filter returns only conversations where the participant appears as sender or recipient on any message. |
 | `conv_get_history`            | Retrieve full chronological message sequence for a conversation |
 | `conv_search_context_windows` | Search and list context windows                                 |
-| `mem_add`                     | Explicitly add a memory to the knowledge graph                  |
-| `mem_list`                    | List stored memories, optionally filtered                       |
-| `mem_delete`                  | Delete a specific memory by ID                                  |
+| `knowledge_add`               | Explicitly add a memory to the knowledge graph                  |
+| `knowledge_list`              | List stored memories, optionally filtered                       |
+| `knowledge_delete`            | Delete a specific memory by ID                                  |
 | `query_logs`                  | Query system logs. Filter by container, level, time range, keyword. |
 | `search_logs`                 | Semantic search over logs (requires log vectorization enabled). |
 | `imperator_chat`              | Conversational interface to the Imperator                       |
@@ -296,7 +296,7 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 -   Standard LangChain/LangGraph components used wherever available:
     -   LangChain retrievers and vector stores for semantic search.
     -   LangChain embedding models via config.
-    -   LangChain chat models for summarization and extraction via config.
+    -   LangChain chat models for compaction and extraction via config.
     -   Where a standard LangChain component does not fit the retrieval mechanism (e.g., knowledge graph traversal requires edge-following, not vector similarity), the architecture may use native APIs for that technology. The constraint is to prefer standard components and justify deviations.
 -   The Imperator uses standard LangGraph `MemorySaver` checkpointing for graph execution state (interrupt/resume, tool call tracking, mid-execution persistence). The `conversation_messages` table provides long-term conversation persistence via the Context Broker's own pipeline. These are complementary: `MemorySaver` handles the graph, the Context Broker handles the conversation.
 -   **Substrate vs application logic:** Config file loading, YAML parsing, client factories, and connection pool management are substrate — they make StateGraphs possible but are not themselves StateGraphs. Application logic that makes decisions about what the system does must be in StateGraphs. The line: did we write the decision logic, or are we calling an external library?
@@ -334,7 +334,7 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 
 **5.2 Inference Provider Configuration**
 
--   Inference providers are configured per cognitive function, not globally. Different functions have different requirements (the Imperator needs a capable conversational model; summarization needs a fast/cheap model; extraction has its own needs).
+-   Inference providers are configured per cognitive function, not globally. Different functions have different requirements (the Imperator needs a capable conversational model; compaction needs a fast/cheap model; extraction has its own needs).
 -   Each inference slot accepts a `base_url`, `model`, and optional `provider` field. The `provider` field defaults to `"openai"` (OpenAI-compatible wire protocol) but can be set to `"anthropic"` for Anthropic's native API.
 -   Embedding and reranker slots are independent of LLM slots.
 
@@ -346,7 +346,7 @@ inference:
     model: claude-haiku-4-5-20251001
     # API key via ANTHROPIC_API_KEY env var
 
-  summarization:
+  compaction:
     base_url: http://context-broker-ollama:11434/v1
     model: qwen2.5:7b
 
@@ -376,36 +376,60 @@ reranker:
 -   Deployers add new build types by writing two graphs that satisfy the contract and registering them in `config.yml`. No core code changes required.
 -   The Context Broker ships with three build types:
 
-`passthrough` — No summarization. Returns recent verbatim messages up to the token budget. Zero inference cost. Useful for short conversations or testing.
+`passthrough` — No compaction. Returns recent verbatim messages up to the token budget. Zero inference cost. Useful for short conversations or testing.
 
-`standard-tiered` — Episodic memory only. Uses the three-tier progressive compression model described in c1. No vector search, no knowledge graph queries. Lower inference cost, suitable as the default.
+`standard-tiered` — Episodic memory only. Uses the three-tier progressive compaction model described in c1. No vector search, no knowledge graph queries. Lower inference cost, suitable as the default.
 
 `knowledge-enriched` — Full retrieval pipeline. Three episodic tiers plus semantically retrieved messages (vector similarity search) plus knowledge graph facts (graph traversal). Demonstrates the complete vision from c1 — episodic and semantic memory layers combined in a purpose-built context window.
+
+**Tier layout (standard-tiered and knowledge-enriched):**
+
+-   **Tier 1 (live):** Verbatim messages — the most recent, uncompressed conversation content. Swings between `tier1_floor_pct` (20%) and the remainder after tiers 2 and 3 are allocated (up to ~73%). This is the dynamic tier: it expands when there is little compacted content and contracts as compaction fills the lower tiers.
+-   **Tier 2 (chunks):** First-generation summaries — compacted chunks of displaced live messages. Each chunk is `tier2_chunk_pct` (2%) of the effective window. The number of chunks swings between `tier2_min_chunks` (3, floor = 6%) and `tier2_max_chunks` (6, ceiling = 12%). New chunks are created as live messages are displaced; when max chunks are reached, the oldest chunks are consolidated into tier 3.
+-   **Tier 3 (archival):** Fixed at `tier3_pct` (2%) of the effective window. Divided into a historical header (`tier3_header_pct`, 0.25% — a one-paragraph summary of the earliest conversation context) and recent archival (1.75% — consolidated summaries from tier 2 overflow). This tier is the most compressed and the most stable.
+
+**Compaction preprocessing:** Before compaction (summarization), artifact content (code blocks, data tables, structured outputs) is stripped from messages, preserving only identifiers and references. This reduces token cost during summarization while retaining the ability to reference artifacts by ID. Artifact stripping is the current scope; full artifact management (storage, inline replacement, UI viewer) is a future feature.
+
+**Prompt ordering:** Context is assembled tier 3 first (most static, oldest) → tier 2 → tier 1 last (most dynamic, newest). This places the most recent verbatim messages closest to the model's generation point, matching the recency bias of transformer attention.
+
+**Note on terminology:** "Compaction" is the overall process of compressing conversation history into progressively denser representations. Summarization is one tool used during compaction (LLM-generated summaries). Other compaction techniques (e.g., algorithmic token compression) may be added in the future.
 
 ```yaml
 build_types:
   passthrough:
-    # No summarization — recent verbatim messages only
+    # No compaction — recent verbatim messages only
     max_context_tokens: auto
     fallback_tokens: 4096
 
   standard-tiered:
-    # Episodic only — three-tier progressive compression
-    tier1_pct: 0.08             # archival summary (oldest, most compressed)
-    tier2_pct: 0.20             # chunk summaries (middle layer)
-    tier3_pct: 0.72             # recent verbatim messages (newest, full fidelity)
+    # Episodic only — three-tier progressive compaction
+    tier1_floor_pct: 0.20           # minimum live content after compaction
+    tier2_chunk_pct: 0.02           # each chunk is 2% of window
+    tier2_min_chunks: 3             # floor = 6%
+    tier2_max_chunks: 6             # ceiling = 12%
+    tier3_pct: 0.02                 # archival total
+    tier3_header_pct: 0.0025        # historical header portion
     max_context_tokens: auto
     fallback_tokens: 8192
+    effective_utilization: 0.85
+    initial_lookback_multiplier: 3
+    max_lookback_tokens: 400000
 
   knowledge-enriched:
     # Episodic + semantic — full retrieval pipeline
-    tier1_pct: 0.05             # archival summary
-    tier2_pct: 0.15             # chunk summaries
-    tier3_pct: 0.50             # recent verbatim messages
-    knowledge_graph_pct: 0.15   # extracted facts and entity relationships from graph traversal (Mem0/Neo4j)
-    semantic_retrieval_pct: 0.15 # semantically relevant messages retrieved via vector similarity search (pgvector)
+    tier1_floor_pct: 0.15
+    tier2_chunk_pct: 0.02
+    tier2_min_chunks: 3
+    tier2_max_chunks: 6
+    tier3_pct: 0.02
+    tier3_header_pct: 0.0025
+    knowledge_graph_pct: 0.15       # extracted facts and entity relationships from graph traversal (Mem0/Neo4j)
+    semantic_retrieval_pct: 0.15    # semantically relevant messages retrieved via vector similarity search (pgvector)
     max_context_tokens: auto
     fallback_tokens: 16000
+    effective_utilization: 0.85
+    initial_lookback_multiplier: 3
+    max_lookback_tokens: 400000
 ```
 
 -   `knowledge_graph_pct` and `semantic_retrieval_pct` are distinct retrieval mechanisms. Knowledge graph retrieval returns structured facts and relationships extracted from conversations. Semantic retrieval returns actual messages that are vectorially similar to the current conversation topic but outside the recent verbatim window. A build type can use either, both, or neither.
@@ -421,10 +445,11 @@ build_types:
 
 **5.4.1 Initial Assembly on New Windows**
 
--   When a new context window is created on a long-running conversation, the assembly pipeline does not attempt to summarize the entire conversation history. Instead, it looks back a configurable multiple of the window budget (e.g., 3× the effective budget) into the raw message history.
--   That lookback range is chunked and summarized into tier 2, then consolidated into tier 1. Everything older than the lookback is not included in the assembled context — it remains in the database and is searchable via `search_messages` and `search_knowledge`.
--   The lookback multiplier is a tuning parameter in the build type config (e.g., `initial_lookback_multiplier: 3`).
--   Subsequent assemblies are incremental: new messages enter tier 3, displaced messages are summarized into tier 2, and accumulated tier 2 summaries consolidate into tier 1. The assembly never re-reads raw messages that have already been summarized.
+-   When a new context window is created on a long-running conversation, the assembly pipeline does not attempt to compact the entire conversation history. Instead, it looks back a capped range into the raw message history: `min(budget * initial_lookback_multiplier, max_lookback_tokens)`, where `max_lookback_tokens` defaults to 400,000 tokens. This cap prevents unbounded lookback on large budgets (e.g., a 1M token budget would otherwise attempt to read 3M tokens of history).
+-   That lookback range is chunked and compacted into tier 2, then consolidated into tier 1. Everything older than the lookback is not included in the assembled context — it remains in the database and is searchable via `search_messages` and `search_knowledge`.
+-   The lookback multiplier and cap are tuning parameters in the build type config (`initial_lookback_multiplier: 3`, `max_lookback_tokens: 400000`).
+-   Assembly is immediate on window creation: `get_context` returns populated tiers on its first call for a new window, not empty tiers. The lookback range is compacted synchronously during window creation so the caller receives usable context immediately.
+-   Subsequent assemblies are incremental: new messages enter tier 1 (live), displaced messages are compacted into tier 2, and accumulated tier 2 chunks consolidate into tier 3. The assembly never re-reads raw messages that have already been compacted.
 
 **5.5 Imperator Configuration**
 
@@ -489,6 +514,25 @@ imperator:
 -   Stored in a dedicated `domain_information` table with columns: `id`, `content`, `embedding` (vector), `source`, `created_at`, `updated_at`. Vector dimension matches the MAD's configured embedding model.
 -   The Imperator decides when to write domain information — no automatic extraction. Common triggers: learning a new procedure, discovering a configuration detail, receiving operational guidance from the user.
 -   Enabled by default via `domain_information.enabled: true` in TE config.
+
+**5.8 Future: Conversation Memories**
+
+-   The `conv_memory_*` tool namespace is reserved for conversation-level memory management.
+-   A `conversation_memories` table will store per-conversation memories — facts, decisions, preferences, and context extracted from the conversation. Memories are auto-populated during compaction (the compaction pipeline identifies salient facts worth preserving independently of the summary) and manually addable by Imperators or users via the `conv_memory_*` tools.
+-   Not implemented in this release. The namespace is cleared by the `mem_*` → `knowledge_*` rename — no collision with existing tools.
+
+**5.9 Future: Artifacts**
+
+-   The artifacts feature will provide first-class management of structured content (code blocks, data tables, documents) referenced in conversations.
+-   An `artifacts` table will store artifact content with metadata. During context assembly, inline artifact content will be replaced with compact pointers (e.g., `[artifact:abc123]`), and a UI viewer will allow expanding artifacts on demand.
+-   Not implemented in this release. Artifact stripping during compaction (§5.3) is the current scope — artifacts are stripped to reduce token cost, but not yet stored or retrievable independently.
+
+**5.10 Future: Token Compression (LLMLingua-2)**
+
+-   Algorithmic token compression (e.g., LLMLingua-2) can reduce token counts in non-live tiers (tier 2 chunks, tier 3 archival) without LLM inference cost, as a complement to summarization-based compaction.
+-   Configuration will be per-build-type and per-invocation-point (e.g., compress tier 2 at ratio 0.6, tier 3 at 0.4).
+-   The compression pipeline will be implemented as a shared utility StateGraph, callable from assembly graphs.
+-   Not implemented in this release. Infrastructure integration (model hosting, latency profiling) and empirical validation (compression quality vs. information loss) are prerequisites.
 
 ### 6. Logging and Observability
 
@@ -676,9 +720,10 @@ The default deployment allows unrestricted outbound internet access from `contex
 **Version History:**
 
 -   v1.0 (2026-03-20): Initial draft
--   v1.1 (2026-03-22): Align with implementation — build type registry (graph pairs), passthrough type, message schema (sender/recipient, tool_calls, tool_call_id, nullable content, remove content_type/idempotency_key), structured messages array retrieval, no LangGraph checkpointing, conv_store_message accepts context_window_id, broker_chat→imperator_chat, add mem_add/mem_list/mem_delete, last_accessed_at on context windows, internal token_count/priority, memory confidence half-life decay
+-   v1.1 (2026-03-22): Align with implementation — build type registry (graph pairs), passthrough type, message schema (sender/recipient, tool_calls, tool_call_id, nullable content, remove content_type/idempotency_key), structured messages array retrieval, no LangGraph checkpointing, conv_store_message accepts context_window_id, broker_chat→imperator_chat, add knowledge_add/knowledge_list/knowledge_delete, last_accessed_at on context windows, internal token_count/priority, memory confidence half-life decay
 -   v1.2 (2026-03-25): Message identity (hostname-based sender/recipient), participant filter on conv_list_conversations, Imperator tool organization (tools/ directory), domain information (§5.7), log vectorization (§6.1.1), log MCP endpoints (§6.1.2, query_logs + search_logs), embedding model migration tool
 -   v1.3 (2026-03-26): Expanded Imperator tools to 9 modules / 33 tools — web (search, read), filesystem (sandboxed read/write, system prompt), system (allowlisted commands, math), notification (CloudEvents to alerter), alerting (instruction CRUD), scheduling (cron), change_inference (per-slot model switching from catalog). Alerter sidecar (§5.8). Inference models catalog. Seed knowledge. Stuck job watchdog.
+-   v1.4 (2026-03-31): Compaction v2 — renamed summarization→compaction throughout, replaced fixed tier percentages with deadband parameters (tier1 floor, tier2 chunk/min/max, tier3 fixed+header), added effective_utilization and max_lookback_tokens, documented tier layout/ordering/preprocessing. Renamed remaining mem_*→knowledge_* references. Added lookback cap formula to §5.4.1, immediate assembly on window creation. Added future feature reservations: conversation memories (§5.8), artifacts (§5.9), token compression/LLMLingua-2 (§5.10).
 
 **Related Documents:**
 

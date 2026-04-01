@@ -219,18 +219,18 @@ def scenario_seed_and_lifecycle(
                     quality = judge_context_quality(context, budget, conv_tokens, current_cycles)
                     ckpt.add_quality_checkpoint(current_cycles, budget, quality["rating"], quality["reasoning"])
                     _log.info(
-                        "Quality at cycle %d: %s (tier1=%d, tier2=%d tokens)",
+                        "Quality at cycle %d: %s (tier3=%d, tier2=%d tokens)",
                         current_cycles, quality["rating"],
-                        state.tier1_tokens, state.tier2_tokens,
+                        state.tier3_tokens, state.tier2_tokens,
                     )
                     last_quality_check = current_cycles
 
                 # Log progress
                 rss = metrics.get_container_rss_mb()
                 _log.info(
-                    "Turn %d | Cycles: %d/%d | T1: %d tok | T2: %d tok (%d chunks) | RSS: %.0f MB",
+                    "Turn %d | Cycles: %d/%d | T3: %d tok | T2: %d tok (%d chunks) | RSS: %.0f MB",
                     turn_count, current_cycles, target_cycles,
-                    state.tier1_tokens, state.tier2_tokens, state.active_tier2_count,
+                    state.tier3_tokens, state.tier2_tokens, state.active_tier2_count,
                     rss,
                 )
 
@@ -311,7 +311,7 @@ def scenario_budget_gradient(
             if raw:
                 state = metrics.get_compaction_state(raw.strip())
                 tier_info = {
-                    "tier1_tokens": state.tier1_tokens,
+                    "tier3_tokens": state.tier3_tokens,
                     "tier2_tokens": state.tier2_tokens,
                     "tier2_chunks": state.active_tier2_count,
                 }
@@ -330,10 +330,10 @@ def scenario_budget_gradient(
             }
             results.append(entry)
             _log.info(
-                "  %dK: %d msgs, %dK tokens, %.1fs, quality=%s, T1=%d T2=%d",
+                "  %dK: %d msgs, %dK tokens, %.1fs, quality=%s, T3=%d T2=%d",
                 budget // 1024, len(context), context_tokens // 1000,
                 elapsed, quality["rating"],
-                tier_info.get("tier1_tokens", 0), tier_info.get("tier2_tokens", 0),
+                tier_info.get("tier3_tokens", 0), tier_info.get("tier2_tokens", 0),
             )
             ckpt.add_quality_checkpoint(0, budget, quality["rating"], quality["reasoning"])
 

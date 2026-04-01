@@ -258,7 +258,7 @@ Search and list context windows.
 
 **Output:** Array of context window records.
 
-### `mem_search`
+### `knowledge_search`
 
 Semantic and graph search across extracted knowledge (Mem0/Neo4j).
 
@@ -270,7 +270,7 @@ Semantic and graph search across extracted knowledge (Mem0/Neo4j).
 
 **Output:** Array of memory records with content and metadata.
 
-### `mem_get_context`
+### `knowledge_get_context`
 
 Retrieve relevant memories formatted for prompt injection.
 
@@ -282,7 +282,7 @@ Retrieve relevant memories formatted for prompt injection.
 
 **Output:** Formatted string of relevant memories suitable for system prompt injection.
 
-### `mem_add`
+### `knowledge_add`
 
 Directly add a memory to the knowledge graph.
 
@@ -293,7 +293,7 @@ Directly add a memory to the knowledge graph.
 
 **Output:** Confirmation with memory ID.
 
-### `mem_list`
+### `knowledge_list`
 
 List all memories for a user.
 
@@ -304,7 +304,7 @@ List all memories for a user.
 
 **Output:** Array of memory records.
 
-### `mem_delete`
+### `knowledge_delete`
 
 Delete a specific memory by ID.
 

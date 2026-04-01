@@ -370,7 +370,7 @@ def _get_tool_list() -> list[dict]:
 
     Core tools (get_context, store_message, search_messages, search_knowledge)
     are listed first — these are the primary interface for agents.
-    Management tools (conv_*, mem_*, imperator_chat, metrics_get) follow.
+    Management tools (conv_*, knowledge_*, imperator_chat, metrics_get) follow.
     """
     # Build dynamic enum for build_type from config
     try:
@@ -811,7 +811,7 @@ def _get_tool_list() -> list[dict]:
             },
         },
         {
-            "name": "mem_search",
+            "name": "knowledge_search",
             "description": "Semantic and graph search across extracted knowledge",
             "inputSchema": {
                 "type": "object",
@@ -824,7 +824,7 @@ def _get_tool_list() -> list[dict]:
             },
         },
         {
-            "name": "mem_get_context",
+            "name": "knowledge_get_context",
             "description": "Retrieve relevant memories formatted for prompt injection",
             "inputSchema": {
                 "type": "object",
@@ -837,7 +837,7 @@ def _get_tool_list() -> list[dict]:
             },
         },
         {
-            "name": "mem_add",
+            "name": "knowledge_add",
             "description": "Directly add a memory to the knowledge graph",
             "inputSchema": {
                 "type": "object",
@@ -849,7 +849,7 @@ def _get_tool_list() -> list[dict]:
             },
         },
         {
-            "name": "mem_list",
+            "name": "knowledge_list",
             "description": "List all memories for a user",
             "inputSchema": {
                 "type": "object",
@@ -861,7 +861,7 @@ def _get_tool_list() -> list[dict]:
             },
         },
         {
-            "name": "mem_delete",
+            "name": "knowledge_delete",
             "description": "Delete a specific memory by ID",
             "inputSchema": {
                 "type": "object",

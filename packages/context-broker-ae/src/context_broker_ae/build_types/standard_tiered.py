@@ -1,10 +1,19 @@
 """
 Standard-tiered build type (ARCH-18).
 
-Three-tier progressive compression context assembly:
-  Tier 1: Archival summary (oldest, most compressed)
-  Tier 2: Chunk summaries (middle layer)
-  Tier 3: Recent verbatim messages (newest, full fidelity)
+Three-tier progressive compression context assembly with deadband compaction:
+  Tier 3: Archival summary (oldest, most compressed — historical header + recent archival)
+  Tier 2: Chunk summaries (middle layer, 3-6 chunks of ~2% each)
+  Tier 1: Live verbatim messages (newest, full fidelity — swings 20%-73%)
+
+Compaction rhythm:
+  1. Tier 1 fills from floor (20%) toward ceiling (85% - tier2 - tier3).
+  2. When tier 1 hits ceiling: oldest content above floor summarized to a 2% chunk,
+     appended to tier 2. Tier 1 resets to floor.
+  3. When tier 2 reaches max_chunks (6): full compaction consolidates 4 oldest
+     tier 2 chunks into tier 3, keeping 2 newest + new chunk = 3 chunks.
+
+15% buffer keeps total under 85% utilization (models degrade past ~85%).
 
 Moved from the monolithic context_assembly.py and retrieval_flow.py.
 All original logic, error handling, and lock management preserved.
@@ -32,7 +41,11 @@ from app.database import get_pg_pool
 from app.utils import stable_lock_id
 
 # Registration handled by register.py — no module-scope side effects
-from context_broker_ae.build_types.tier_scaling import scale_tier_percentages
+from context_broker_ae.build_types.tier_scaling import (
+    extract_deadband_config,
+    calculate_tier1_ceiling,
+)
+from context_broker_ae.memory_extraction import clean_for_compaction
 from app.metrics_registry import CONTEXT_ASSEMBLY_DURATION
 from app.prompt_loader import async_load_prompt
 
@@ -49,6 +62,16 @@ def _resolve_llm_config(config: dict, build_type_config: dict) -> dict:
         # Build a config dict that get_chat_model expects (top-level "llm" key)
         return {**config, "llm": bt_llm}
     return config
+
+
+def _estimate_tokens(text: str) -> int:
+    """Estimate token count from text length (approx 4 chars per token)."""
+    return max(1, len(text) // 4)
+
+
+
+# _deadband_config and _tier1_ceiling are imported from tier_scaling.py
+# as extract_deadband_config and calculate_tier1_ceiling
 
 
 # ============================================================
@@ -69,11 +92,12 @@ class StandardTieredAssemblyState(TypedDict):
     build_type_config: Optional[dict]
     max_token_budget: int
     all_messages: list[dict]
-    tier3_messages: list[dict]
+    tier1_messages: list[dict]
     older_messages: list[dict]
     chunks: list[list[dict]]
     tier2_summaries: list[str]
-    tier1_summary: Optional[str]
+    tier3_summary: Optional[str]
+    tier2_at_max: bool
     lock_key: str
     lock_token: Optional[str]
     lock_acquired: bool
@@ -85,7 +109,7 @@ class StandardTieredAssemblyState(TypedDict):
 
 
 async def acquire_assembly_lock(state: StandardTieredAssemblyState) -> dict:
-    """Acquire a Redis distributed lock for this context window."""
+    """Acquire a Postgres advisory lock for this context window."""
     # R5-M11: Validate UUID at assembly entry point to fail gracefully
     try:
         uuid.UUID(state["context_window_id"])
@@ -107,14 +131,14 @@ async def acquire_assembly_lock(state: StandardTieredAssemblyState) -> dict:
     lock_key = f"assembly_in_progress:{state['context_window_id']}"
     lock_token = str(uuid.uuid4())
 
-    # R7-M5: Wrap Redis calls in try/except — return error state if unavailable
+    # R7-M5: Wrap lock calls in try/except — return error state if unavailable
     try:
-        pool = get_pg_pool()  # Advisory lock (Redis removed)
+        pool = get_pg_pool()  # Advisory lock
         lock_id = stable_lock_id(state["context_window_id"])
         acquired = await pool.fetchval("SELECT pg_try_advisory_lock($1)", lock_id)
     except (RuntimeError, OSError, ConnectionError) as exc:
         _log.error(
-            "Redis unavailable during lock acquisition for window=%s: %s",
+            "Lock unavailable during acquisition for window=%s: %s",
             state["context_window_id"],
             exc,
         )
@@ -122,7 +146,7 @@ async def acquire_assembly_lock(state: StandardTieredAssemblyState) -> dict:
             "lock_key": lock_key,
             "lock_token": None,
             "lock_acquired": False,
-            "error": f"Redis unavailable: {exc}",
+            "error": f"Lock unavailable: {exc}",
         }
 
     if not acquired:
@@ -180,7 +204,7 @@ async def load_window_config(state: StandardTieredAssemblyState) -> dict:
 async def load_messages(state: StandardTieredAssemblyState) -> dict:
     """Load messages for the conversation in chronological order.
 
-    R2-F11: Adaptive message load limit based on tier3 budget.
+    R2-F11: Adaptive message load limit based on tier 1 (live) budget.
     D-09: On first assembly (no existing summaries), look back further
     using the initial_lookback_multiplier to provide enough raw material
     for initial summarization.
@@ -188,10 +212,12 @@ async def load_messages(state: StandardTieredAssemblyState) -> dict:
     pool = get_pg_pool()
     build_type_config = state.get("build_type_config") or {}
     max_budget = state.get("max_token_budget", 8192)
-    tier3_pct = build_type_config.get("tier3_pct", 0.72)
-    tier3_budget = int(max_budget * tier3_pct)
+    db = extract_deadband_config(build_type_config)
+
+    # Tier 1 (live) ceiling determines how many messages to look back
+    tier1_ceiling = calculate_tier1_ceiling(max_budget, db)
     tokens_per_message = get_tuning(state["config"], "tokens_per_message_estimate", 150)
-    adaptive_limit = max(50, tier3_budget // tokens_per_message)
+    adaptive_limit = max(50, tier1_ceiling // tokens_per_message)
 
     # D-09: On initial assembly, look back further to build first summaries.
     # Check if any summaries exist for this window — if not, use multiplier.
@@ -208,6 +234,10 @@ async def load_messages(state: StandardTieredAssemblyState) -> dict:
                 "initial_lookback_multiplier", 3
             )
             lookback_tokens = int(max_budget * lookback_multiplier)
+            # Cap lookback for large budgets — no need to process
+            # millions of tokens when the window is already generous.
+            max_lookback = build_type_config.get("max_lookback_tokens", 400_000)
+            lookback_tokens = min(lookback_tokens, max_lookback)
             adaptive_limit = max(adaptive_limit, lookback_tokens // tokens_per_message)
 
     rows = await pool.fetch(
@@ -232,42 +262,52 @@ async def load_messages(state: StandardTieredAssemblyState) -> dict:
     return {"all_messages": messages}
 
 
-async def calculate_tier_boundaries(state: StandardTieredAssemblyState) -> dict:
-    """Calculate which messages belong to each tier.
+async def calculate_compaction_state(state: StandardTieredAssemblyState) -> dict:
+    """Determine if compaction is needed and partition messages into tiers.
 
-    F-05: Applies dynamic tier scaling based on conversation length.
+    Deadband logic:
+    - Tier 1 (live) fills from floor (20%) toward ceiling.
+    - If tier 1 is below ceiling, no compaction — just load recent messages.
+    - If tier 1 exceeds ceiling, mark content above floor for compaction.
     """
     messages = state["all_messages"]
     if not messages:
-        return {"tier3_messages": [], "older_messages": [], "chunks": []}
+        return {"tier1_messages": [], "older_messages": [], "chunks": []}
 
     build_type_config = state["build_type_config"]
     max_budget = state["max_token_budget"]
+    db = extract_deadband_config(build_type_config)
 
-    # F-05: Dynamic tier scaling
-    scaled_config = scale_tier_percentages(build_type_config, len(messages))
+    tier1_ceiling_tokens = calculate_tier1_ceiling(max_budget, db)
+    tier1_floor_tokens = int(max_budget * db["tier1_floor_pct"])
 
-    tier3_pct = scaled_config.get("tier3_pct", 0.72)
-    tier3_budget = int(max_budget * tier3_pct)
-
-    # Walk backwards to fill tier 3 budget
-    tier3_messages = []
-    tier3_tokens_used = 0
-    tier3_start_seq = messages[-1]["sequence_number"] + 1
+    # Walk backwards to fill tier 1 up to the ceiling
+    tier1_messages = []
+    tier1_tokens_used = 0
+    tier1_start_seq = messages[-1]["sequence_number"] + 1
 
     for msg in reversed(messages):
         msg_tokens = msg.get("token_count") or max(
             1, len(msg.get("content") or "") // 4
         )
-        if tier3_tokens_used + msg_tokens <= tier3_budget:
-            tier3_messages.insert(0, msg)
-            tier3_tokens_used += msg_tokens
-            tier3_start_seq = msg["sequence_number"]
+        if tier1_tokens_used + msg_tokens <= tier1_ceiling_tokens:
+            tier1_messages.insert(0, msg)
+            tier1_tokens_used += msg_tokens
+            tier1_start_seq = msg["sequence_number"]
         else:
             break
 
-    # Messages before tier 3 boundary need summarization
-    older_messages = [m for m in messages if m["sequence_number"] < tier3_start_seq]
+    # Messages before tier 1 boundary need summarization
+    older_messages = [m for m in messages if m["sequence_number"] < tier1_start_seq]
+
+    # If tier 1 is not at ceiling and there are no older messages, no compaction needed
+    if not older_messages:
+        return {
+            "tier1_messages": tier1_messages,
+            "older_messages": [],
+            "chunks": [],
+            "tier2_at_max": False,
+        }
 
     # Incremental: find what's already covered by existing tier 2 summaries
     pool = get_pg_pool()
@@ -300,6 +340,19 @@ async def calculate_tier_boundaries(state: StandardTieredAssemblyState) -> dict:
         for i in range(0, len(unsummarized), chunk_size)
     ]
 
+    # Check if tier 2 is at max capacity
+    t2_count = await pool.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM conversation_summaries
+        WHERE context_window_id = $1
+          AND tier = 2
+          AND is_active = TRUE
+        """,
+        uuid.UUID(state["context_window_id"]),
+    )
+    tier2_at_max = (t2_count or 0) >= db["tier2_max_chunks"]
+
     if max_summarized_seq > 0:
         _log.info(
             "Incremental assembly: %d new messages to summarize (already covered through seq %d)",
@@ -308,20 +361,27 @@ async def calculate_tier_boundaries(state: StandardTieredAssemblyState) -> dict:
         )
 
     return {
-        "tier3_messages": tier3_messages,
+        "tier1_messages": tier1_messages,
         "older_messages": older_messages,
         "chunks": chunks,
+        "tier2_at_max": tier2_at_max,
     }
 
 
-async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
-    """LLM-summarize each new chunk of older messages."""
+async def compact_tier1(state: StandardTieredAssemblyState) -> dict:
+    """When tier 1 hits ceiling, summarize oldest content above floor into a 2% chunk.
+
+    Strips artifacts, summarizes to a single tier 2 chunk, appends to tier 2.
+    Tier 1 resets to floor after compaction.
+    """
     chunks = state["chunks"]
     if not chunks:
         return {"tier2_summaries": []}
 
     config = state["config"]
     build_type_config = state.get("build_type_config") or {}
+    db = extract_deadband_config(build_type_config)
+    max_budget = state.get("max_token_budget", 0)
 
     # F-06: Use build-type-specific LLM config if available, else summarization role
     effective_config = _resolve_llm_config(config, build_type_config)
@@ -339,7 +399,7 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
         _log.error("Failed to load chunk_summarization prompt: %s", exc)
         return {"tier2_summaries": [], "error": f"Prompt loading failed: {exc}"}
 
-    # Advisory lock (Redis removed — no TTL renewal needed)
+    # Advisory lock (no TTL renewal needed)
     pool = get_pg_pool()
 
     async def _summarize_chunk(chunk: list[dict]) -> tuple[list[dict], str | None]:
@@ -347,6 +407,10 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
         chunk_text = "\n".join(
             f"[{m['role']} | {m['sender']}] {m.get('content') or ''}" for m in chunk
         )
+        # Strip artifacts before summarization — the LLM summarizes the
+        # discussion, not the code blocks/JSON/file listings themselves.
+        # File paths and identifiers are preserved as retrieval hooks.
+        chunk_text = clean_for_compaction(chunk_text)
         messages = [
             SystemMessage(content=chunk_prompt),
             HumanMessage(content=chunk_text),
@@ -375,15 +439,13 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
     # M-09: Track whether any chunk failed
     had_errors = any(summary_text is None for _, summary_text in llm_results)
 
-    # R7-M11: Budget guard — stop inserting summaries if cumulative tier1+tier2
+    # R7-M11: Budget guard — stop inserting summaries if cumulative tier2+tier3
     # tokens would exceed their allocation within the max token budget.
-    max_budget = state.get("max_token_budget", 0)
-    scaled_config = scale_tier_percentages(
-        build_type_config, len(state.get("all_messages", []))
+    tier2_budget = int(
+        max_budget * db["tier2_chunk_pct"] * db["tier2_max_chunks"]
     )
-    tier1_pct = scaled_config.get("tier1_pct", 0.08)
-    tier2_pct = scaled_config.get("tier2_pct", 0.20)
-    summary_budget = int(max_budget * (tier1_pct + tier2_pct))
+    tier3_budget = int(max_budget * db["tier3_pct"])
+    summary_budget = tier2_budget + tier3_budget
     cumulative_summary_tokens = 0
 
     # Insert summaries sequentially to preserve ordering
@@ -465,8 +527,31 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
         new_summaries.append(summary_text)
         cumulative_summary_tokens += summary_token_count
 
+        # Memory extraction at compaction time: feed the full chunk context
+        # to Mem0 for higher quality extraction. The LLM sees significance
+        # in context — a decision spanning 50 messages is visible as a
+        # decision, not as 50 individual statements.
+        # Fire-and-forget — don't block the assembly pipeline on extraction.
+        try:
+            from context_broker_ae.memory_extraction import build_memory_extraction
+
+            chunk_text_for_extraction = "\n".join(
+                f"{m.get('content') or ''}" for m in chunk if m.get("content")
+            )
+            if chunk_text_for_extraction:
+                extraction_graph = build_memory_extraction()
+                asyncio.create_task(
+                    extraction_graph.ainvoke({
+                        "conversation_id": state["conversation_id"],
+                        "config": state["config"],
+                        "messages": chunk,
+                    })
+                )
+        except Exception as exc:
+            _log.debug("Compaction-time extraction skipped: %s", exc)
+
     _log.info(
-        "Context assembly: wrote %d tier 2 summaries for window=%s",
+        "Context assembly: wrote %d tier 2 chunk summaries for window=%s",
         len(new_summaries),
         state["context_window_id"],
     )
@@ -476,8 +561,17 @@ async def summarize_message_chunks(state: StandardTieredAssemblyState) -> dict:
     return result
 
 
-async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> dict:
-    """Consolidate oldest tier 2 summaries into a tier 1 archival summary."""
+async def run_full_compaction(state: StandardTieredAssemblyState) -> dict:
+    """Consolidate oldest tier 2 chunks into tier 3 archival summary.
+
+    Triggered when tier 2 is at max_chunks and a new chunk needs to be added.
+    Tier 3 has two parts:
+      - Historical header (~0.25% of window): re-summarized with displaced content
+      - Recent archival (~1.75% of window): REPLACED with consolidated chunks
+
+    After full compaction: 4 oldest tier 2 chunks consolidated into tier 3,
+    2 newest tier 2 chunks kept + new chunk = back to 3 chunks (6%).
+    """
     pool = get_pg_pool()
 
     active_t2 = await pool.fetch(
@@ -492,24 +586,27 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
         uuid.UUID(state["context_window_id"]),
     )
 
-    if len(active_t2) <= get_tuning(state["config"], "consolidation_threshold", 3):
-        return {"tier1_summary": None}
+    build_type_config = state.get("build_type_config") or {}
+    db = extract_deadband_config(build_type_config)
 
-    keep_recent = get_tuning(state["config"], "consolidation_keep_recent", 2)
+    if len(active_t2) <= db["tier2_min_chunks"]:
+        return {"tier3_summary": None}
 
-    # R6-M11: Guard against empty consolidation list when keep_recent >= len(active_t2)
+    keep_recent = db["tier2_min_chunks"] - 1  # Keep 2 newest, consolidate the rest
+
+    # R6-M11: Guard against empty consolidation list
     if len(active_t2) <= keep_recent:
-        return {"tier1_summary": None}
+        return {"tier3_summary": None}
 
-    to_consolidate = list(active_t2)[:-keep_recent]
+    to_consolidate = list(active_t2)[:-keep_recent] if keep_recent > 0 else list(active_t2)
 
-    # M-16: Include existing tier 1 summary in consolidation
-    existing_t1 = await pool.fetchrow(
+    # M-16: Include existing tier 3 summary (historical header) in consolidation
+    existing_t3 = await pool.fetchrow(
         """
         SELECT summary_text
         FROM conversation_summaries
         WHERE context_window_id = $1
-          AND tier = 1
+          AND tier = 3
           AND is_active = TRUE
         ORDER BY summarizes_to_seq DESC
         LIMIT 1
@@ -518,15 +615,14 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
     )
 
     consolidation_parts = []
-    if existing_t1 and existing_t1["summary_text"]:
+    if existing_t3 and existing_t3["summary_text"]:
         consolidation_parts.append(
-            f"[Existing archival summary]\n{existing_t1['summary_text']}"
+            f"[Existing archival summary — historical header]\n{existing_t3['summary_text']}"
         )
     consolidation_parts.extend(r["summary_text"] for r in to_consolidate)
     consolidation_text = "\n\n".join(consolidation_parts)
 
     config = state["config"]
-    build_type_config = state.get("build_type_config") or {}
 
     # F-06: Use build-type-specific LLM config if available
     effective_config = _resolve_llm_config(config, build_type_config)
@@ -537,7 +633,7 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
         archival_prompt = await async_load_prompt("archival_consolidation")
     except RuntimeError as exc:
         _log.error("Failed to load archival_consolidation prompt: %s", exc)
-        return {"tier1_summary": None, "error": f"Prompt loading failed: {exc}"}
+        return {"tier3_summary": None, "error": f"Prompt loading failed: {exc}"}
 
     llm = get_chat_model(effective_config, role="summarization")
 
@@ -546,7 +642,7 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
         HumanMessage(content=consolidation_text),
     ]
 
-    # R7-M12: Renew lock TTL before the LLM call (same pattern as _summarize_chunk)
+    # R7-M12: Renew lock TTL before the LLM call (advisory locks: no-op)
     lock_key = state.get("lock_key", "")
     lock_token = state.get("lock_token")
     if lock_key and lock_token:
@@ -562,12 +658,12 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
         if archival_text:
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    # Deactivate existing tier 1
+                    # Deactivate existing tier 3 archival
                     await conn.execute(
                         """
                         UPDATE conversation_summaries
                         SET is_active = FALSE
-                        WHERE context_window_id = $1 AND tier = 1 AND is_active = TRUE
+                        WHERE context_window_id = $1 AND tier = 3 AND is_active = TRUE
                         """,
                         uuid.UUID(state["context_window_id"]),
                     )
@@ -583,14 +679,14 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
                         consolidated_ids,
                     )
 
-                    # Insert new tier 1 archival summary
+                    # Insert new tier 3 archival summary
                     await conn.execute(
                         """
                         INSERT INTO conversation_summaries
                             (conversation_id, context_window_id, summary_text, tier,
                              summarizes_from_seq, summarizes_to_seq, message_count,
                              summarized_by_model)
-                        VALUES ($1, $2, $3, 1, $4, $5, $6, $7)
+                        VALUES ($1, $2, $3, 3, $4, $5, $6, $7)
                         """,
                         uuid.UUID(state["conversation_id"]),
                         uuid.UUID(state["context_window_id"]),
@@ -602,11 +698,11 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
                     )
 
             _log.info(
-                "Context assembly: consolidated %d tier 2 summaries into tier 1 for window=%s",
+                "Full compaction: consolidated %d tier 2 chunks into tier 3 for window=%s",
                 len(to_consolidate),
                 state["context_window_id"],
             )
-            return {"tier1_summary": archival_text}
+            return {"tier3_summary": archival_text}
 
     except (openai.APIError, httpx.HTTPError, ValueError) as exc:
         _log.error(
@@ -614,9 +710,9 @@ async def consolidate_archival_summary(state: StandardTieredAssemblyState) -> di
             state["context_window_id"],
             exc,
         )
-        return {"tier1_summary": None, "had_errors": True}
+        return {"tier3_summary": None, "had_errors": True}
 
-    return {"tier1_summary": None}
+    return {"tier3_summary": None}
 
 
 async def finalize_assembly(state: StandardTieredAssemblyState) -> dict:
@@ -679,21 +775,21 @@ def route_after_load_messages(state: StandardTieredAssemblyState) -> str:
         return "release_assembly_lock"
     if not state.get("all_messages"):
         return "finalize_assembly"
-    return "calculate_tier_boundaries"
+    return "calculate_compaction_state"
 
 
-def route_after_calculate_tiers(state: StandardTieredAssemblyState) -> str:
+def route_after_compaction_state(state: StandardTieredAssemblyState) -> str:
     if state.get("error"):
         return "release_assembly_lock"
     if not state.get("chunks"):
-        return "consolidate_archival_summary"
-    return "summarize_message_chunks"
+        return "run_full_compaction"
+    return "compact_tier1"
 
 
-def route_after_summarize(state: StandardTieredAssemblyState) -> str:
+def route_after_compact_tier1(state: StandardTieredAssemblyState) -> str:
     if state.get("error"):
         return "release_assembly_lock"
-    return "consolidate_archival_summary"
+    return "run_full_compaction"
 
 
 def build_standard_tiered_assembly():
@@ -703,9 +799,9 @@ def build_standard_tiered_assembly():
     workflow.add_node("acquire_assembly_lock", acquire_assembly_lock)
     workflow.add_node("load_window_config", load_window_config)
     workflow.add_node("load_messages", load_messages)
-    workflow.add_node("calculate_tier_boundaries", calculate_tier_boundaries)
-    workflow.add_node("summarize_message_chunks", summarize_message_chunks)
-    workflow.add_node("consolidate_archival_summary", consolidate_archival_summary)
+    workflow.add_node("calculate_compaction_state", calculate_compaction_state)
+    workflow.add_node("compact_tier1", compact_tier1)
+    workflow.add_node("run_full_compaction", run_full_compaction)
     workflow.add_node("finalize_assembly", finalize_assembly)
     workflow.add_node("release_assembly_lock", release_assembly_lock)
 
@@ -728,29 +824,29 @@ def build_standard_tiered_assembly():
         "load_messages",
         route_after_load_messages,
         {
-            "calculate_tier_boundaries": "calculate_tier_boundaries",
+            "calculate_compaction_state": "calculate_compaction_state",
             "finalize_assembly": "finalize_assembly",
             "release_assembly_lock": "release_assembly_lock",
         },
     )
     workflow.add_conditional_edges(
-        "calculate_tier_boundaries",
-        route_after_calculate_tiers,
+        "calculate_compaction_state",
+        route_after_compaction_state,
         {
-            "summarize_message_chunks": "summarize_message_chunks",
-            "consolidate_archival_summary": "consolidate_archival_summary",
+            "compact_tier1": "compact_tier1",
+            "run_full_compaction": "run_full_compaction",
             "release_assembly_lock": "release_assembly_lock",
         },
     )
     workflow.add_conditional_edges(
-        "summarize_message_chunks",
-        route_after_summarize,
+        "compact_tier1",
+        route_after_compact_tier1,
         {
-            "consolidate_archival_summary": "consolidate_archival_summary",
+            "run_full_compaction": "run_full_compaction",
             "release_assembly_lock": "release_assembly_lock",
         },
     )
-    workflow.add_edge("consolidate_archival_summary", "finalize_assembly")
+    workflow.add_edge("run_full_compaction", "finalize_assembly")
     workflow.add_edge("finalize_assembly", "release_assembly_lock")
     workflow.add_edge("release_assembly_lock", END)
 
@@ -774,7 +870,7 @@ class StandardTieredRetrievalState(TypedDict):
     build_type_config: Optional[dict]
     conversation_id: Optional[str]
     max_token_budget: int
-    tier1_summary: Optional[str]
+    tier3_summary: Optional[str]
     tier2_summaries: list[str]
     recent_messages: list[dict]
     assembly_status: str
@@ -852,12 +948,12 @@ async def ret_load_window(state: StandardTieredRetrievalState) -> dict:
 async def ret_wait_for_assembly(state: StandardTieredRetrievalState) -> dict:
     """Block if context assembly is in progress, with timeout.
 
-    R6-M9: If Redis is unavailable, proceed without waiting rather than crashing.
+    R6-M9: If advisory lock is unavailable, proceed without waiting rather than crashing.
     """
     try:
-        pool = get_pg_pool()  # Advisory lock (Redis removed)
+        pool = get_pg_pool()  # Advisory lock
     except RuntimeError:
-        _log.warning("Retrieval: Redis not available, proceeding without assembly wait")
+        _log.warning("Retrieval: pool not available, proceeding without assembly wait")
         return {"assembly_status": "ready"}
 
     timeout = get_tuning(state["config"], "assembly_wait_timeout_seconds", 50)
@@ -875,7 +971,7 @@ async def ret_wait_for_assembly(state: StandardTieredRetrievalState) -> dict:
                 in_progress = True
         except (ConnectionError, OSError, RuntimeError) as exc:
             _log.warning(
-                "Retrieval: Redis error during assembly wait, proceeding: %s", exc
+                "Retrieval: lock error during assembly wait, proceeding: %s", exc
             )
             return {"assembly_status": "ready"}
         if not in_progress:
@@ -905,7 +1001,7 @@ async def ret_wait_for_assembly(state: StandardTieredRetrievalState) -> dict:
 
 
 async def ret_load_summaries(state: StandardTieredRetrievalState) -> dict:
-    """Load active tier 1 and tier 2 summaries."""
+    """Load active tier 3 (archival) and tier 2 (chunk) summaries."""
     pool = get_pg_pool()
 
     summaries = await pool.fetch(
@@ -919,44 +1015,37 @@ async def ret_load_summaries(state: StandardTieredRetrievalState) -> dict:
         uuid.UUID(state["context_window_id"]),
     )
 
-    tier1 = None
+    tier3 = None
     tier2_list = []
     for s in summaries:
-        if s["tier"] == 1:
-            tier1 = s["summary_text"]
+        if s["tier"] == 3:
+            tier3 = s["summary_text"]
         elif s["tier"] == 2:
             tier2_list.append(s["summary_text"])
 
-    return {"tier1_summary": tier1, "tier2_summaries": tier2_list}
+    return {"tier3_summary": tier3, "tier2_summaries": tier2_list}
 
 
 async def ret_load_recent_messages(state: StandardTieredRetrievalState) -> dict:
-    """Load tier 3 recent verbatim messages within the remaining token budget.
+    """Load tier 1 (live) recent verbatim messages within the remaining token budget.
 
-    F-05: Applies dynamic tier scaling based on conversation length.
+    Uses deadband config to determine tier 1 ceiling.
     """
     pool = get_pg_pool()
     build_type_config = state["build_type_config"]
     max_budget = state["max_token_budget"]
+    db = extract_deadband_config(build_type_config)
 
-    # Count total messages for F-05 tier scaling
-    total_msg_count = await pool.fetchval(
-        "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = $1",
-        uuid.UUID(state["conversation_id"]),
-    )
-    scaled_config = scale_tier_percentages(build_type_config, total_msg_count or 0)
-
-    tier3_pct = scaled_config.get("tier3_pct", 0.72)
-    tier3_budget = int(max_budget * tier3_pct)
+    tier1_ceiling_tokens = calculate_tier1_ceiling(max_budget, db)
 
     # Calculate tokens already used by summaries
     summary_tokens = 0
-    if state.get("tier1_summary"):
-        summary_tokens += len(state["tier1_summary"]) // 4
+    if state.get("tier3_summary"):
+        summary_tokens += len(state["tier3_summary"]) // 4
     for s in state.get("tier2_summaries", []):
         summary_tokens += len(s) // 4
 
-    remaining_budget = max(0, min(tier3_budget, max_budget - summary_tokens))
+    remaining_budget = max(0, min(tier1_ceiling_tokens, max_budget - summary_tokens))
 
     # M-06: Avoid loading messages already covered by summaries
     highest_summarized_seq = await pool.fetchval(
@@ -970,9 +1059,9 @@ async def ret_load_recent_messages(state: StandardTieredRetrievalState) -> dict:
         uuid.UUID(state["context_window_id"]),
     )
 
-    # R2-F11: Adaptive message load limit based on tier3 token budget
+    # R2-F11: Adaptive message load limit based on tier 1 token budget
     tokens_per_message = get_tuning(state["config"], "tokens_per_message_estimate", 150)
-    adaptive_limit = max(50, tier3_budget // tokens_per_message)
+    adaptive_limit = max(50, tier1_ceiling_tokens // tokens_per_message)
 
     all_messages = await pool.fetch(
         """
@@ -1006,34 +1095,34 @@ async def ret_load_recent_messages(state: StandardTieredRetrievalState) -> dict:
     }
 
 
-def _estimate_tokens(text: str) -> int:
-    """Estimate token count from text length (approx 4 chars per token)."""
-    return max(1, len(text) // 4)
-
-
 async def ret_assemble_context(state: StandardTieredRetrievalState) -> dict:
     """Assemble the final context messages array from all tiers.
 
     ARCH-03: Produces a structured messages array matching the OpenAI format.
     ARCH-15: Summaries are inserted as system messages.
+
+    Prompt ordering optimized for prefix caching:
+      1. Tier 3 (archival) FIRST — most static, changes once per ~2.1M tokens
+      2. Tier 2 (chunks) NEXT — grows monotonically between full compactions
+      3. Tier 1 (live) LAST — changes every turn
     """
     max_budget = state.get("max_token_budget", 0)
     cumulative_tokens = 0
     messages: list[dict] = []
 
-    # Tier 1: Archival summary
-    if state.get("tier1_summary"):
-        content = f"[Archival context]\n{state['tier1_summary']}"
+    # Tier 3: Archival summary (most static — best prefix cache hit rate)
+    if state.get("tier3_summary"):
+        content = f"[Archival context]\n{state['tier3_summary']}"
         cumulative_tokens += _estimate_tokens(content)
         messages.append({"role": "system", "content": content})
 
-    # Tier 2: Chunk summaries
+    # Tier 2: Chunk summaries (grows monotonically between full compactions)
     if state.get("tier2_summaries"):
         content = "[Recent summaries]\n" + "\n\n".join(state["tier2_summaries"])
         cumulative_tokens += _estimate_tokens(content)
         messages.append({"role": "system", "content": content})
 
-    # Tier 3: Recent verbatim messages (M-08: newest first truncation)
+    # Tier 1: Live verbatim messages (M-08: newest first truncation)
     truncated_recent_messages: list[dict] = []
     if state.get("recent_messages"):
         remaining = (
@@ -1059,7 +1148,7 @@ async def ret_assemble_context(state: StandardTieredRetrievalState) -> dict:
             cumulative_tokens += _estimate_tokens(m.get("content", ""))
 
     context_tiers = {
-        "archival_summary": state.get("tier1_summary"),
+        "archival_summary": state.get("tier3_summary"),
         "chunk_summaries": state.get("tier2_summaries", []),
         "semantic_messages": [],
         "knowledge_graph_facts": [],

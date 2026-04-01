@@ -15,7 +15,7 @@ import pytest
 _VALID_CONFIG = {
     "log_level": "INFO",
     "build_types": {
-        "sliding-window": {"tier1_pct": 0, "tier2_pct": 0, "tier3_pct": 1.0},
+        "sliding-window": {"tier1_floor_pct": 0, "tier2_chunk_pct": 0, "tier3_pct": 0},
     },
     "embeddings": {"embedding_dims": 768},
     "tuning": {"postgres_retry_interval_seconds": 0},
@@ -29,7 +29,7 @@ def _config_missing_dims():
 
 def _config_bad_build_type():
     cfg = {**_VALID_CONFIG}
-    cfg["build_types"] = {"bad": {"tier1_pct": "not-a-number"}}
+    cfg["build_types"] = {"bad": {"tier1_floor_pct": "not-a-number"}}
     return cfg
 
 

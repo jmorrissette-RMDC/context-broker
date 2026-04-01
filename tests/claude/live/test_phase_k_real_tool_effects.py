@@ -394,13 +394,13 @@ class TestSendNotificationReachesAlerter:
 
 
 # ===========================================================================
-# K-13: mem_add creates searchable memory
+# K-13: knowledge_add creates searchable memory
 # ===========================================================================
 
-class TestMemAddCreatesSearchableMemory:
-    """K-13: mem_add creates a memory that mem_search can find."""
+class TestKnowledgeAddCreatesSearchableMemory:
+    """K-13: knowledge_add creates a memory that knowledge_search can find."""
 
-    def test_mem_add_creates_searchable_memory(self, http_client):
+    def test_knowledge_add_creates_searchable_memory(self, http_client):
         """Add a memory via MCP, then search for it."""
         tag = uuid.uuid4().hex[:8]
         user_id = f"k13-test-{tag}"
@@ -409,12 +409,12 @@ class TestMemAddCreatesSearchableMemory:
         # Add memory via direct MCP call
         add_resp = mcp_call(
             http_client,
-            "mem_add",
+            "knowledge_add",
             {"content": fact, "user_id": user_id},
         )
         assert add_resp.status_code == 200
         add_result = extract_mcp_result(add_resp)
-        assert isinstance(add_result, dict), f"mem_add returned unexpected type: {add_result}"
+        assert isinstance(add_result, dict), f"knowledge_add returned unexpected type: {add_result}"
 
         # Search for the memory with retries
         found = False
@@ -422,7 +422,7 @@ class TestMemAddCreatesSearchableMemory:
             time.sleep(3)
             search_resp = mcp_call(
                 http_client,
-                "mem_search",
+                "knowledge_search",
                 {"query": "favorite database", "user_id": user_id},
             )
             assert search_resp.status_code == 200
@@ -438,7 +438,7 @@ class TestMemAddCreatesSearchableMemory:
                     break
 
         assert found, (
-            f"mem_search did not find the memory added by mem_add. "
+            f"knowledge_search did not find the memory added by knowledge_add. "
             f"user_id={user_id}, searched for 'favorite database'"
         )
 

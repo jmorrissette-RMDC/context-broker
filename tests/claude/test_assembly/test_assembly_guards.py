@@ -14,7 +14,10 @@ from context_broker_ae.build_types.standard_tiered import (
     release_assembly_lock,
     summarize_message_chunks,
 )
-from context_broker_ae.build_types.tier_scaling import scale_tier_percentages
+from context_broker_ae.build_types.tier_scaling import (
+    calculate_tier1_ceiling,
+    extract_deadband_config,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -30,9 +33,12 @@ def assembly_config(sample_config):
     """Config for assembly tests with tiered-summary build type."""
     cfg = dict(sample_config)
     cfg["build_types"]["tiered-summary"] = {
-        "tier1_pct": 0.08,
-        "tier2_pct": 0.20,
-        "tier3_pct": 0.72,
+        "tier1_floor_pct": 0.20,
+        "tier2_chunk_pct": 0.02,
+        "tier3_pct": 0.02,
+        "tier2_min_chunks": 3,
+        "tier2_max_chunks": 6,
+        "tier3_header_pct": 0.0025,
         "initial_lookback_multiplier": 3,
         "effective_utilization": 0.85,
     }
@@ -77,7 +83,7 @@ class TestBudgetGuard:
         pool, conn = mock_pg_pool
 
         # Create chunks that would exceed the budget
-        # max_token_budget=8192, tier1_pct=0.08, tier2_pct=0.20
+        # max_token_budget=8192, tier1_floor_pct=0.20, tier2_chunk_pct=0.02
         # summary_budget = 8192 * (0.08 + 0.20) = 2293 (for 200 msgs, scaling applies)
         chunks = []
         for i in range(10):
@@ -255,8 +261,9 @@ class TestInitialLookback:
         fetch_call = pool.fetch.call_args
         limit_arg = fetch_call[0][2]  # third positional arg is the LIMIT
 
-        # Default adaptive_limit = max(50, tier3_budget // 150)
-        # tier3_budget = 8192 * 0.72 = 5898, adaptive_limit = max(50, 39) = 50
+        # Default adaptive_limit = max(50, tier1_budget // 150)
+        # tier1 ceiling = 0.85 - 0.02 - 0.02 = 0.81, tier1_budget = 8192 * 0.81 = 6635
+        # adaptive_limit = max(50, 44) = 50
         # With lookback: lookback_tokens = 8192 * 3 = 24576, 24576//150 = 163
         assert limit_arg >= 100, f"Expected expanded lookback limit, got {limit_arg}"
 
@@ -288,7 +295,7 @@ class TestInitialLookback:
 
         fetch_call = pool.fetch.call_args
         limit_arg = fetch_call[0][2]
-        # Normal adaptive_limit = max(50, 5898 // 150) = 50
+        # Normal adaptive_limit = max(50, 6635 // 150) = 50
         assert limit_arg == 50
 
 
@@ -297,18 +304,17 @@ class TestInitialLookback:
 # ---------------------------------------------------------------------------
 
 class TestTierBoundaryCalculation:
-    """Correct split of messages into tier1/tier2/tier3 ranges."""
+    """Correct split of messages into tier 1 (live) / tier 2 (chunks) / tier 3 (archival) ranges."""
 
     @pytest.mark.asyncio
-    async def test_tier3_fills_from_newest(self, assembly_config, mock_pg_pool):
-        """Tier 3 walks backward from newest messages until budget is full."""
+    async def test_tier1_fills_from_newest(self, assembly_config, mock_pg_pool):
+        """Tier 1 (live) walks backward from newest messages until budget is full."""
         pool, _ = mock_pg_pool
 
         # 20 messages, each 100 tokens
         messages = [_make_message(i, content="x" * 400, token_count=100) for i in range(20)]
 
-        # tier3_budget = 8192 * 0.72 = ~5898 (for 200 msgs with scaling)
-        # But for 20 msgs, short conversation scaling applies — tier3 gets more
+        # tier1 ceiling = 0.85 - 0.02 - 0.02 = 0.81, budget = 8192 * 0.81 = ~6635
         pool.fetch.return_value = []  # no existing t2 summaries
 
         state = {
@@ -327,12 +333,12 @@ class TestTierBoundaryCalculation:
             result = await calculate_tier_boundaries(state)
 
         # All 20 messages * 100 tokens = 2000 tokens, well within budget
-        assert len(result["tier3_messages"]) == 20
+        assert len(result["tier1_messages"]) == 20
         assert len(result["older_messages"]) == 0
 
     @pytest.mark.asyncio
-    async def test_older_messages_excluded_from_tier3(self, assembly_config, mock_pg_pool):
-        """Messages that don't fit in tier 3 budget go to older_messages."""
+    async def test_older_messages_excluded_from_tier1(self, assembly_config, mock_pg_pool):
+        """Messages that don't fit in tier 1 (live) budget go to older_messages."""
         pool, _ = mock_pg_pool
 
         # 100 messages, each 200 tokens = 20000 total tokens
@@ -355,27 +361,37 @@ class TestTierBoundaryCalculation:
         ):
             result = await calculate_tier_boundaries(state)
 
-        # Not all messages should fit in tier 3
-        assert len(result["tier3_messages"]) < 100
+        # Not all messages should fit in tier 1 (live)
+        assert len(result["tier1_messages"]) < 100
         assert len(result["older_messages"]) > 0
-        # tier3 + older should equal total
-        assert len(result["tier3_messages"]) + len(result["older_messages"]) == 100
+        # tier1 + older should equal total
+        assert len(result["tier1_messages"]) + len(result["older_messages"]) == 100
 
-    def test_tier_scaling_short_conversation(self):
-        """Short conversations boost tier3 at expense of tier1/tier2."""
-        config = {"tier1_pct": 0.08, "tier2_pct": 0.20, "tier3_pct": 0.72}
-        scaled = scale_tier_percentages(config, message_count=10)
-        assert scaled["tier3_pct"] > 0.72
-        assert scaled["tier1_pct"] < 0.08
-        assert scaled["tier2_pct"] < 0.20
+    def test_deadband_config_extraction(self):
+        """Deadband config is correctly extracted from build type config."""
+        config = {
+            "tier1_floor_pct": 0.20,
+            "tier2_chunk_pct": 0.02,
+            "tier3_pct": 0.02,
+            "tier2_min_chunks": 3,
+            "tier2_max_chunks": 6,
+            "tier3_header_pct": 0.0025,
+        }
+        db = extract_deadband_config(config)
+        assert db["tier1_floor_pct"] == 0.20
+        assert db["tier2_chunk_pct"] == 0.02
+        assert db["tier3_pct"] == 0.02
 
-    def test_tier_scaling_long_conversation(self):
-        """Long conversations boost tier1/tier2 at expense of tier3."""
-        config = {"tier1_pct": 0.08, "tier2_pct": 0.20, "tier3_pct": 0.72}
-        scaled = scale_tier_percentages(config, message_count=1500)
-        assert scaled["tier3_pct"] < 0.72
-        assert scaled["tier1_pct"] > 0.08
-        assert scaled["tier2_pct"] > 0.20
+    def test_tier1_ceiling_calculation(self):
+        """Tier 1 ceiling = 85% - tier2 - tier3."""
+        config = {
+            "tier1_floor_pct": 0.20,
+            "tier2_chunk_pct": 0.02,
+            "tier3_pct": 0.02,
+        }
+        ceiling = calculate_tier1_ceiling(config)
+        expected = 0.85 - 0.02 - 0.02
+        assert abs(ceiling - expected) < 1e-6
 
 
 # ---------------------------------------------------------------------------

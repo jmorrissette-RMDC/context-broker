@@ -487,6 +487,49 @@ async def _migration_020(conn) -> None:
     _log.info("Migration 020 complete — schedules.last_fired_at column")
 
 
+async def _migration_021(conn) -> None:
+    """Migration 21: Tier rename for compaction v2.
+
+    The tier numbering was backwards — tier 1 was archival (least important),
+    tier 3 was recent (most important). The new scheme:
+      Tier 1 = live (most important, verbatim messages — not stored as summaries)
+      Tier 2 = chunks (unchanged)
+      Tier 3 = archival (least important, most compressed)
+
+    Only tiers 1 and 2 exist in the database (tier 3/recent was never stored
+    as summaries). This migration swaps tier 1 → tier 3 and updates the
+    check constraint to allow (2, 3) instead of (1, 2).
+    """
+    # Swap archival summaries from tier 1 to tier 3
+    await conn.execute(
+        "UPDATE conversation_summaries SET tier = 3 WHERE tier = 1"
+    )
+
+    # Drop old check constraint and add new one
+    # The constraint name from init.sql is auto-generated — find and drop it
+    await conn.execute("""
+        DO $$
+        DECLARE
+            cname TEXT;
+        BEGIN
+            SELECT conname INTO cname
+            FROM pg_constraint
+            WHERE conrelid = 'conversation_summaries'::regclass
+              AND contype = 'c'
+              AND pg_get_constraintdef(oid) LIKE '%tier%';
+            IF cname IS NOT NULL THEN
+                EXECUTE 'ALTER TABLE conversation_summaries DROP CONSTRAINT ' || cname;
+            END IF;
+        END $$
+    """)
+    await conn.execute(
+        "ALTER TABLE conversation_summaries ADD CONSTRAINT conversation_summaries_tier_check "
+        "CHECK (tier IN (2, 3))"
+    )
+
+    _log.info("Migration 021 complete — tier 1→3 rename for compaction v2")
+
+
 # Migration registry: version -> (description, migration_function)
 # Add new migrations here. Never modify existing entries.
 # IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
@@ -554,6 +597,11 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
         20,
         "Add last_fired_at to schedules for DB-based coordination",
         _migration_020,
+    ),
+    (
+        21,
+        "Tier rename: archival tier 1→3, update check constraint (compaction v2)",
+        _migration_021,
     ),
 ]
 

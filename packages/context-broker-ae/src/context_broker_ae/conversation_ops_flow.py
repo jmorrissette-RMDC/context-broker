@@ -543,13 +543,35 @@ async def find_or_create_window_node(state: GetContextState) -> dict:
     )
 
     if row:
+        new_window_id = str(row["id"])
         _log.info(
             "get_context: created window %s (type=%s, budget=%d)",
-            row["id"],
+            new_window_id,
             build_type,
             snapped_budget,
         )
-        return {"context_window_id": str(row["id"])}
+        # RB-27: Trigger assembly inline on new window so get_context
+        # returns content immediately instead of empty tiers.
+        try:
+            from app.flows.build_type_registry import get_assembly_graph
+
+            assembly_graph = await get_assembly_graph(build_type)
+            await assembly_graph.ainvoke(
+                {
+                    "context_window_id": new_window_id,
+                    "conversation_id": str(conv_id),
+                    "config": config,
+                }
+            )
+            _log.info("get_context: inline assembly complete for new window %s", new_window_id)
+        except Exception as exc:
+            _log.warning(
+                "get_context: inline assembly failed for new window %s: %s — "
+                "retrieval will proceed with whatever tiers exist",
+                new_window_id,
+                exc,
+            )
+        return {"context_window_id": new_window_id}
 
     # INSERT was a no-op (concurrent create won the race) — fetch the winner.
     # Match ON CONFLICT columns: conversation_id, build_type, max_token_budget.
@@ -652,7 +674,7 @@ async def retrieve_context_node(state: GetContextState) -> dict:
             "build_type_config": None,
             "conversation_id": None,
             "max_token_budget": 0,
-            "tier1_summary": None,
+            "tier3_summary": None,
             "tier2_summaries": [],
             "recent_messages": [],
             "semantic_messages": [],

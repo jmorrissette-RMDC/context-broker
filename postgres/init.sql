@@ -120,8 +120,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_context_windows_identity
 -- ============================================================
 -- conversation_summaries
 -- Tiered summaries keyed to context windows.
--- Tier 1 = archival (oldest, most compressed)
 -- Tier 2 = chunk summaries (intermediate)
+-- Tier 3 = archival (oldest, most compressed)
+-- Tier 1 (live) is raw messages — never stored as summaries.
 -- ============================================================
 
 CREATE TABLE conversation_summaries (
@@ -129,7 +130,7 @@ CREATE TABLE conversation_summaries (
     conversation_id UUID NOT NULL REFERENCES conversations(id),
     context_window_id UUID NOT NULL REFERENCES context_windows(id),
     summary_text TEXT NOT NULL,
-    tier INTEGER NOT NULL CHECK (tier IN (1, 2)),
+    tier INTEGER NOT NULL CHECK (tier IN (2, 3)),
     summarizes_from_seq INTEGER NOT NULL,
     summarizes_to_seq INTEGER NOT NULL,
     message_count INTEGER,

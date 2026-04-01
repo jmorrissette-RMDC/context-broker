@@ -106,11 +106,11 @@ class TestMCPProtocol:
             "conv_search_messages",
             "conv_get_history",
             "conv_search_context_windows",
-            "mem_search",
-            "mem_get_context",
-            "mem_add",
-            "mem_list",
-            "mem_delete",
+            "knowledge_search",
+            "knowledge_get_context",
+            "knowledge_add",
+            "knowledge_list",
+            "knowledge_delete",
             "imperator_chat",
             "metrics_get",
         }
@@ -699,18 +699,18 @@ class TestConvSearchContextWindows:
 
 
 # ===================================================================
-# mem_search
+# knowledge_search
 # ===================================================================
 
 
-class TestMemSearch:
-    """Tests for the mem_search MCP tool."""
+class TestKnowledgeSearch:
+    """Tests for the knowledge_search MCP tool."""
 
     def test_valid_search(self, client):
         """Search memories with valid params succeeds."""
         resp = mcp_call(
             client,
-            "mem_search",
+            "knowledge_search",
             {"query": "test", "user_id": "e2e-test-user"},
         )
         assert resp.status_code == 200
@@ -721,7 +721,7 @@ class TestMemSearch:
         """Missing required query returns validation error."""
         resp = mcp_call(
             client,
-            "mem_search",
+            "knowledge_search",
             {"user_id": "e2e-test-user"},
         )
         assert resp.status_code == 400
@@ -730,7 +730,7 @@ class TestMemSearch:
         """Missing required user_id returns validation error."""
         resp = mcp_call(
             client,
-            "mem_search",
+            "knowledge_search",
             {"query": "test"},
         )
         assert resp.status_code == 400
@@ -739,25 +739,25 @@ class TestMemSearch:
         """Limit exceeding max returns validation error."""
         resp = mcp_call(
             client,
-            "mem_search",
+            "knowledge_search",
             {"query": "test", "user_id": "e2e-test-user", "limit": 999},
         )
         assert resp.status_code == 400
 
 
 # ===================================================================
-# mem_get_context
+# knowledge_get_context
 # ===================================================================
 
 
-class TestMemGetContext:
-    """Tests for the mem_get_context MCP tool."""
+class TestKnowledgeGetContext:
+    """Tests for the knowledge_get_context MCP tool."""
 
     def test_valid_context(self, client):
         """Get memory context with valid params succeeds."""
         resp = mcp_call(
             client,
-            "mem_get_context",
+            "knowledge_get_context",
             {"query": "test preferences", "user_id": "e2e-test-user"},
         )
         assert resp.status_code == 200
@@ -769,7 +769,7 @@ class TestMemGetContext:
         """Missing required query returns validation error."""
         resp = mcp_call(
             client,
-            "mem_get_context",
+            "knowledge_get_context",
             {"user_id": "e2e-test-user"},
         )
         assert resp.status_code == 400
@@ -778,7 +778,7 @@ class TestMemGetContext:
         """Missing required user_id returns validation error."""
         resp = mcp_call(
             client,
-            "mem_get_context",
+            "knowledge_get_context",
             {"query": "test"},
         )
         assert resp.status_code == 400

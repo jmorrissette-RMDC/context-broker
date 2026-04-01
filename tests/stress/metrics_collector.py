@@ -21,10 +21,10 @@ class CompactionState:
     """Snapshot of compaction state for a context window."""
 
     window_id: str
-    compaction_cycles: int = 0  # Deactivated tier 1 records = completed cycles
-    active_tier1_count: int = 0
+    compaction_cycles: int = 0  # Deactivated tier 3 (archival) records = completed cycles
+    active_tier3_count: int = 0
     active_tier2_count: int = 0
-    tier1_tokens: int = 0
+    tier3_tokens: int = 0
     tier2_tokens: int = 0
     total_messages: int = 0
     total_summaries: int = 0
@@ -69,11 +69,11 @@ class MetricsCollector:
         """Query current compaction state for a context window."""
         state = CompactionState(window_id=window_id)
 
-        # Count completed compaction cycles (deactivated tier 1 records)
+        # Count completed compaction cycles (deactivated tier 3 archival records)
         raw = self._psql(
             f"SELECT COUNT(*) FROM conversation_summaries "
             f"WHERE context_window_id = '{window_id}' "
-            f"AND tier = 1 AND is_active = FALSE"
+            f"AND tier = 3 AND is_active = FALSE"
         )
         state.compaction_cycles = int(raw) if raw.isdigit() else 0
 
@@ -90,9 +90,9 @@ class MetricsCollector:
                 tier = int(parts[0])
                 count = int(parts[1])
                 tokens = int(parts[2])
-                if tier == 1:
-                    state.active_tier1_count = count
-                    state.tier1_tokens = tokens
+                if tier == 3:
+                    state.active_tier3_count = count
+                    state.tier3_tokens = tokens
                 elif tier == 2:
                     state.active_tier2_count = count
                     state.tier2_tokens = tokens

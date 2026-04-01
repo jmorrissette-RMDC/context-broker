@@ -1,5 +1,5 @@
 """
-Memory Search Flows — LangGraph StateGraph flows for mem_search and mem_get_context.
+Memory Search Flows — LangGraph StateGraph flows for knowledge_search and knowledge_get_context.
 
 Queries the Mem0 knowledge graph for extracted facts and relationships.
 """

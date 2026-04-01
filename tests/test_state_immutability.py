@@ -10,7 +10,11 @@ import copy
 
 
 from context_broker_ae.message_pipeline import route_after_store
-from context_broker_ae.build_types.tier_scaling import scale_tier_percentages
+from context_broker_ae.build_types.tier_scaling import (
+    calculate_tier1_ceiling,
+    extract_deadband_config,
+    should_trigger_compaction,
+)
 from context_broker_ae.memory_scoring import filter_and_rank_memories, score_memory
 
 # ------------------------------------------------------------------
@@ -78,46 +82,49 @@ class TestRouteAfterStoreImmutability:
 
 
 # ------------------------------------------------------------------
-# scale_tier_percentages (tier scaling)
+# Deadband tier functions (tier scaling)
 # ------------------------------------------------------------------
 
 
-class TestScaleTierPercentagesImmutability:
-    """Verify scale_tier_percentages does not mutate its input."""
+class TestDeadbandImmutability:
+    """Verify deadband tier functions do not mutate their input."""
 
-    def test_short_conversation(self):
-        """Short conversation scaling does not mutate input."""
+    def test_extract_deadband_config(self):
+        """extract_deadband_config does not mutate input."""
         config = {
-            "tier1_pct": 0.08,
-            "tier2_pct": 0.20,
-            "tier3_pct": 0.72,
+            "tier1_floor_pct": 0.20,
+            "tier2_chunk_pct": 0.02,
+            "tier3_pct": 0.02,
+            "tier2_min_chunks": 3,
+            "tier2_max_chunks": 6,
+            "tier3_header_pct": 0.0025,
             "fallback_tokens": 8192,
         }
         original = copy.deepcopy(config)
-        scale_tier_percentages(config, 10)
-        _assert_state_unchanged(original, config, "scale_tier_percentages (short)")
+        extract_deadband_config(config)
+        _assert_state_unchanged(original, config, "extract_deadband_config")
 
-    def test_long_conversation(self):
-        """Long conversation scaling does not mutate input."""
+    def test_calculate_tier1_ceiling(self):
+        """calculate_tier1_ceiling does not mutate input."""
         config = {
-            "tier1_pct": 0.08,
-            "tier2_pct": 0.20,
-            "tier3_pct": 0.72,
+            "tier1_floor_pct": 0.20,
+            "tier2_chunk_pct": 0.02,
+            "tier3_pct": 0.02,
         }
         original = copy.deepcopy(config)
-        scale_tier_percentages(config, 1000)
-        _assert_state_unchanged(original, config, "scale_tier_percentages (long)")
+        calculate_tier1_ceiling(config)
+        _assert_state_unchanged(original, config, "calculate_tier1_ceiling")
 
-    def test_medium_conversation(self):
-        """Medium conversation (no-op) does not mutate input."""
+    def test_should_trigger_compaction(self):
+        """should_trigger_compaction does not mutate input."""
         config = {
-            "tier1_pct": 0.08,
-            "tier2_pct": 0.20,
-            "tier3_pct": 0.72,
+            "tier1_floor_pct": 0.20,
+            "tier2_chunk_pct": 0.02,
+            "tier3_pct": 0.02,
         }
         original = copy.deepcopy(config)
-        scale_tier_percentages(config, 200)
-        _assert_state_unchanged(original, config, "scale_tier_percentages (medium)")
+        should_trigger_compaction(config, tier1_token_pct=0.50)
+        _assert_state_unchanged(original, config, "should_trigger_compaction")
 
 
 # ------------------------------------------------------------------

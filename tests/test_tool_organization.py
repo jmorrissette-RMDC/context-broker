@@ -16,7 +16,7 @@ class TestToolDiscovery:
 
         # Core tools always present
         assert "conv_search" in names
-        assert "mem_search" in names
+        assert "knowledge_search" in names
 
         # Diagnostic tools always present
         assert "log_query" in names

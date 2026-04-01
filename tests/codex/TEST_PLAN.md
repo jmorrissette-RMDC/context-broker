@@ -39,8 +39,8 @@ that rely on Postgres, Mem0, Neo4j, and LLM/embeddings providers.
 - File: `tests/codex/integration/test_mcp_core_flow.py`
 
 ### 3) Memory + Knowledge (integration)
-- `mem_add` and `mem_search` through Mem0.
-- `mem_get_context` and `search_knowledge` for knowledge retrieval.
+- `knowledge_add` and `knowledge_search` through Mem0.
+- `knowledge_get_context` and `search_knowledge` for knowledge retrieval.
 - Domain info storage and semantic search.
 - File: `tests/codex/integration/test_memory_and_domain_tools.py`
 

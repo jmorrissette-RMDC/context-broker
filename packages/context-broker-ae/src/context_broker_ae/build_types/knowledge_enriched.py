@@ -38,7 +38,6 @@ from app.utils import stable_lock_id
 from context_broker_ae.build_types.standard_tiered import (
     _estimate_tokens,
 )
-from context_broker_ae.build_types.tier_scaling import scale_tier_percentages
 
 _log = logging.getLogger("context_broker.flows.build_types.knowledge_enriched")
 
@@ -65,7 +64,7 @@ class KnowledgeEnrichedRetrievalState(TypedDict):
     build_type_config: Optional[dict]
     conversation_id: Optional[str]
     max_token_budget: int
-    tier1_summary: Optional[str]
+    tier3_summary: Optional[str]
     tier2_summaries: list[str]
     recent_messages: list[dict]
     semantic_messages: list[dict]
@@ -190,7 +189,7 @@ async def ke_wait_for_assembly(state: KnowledgeEnrichedRetrievalState) -> dict:
 
 
 async def ke_load_summaries(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Load active tier 1 and tier 2 summaries."""
+    """Load active tier 3 (archival) and tier 2 (chunk) summaries."""
     pool = get_pg_pool()
 
     summaries = await pool.fetch(
@@ -204,44 +203,46 @@ async def ke_load_summaries(state: KnowledgeEnrichedRetrievalState) -> dict:
         uuid.UUID(state["context_window_id"]),
     )
 
-    tier1 = None
+    tier3 = None
     tier2_list = []
     for s in summaries:
-        if s["tier"] == 1:
-            tier1 = s["summary_text"]
+        if s["tier"] == 3:
+            tier3 = s["summary_text"]
         elif s["tier"] == 2:
             tier2_list.append(s["summary_text"])
 
-    return {"tier1_summary": tier1, "tier2_summaries": tier2_list}
+    return {"tier3_summary": tier3, "tier2_summaries": tier2_list}
 
 
 async def ke_load_recent_messages(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Load tier 3 recent verbatim messages within the remaining token budget.
+    """Load tier 1 (recent/live) verbatim messages within the remaining token budget.
 
-    F-05: Applies dynamic tier scaling based on conversation length.
+    Uses deadband config: tier1_floor_pct sets the minimum percentage for live
+    messages. The ceiling is lower than standard-tiered because knowledge-enriched
+    reserves budget for RAG layers (semantic_retrieval_pct and knowledge_graph_pct).
     """
     pool = get_pg_pool()
     build_type_config = state["build_type_config"]
     max_budget = state["max_token_budget"]
 
-    # Count total messages for F-05 tier scaling
-    total_msg_count = await pool.fetchval(
-        "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = $1",
-        uuid.UUID(state["conversation_id"]),
-    )
-    scaled_config = scale_tier_percentages(build_type_config, total_msg_count or 0)
-
-    tier3_pct = scaled_config.get("tier3_pct", 0.50)
-    tier3_budget = int(max_budget * tier3_pct)
+    # Deadband: floor percentage for tier 1 (live messages)
+    # Knowledge-enriched has a smaller floor to reserve budget for RAG layers
+    tier1_floor_pct = build_type_config.get("tier1_floor_pct", 0.15)
+    # Ceiling: remaining after RAG layer reservations
+    semantic_pct = build_type_config.get("semantic_retrieval_pct", 0)
+    kg_pct = build_type_config.get("knowledge_graph_pct", 0)
+    tier1_ceiling_pct = max(tier1_floor_pct, 1.0 - semantic_pct - kg_pct - 0.20)
+    tier1_pct = max(tier1_floor_pct, min(tier1_ceiling_pct, 0.50))
+    tier1_budget = int(max_budget * tier1_pct)
 
     # Calculate tokens already used by summaries
     summary_tokens = 0
-    if state.get("tier1_summary"):
-        summary_tokens += len(state["tier1_summary"]) // 4
+    if state.get("tier3_summary"):
+        summary_tokens += len(state["tier3_summary"]) // 4
     for s in state.get("tier2_summaries", []):
         summary_tokens += len(s) // 4
 
-    remaining_budget = max(0, min(tier3_budget, max_budget - summary_tokens))
+    remaining_budget = max(0, min(tier1_budget, max_budget - summary_tokens))
 
     # M-06: Avoid loading messages already covered by summaries
     highest_summarized_seq = await pool.fetchval(
@@ -325,13 +326,13 @@ async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -
         _log.warning("Semantic retrieval: embedding failed: %s", exc)
         return {"semantic_messages": []}
 
-    tier3_min_seq = (
+    tier1_min_seq = (
         state["recent_messages"][0]["sequence_number"]
         if state["recent_messages"]
         else None
     )
 
-    if tier3_min_seq is None:
+    if tier1_min_seq is None:
         return {"semantic_messages": []}
 
     semantic_budget = int(state["max_token_budget"] * semantic_pct)
@@ -354,7 +355,7 @@ async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -
             LIMIT $4
             """,
             uuid.UUID(state["conversation_id"]),
-            tier3_min_seq,
+            tier1_min_seq,
             vec_str,
             semantic_limit,
         )
@@ -452,9 +453,9 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
     cumulative_tokens = 0
     messages: list[dict] = []
 
-    # Tier 1: Archival summary
-    if state.get("tier1_summary"):
-        content = f"[Archival context]\n{state['tier1_summary']}"
+    # Tier 3 (archival summary) FIRST — most static
+    if state.get("tier3_summary"):
+        content = f"[Archival context]\n{state['tier3_summary']}"
         cumulative_tokens += _estimate_tokens(content)
         messages.append({"role": "system", "content": content})
 
@@ -516,7 +517,7 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
             cumulative_tokens += _estimate_tokens(content)
             messages.append({"role": "system", "content": content})
 
-    # Tier 3: Recent verbatim messages (M-08: newest first truncation)
+    # Tier 1 (live/recent) LAST — changes every turn (M-08: newest first truncation)
     truncated_recent_messages: list[dict] = []
     if state.get("recent_messages"):
         remaining = (
@@ -544,7 +545,7 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
     # R7-M10: Build context_tiers using truncated lists — semantic_messages should
     # only include the messages that actually made it into the context output.
     context_tiers = {
-        "archival_summary": state.get("tier1_summary"),
+        "archival_summary": state.get("tier3_summary"),
         "chunk_summaries": state.get("tier2_summaries", []),
         "semantic_messages": [
             {

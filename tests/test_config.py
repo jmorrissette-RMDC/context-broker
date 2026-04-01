@@ -50,7 +50,7 @@ class TestLoadConfig:
         config_data = {
             "log_level": "INFO",
             "llm": {"model": "gpt-4o-mini"},
-            "build_types": {"tiered-summary": {"tier3_pct": 0.72}},
+            "build_types": {"tiered-summary": {"tier3_pct": 0.02}},
         }
         config_file = tmp_path / "config.yml"
         config_file.write_text(yaml.dump(config_data))
@@ -147,7 +147,7 @@ class TestGetBuildTypeConfig:
     def test_returns_config(self, sample_config):
         """Returns the correct build type configuration dict."""
         bt = get_build_type_config(sample_config, "tiered-summary")
-        assert bt["tier3_pct"] == 0.72
+        assert bt["tier3_pct"] == 0.02
         assert bt["fallback_tokens"] == 8192
 
     def test_unknown_type_raises(self, sample_config):
@@ -157,7 +157,7 @@ class TestGetBuildTypeConfig:
 
     def test_percentages_sum_valid(self, sample_config):
         """Does not raise when tier percentages sum to <= 1.0."""
-        # tiered-summary: 0.08 + 0.20 + 0.72 = 1.0
+        # tiered-summary: 0.20 + 0.02 + 0.02 = 0.24
         bt = get_build_type_config(sample_config, "tiered-summary")
         assert bt is not None
 
@@ -166,8 +166,8 @@ class TestGetBuildTypeConfig:
         config = {
             "build_types": {
                 "bad-type": {
-                    "tier1_pct": 0.5,
-                    "tier2_pct": 0.4,
+                    "tier1_floor_pct": 0.5,
+                    "tier2_chunk_pct": 0.4,
                     "tier3_pct": 0.3,
                 },
             },
@@ -180,8 +180,8 @@ class TestGetBuildTypeConfig:
         config = {
             "build_types": {
                 "over-budget": {
-                    "tier1_pct": 0.1,
-                    "tier2_pct": 0.2,
+                    "tier1_floor_pct": 0.1,
+                    "tier2_chunk_pct": 0.2,
                     "tier3_pct": 0.3,
                     "knowledge_graph_pct": 0.25,
                     "semantic_retrieval_pct": 0.25,

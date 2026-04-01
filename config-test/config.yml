@@ -45,24 +45,32 @@ build_types:
     effective_utilization: 0.85
 
   tiered-summary:
-    tier1_pct: 0.08
-    tier2_pct: 0.20
-    tier3_pct: 0.72
+    tier1_floor_pct: 0.20
+    tier2_chunk_pct: 0.02
+    tier2_min_chunks: 3
+    tier2_max_chunks: 6
+    tier3_pct: 0.02
+    tier3_header_pct: 0.0025
     max_context_tokens: auto
     fallback_tokens: 8192
     effective_utilization: 0.85
     initial_lookback_multiplier: 3
+    max_lookback_tokens: 400000
 
   enriched:
-    tier1_pct: 0.05
-    tier2_pct: 0.15
-    tier3_pct: 0.50
+    tier1_floor_pct: 0.15
+    tier2_chunk_pct: 0.02
+    tier2_min_chunks: 3
+    tier2_max_chunks: 6
+    tier3_pct: 0.02
+    tier3_header_pct: 0.0025
     knowledge_graph_pct: 0.15
     semantic_retrieval_pct: 0.15
     max_context_tokens: auto
     fallback_tokens: 16000
     effective_utilization: 0.85
     initial_lookback_multiplier: 3
+    max_lookback_tokens: 400000
 
 packages:
   source: local

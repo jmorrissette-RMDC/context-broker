@@ -343,13 +343,13 @@ class TestKnowledgeExtractionQuality:
     """L-04: Evaluate quality of extracted memories."""
 
     def test_knowledge_extraction_quality(self, http_client):
-        """Get extracted memories via mem_search, have Sonnet judge accuracy."""
+        """Get extracted memories via knowledge_search, have Sonnet judge accuracy."""
         # Search for memories on a topic from Phase 1 data (MAD architecture,
         # context engineering). Avoids returning low-quality memories from
         # Phase K tool effect tests (file writes, config changes, schedules).
         resp = mcp_call(
             http_client,
-            "mem_search",
+            "knowledge_search",
             {"query": "MAD architecture context broker deployment infrastructure", "user_id": "default"},
         )
         assert resp.status_code == 200

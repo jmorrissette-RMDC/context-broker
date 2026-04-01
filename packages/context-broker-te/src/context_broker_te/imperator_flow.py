@@ -143,7 +143,7 @@ async def conv_search(query: str, limit: int = 5) -> str:
 
 
 @tool
-async def mem_search(query: str, user_id: str = "imperator", limit: int = 5) -> str:
+async def knowledge_search(query: str, user_id: str = "imperator", limit: int = 5) -> str:
     """Search extracted knowledge and memories from the knowledge graph.
 
     Use this when the user asks about facts, preferences, relationships,
@@ -182,7 +182,7 @@ async def mem_search(query: str, user_id: str = "imperator", limit: int = 5) -> 
 # ── Tool assembly ──────────────────────────────────────────────────────
 
 # Core tools: always available
-_core_tools: list = [conv_search, mem_search]
+_core_tools: list = [conv_search, knowledge_search]
 
 
 def _collect_tools(imperator_config: dict) -> list:
