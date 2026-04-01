@@ -30,6 +30,31 @@ def docker_exec(container: str, command: str, timeout: float = 60.0) -> str:
 
 
 def psql_query(query: str, timeout: float = 60.0) -> str:
+    """Run a psql query against the context broker database.
+
+    Tries direct subprocess psql first (works inside container or when
+    psql is available locally). Falls back to SSH + docker exec.
+    """
+    import shutil
+
+    # Try direct psql first (works inside container on the same Docker network)
+    if shutil.which("psql"):
+        try:
+            result = subprocess.run(
+                [
+                    "psql", "-h", "context-broker-postgres",
+                    "-U", "context_broker", "-d", "context_broker",
+                    "-t", "-A", "-c", query,
+                ],
+                capture_output=True, text=True, timeout=timeout,
+                env={**os.environ, "PGPASSWORD": os.environ.get("POSTGRES_PASSWORD", "contextbroker123")},
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+    # Fall back to SSH + docker exec
     escaped = query.replace('"', '\\"')
     remote_cmd = (
         "docker exec context-broker-postgres "

@@ -1,6 +1,6 @@
 import json
 import re
-import shutil
+
 import uuid
 
 import pytest
@@ -173,7 +173,6 @@ class TestMemoryAndKnowledge:
         else:
             pytest.fail("knowledge_add did not return a memory id/target for deletion")
 
-    @pytest.mark.skipif(not shutil.which("ssh"), reason="SSH not available")
     def test_mem0_embedding_persisted(self, cb_client):
         user_id = f"codex-user-{uuid.uuid4().hex[:8]}"
         content = f"User likes espresso ({uuid.uuid4().hex[:6]}). Remember this preference."
