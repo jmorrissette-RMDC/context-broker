@@ -656,13 +656,43 @@ async def run_full_compaction(state: StandardTieredAssemblyState) -> dict:
             _log.warning("Failed to renew lock TTL for archival consolidation: %s", exc)
 
     try:
-        response = await llm.ainvoke(messages)
-        archival_text = response.content
+        # Two-part tier 3: historical header + recent archival
+        # 1. Recent archival: consolidate the displaced tier 2 chunks
+        recent_archival_text = "\n\n".join(r["summary_text"] for r in to_consolidate)
+        recent_response = await llm.ainvoke([
+            SystemMessage(content=archival_prompt),
+            HumanMessage(content=f"Consolidate these chunk summaries into a recent archival summary:\n\n{recent_archival_text}"),
+        ])
+        recent_archival = recent_response.content
 
-        if archival_text:
+        # 2. Historical header: re-summarize existing header with high-level
+        #    summary of what's being displaced into recent archival
+        existing_header = ""
+        if existing_t3 and existing_t3["summary_text"]:
+            existing_header = existing_t3["summary_text"]
+
+        header_input = (
+            f"[Existing historical header]\n{existing_header}\n\n"
+            f"[New content being archived]\n{recent_archival}"
+            if existing_header
+            else f"[First archival — create historical header]\n{recent_archival}"
+        )
+        header_response = await llm.ainvoke([
+            SystemMessage(content=(
+                "You are maintaining a brief historical header for a long conversation. "
+                "The header records: origin date, participants, major topics, key decisions. "
+                "It should be very short — a few sentences at most. "
+                "Update the header with any new major topics or decisions from the archived content. "
+                "Do NOT reproduce the archived content — just update the header facts."
+            )),
+            HumanMessage(content=header_input),
+        ])
+        header_text = header_response.content
+
+        if recent_archival and header_text:
             async with pool.acquire() as conn:
                 async with conn.transaction():
-                    # Deactivate existing tier 3 archival
+                    # Deactivate existing tier 3 archival (both header and recent)
                     await conn.execute(
                         """
                         UPDATE conversation_summaries
@@ -683,7 +713,22 @@ async def run_full_compaction(state: StandardTieredAssemblyState) -> dict:
                         consolidated_ids,
                     )
 
-                    # Insert new tier 3 archival summary
+                    # Insert historical header (seq 0 to 0 — always first)
+                    await conn.execute(
+                        """
+                        INSERT INTO conversation_summaries
+                            (conversation_id, context_window_id, summary_text, tier,
+                             summarizes_from_seq, summarizes_to_seq, message_count,
+                             summarized_by_model)
+                        VALUES ($1, $2, $3, 3, 0, 0, 0, $4)
+                        """,
+                        uuid.UUID(state["conversation_id"]),
+                        uuid.UUID(state["context_window_id"]),
+                        header_text,
+                        llm_config.get("model", "unknown"),
+                    )
+
+                    # Insert recent archival (covers the consolidated chunk range)
                     await conn.execute(
                         """
                         INSERT INTO conversation_summaries
@@ -694,12 +739,14 @@ async def run_full_compaction(state: StandardTieredAssemblyState) -> dict:
                         """,
                         uuid.UUID(state["conversation_id"]),
                         uuid.UUID(state["context_window_id"]),
-                        archival_text,
+                        recent_archival,
                         to_consolidate[0]["summarizes_from_seq"],
                         to_consolidate[-1]["summarizes_to_seq"],
                         sum(r.get("message_count") or 0 for r in to_consolidate),
                         llm_config.get("model", "unknown"),
                     )
+
+            archival_text = f"{header_text}\n\n{recent_archival}"
 
             _log.info(
                 "Full compaction: consolidated %d tier 2 chunks into tier 3 for window=%s",
