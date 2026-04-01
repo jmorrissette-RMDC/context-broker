@@ -828,9 +828,9 @@ def _get_tool_list() -> list[dict]:
             "description": "Retrieve relevant memories formatted for prompt injection",
             "inputSchema": {
                 "type": "object",
-                "required": ["user_prompt", "user_id"],
+                "required": ["query", "user_id"],
                 "properties": {
-                    "user_prompt": {"type": "string"},
+                    "query": {"type": "string"},
                     "user_id": {"type": "string"},
                     "limit": {"type": "integer", "default": 5},
                 },

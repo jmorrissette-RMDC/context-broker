@@ -272,6 +272,11 @@ class TestStateFilePersistence:
     def test_compose_file_has_named_volume_for_data(self):
         """docker-compose.yml mounts /data as a named volume, not bind mount."""
         compose_path = Path(__file__).resolve().parents[3] / "docker-compose.yml"
+        if not compose_path.exists():
+            pytest.skip(
+                f"docker-compose.yml not found at {compose_path} — "
+                "test must run from the repo root, not inside a container"
+            )
         content = compose_path.read_text()
 
         # Named volume format: "volume-name:/data" (no ./ prefix)

@@ -7,6 +7,7 @@ These tests run against the ACTUAL deployed Context Broker on irina
 Run with:  pytest tests/test_e2e_*.py tests/test_integration_*.py -m "e2e or integration"
 """
 
+import os
 import uuid
 
 import httpx
@@ -16,7 +17,7 @@ import pytest
 # Constants
 # ---------------------------------------------------------------------------
 
-BASE_URL = "http://192.168.1.110:8080"
+BASE_URL = os.environ.get("CB_BASE_URL", "http://192.168.1.110:8080")
 MCP_URL = f"{BASE_URL}/mcp"
 CHAT_URL = f"{BASE_URL}/v1/chat/completions"
 HEALTH_URL = f"{BASE_URL}/health"
