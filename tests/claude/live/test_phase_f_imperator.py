@@ -57,8 +57,8 @@ class TestImperatorTurns:
         self, http_client, imperator_turns, conversation_history, turn_responses
     ):
         """Run all turns once (class-scoped) so individual tests can inspect."""
-        if turn_responses:
-            # Already ran
+        if len(turn_responses) >= len(imperator_turns):
+            # Already ran all turns
             return
 
         for i, turn in enumerate(imperator_turns):
