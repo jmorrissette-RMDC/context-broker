@@ -636,6 +636,17 @@ _wrapper_instance: Optional[QualityWrapper] = None
 _wrapper_lock: Optional[asyncio.Lock] = None
 
 
+def reset_quality_wrapper() -> None:
+    """Invalidate the QualityWrapper singleton so next call creates a fresh one.
+
+    Called when the underlying Mem0 client or DB pool is recreated to
+    prevent the wrapper from holding stale references.
+    """
+    global _wrapper_instance
+    _wrapper_instance = None
+    _log.info("QualityWrapper invalidated — will recreate on next call")
+
+
 async def get_quality_wrapper(config: Optional[dict] = None) -> QualityWrapper:
     """Get or create the singleton QualityWrapper instance."""
     global _wrapper_instance, _wrapper_lock
