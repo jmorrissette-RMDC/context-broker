@@ -102,6 +102,11 @@ def scan() -> dict[str, list[str]]:
                 if "imperator_builder" in registration:
                     _imperator_builder = registration["imperator_builder"]
 
+                # CEA: Register TE flows (e.g., ceac_enrichment) alongside AE flows.
+                # TE packages can now export a "flows" dict just like AE packages.
+                if "flows" in registration:
+                    _flow_builders.update(registration["flows"])
+
                 _package_metadata[ep.name] = {
                     "version": _get_package_version(ep.name),
                     "type": "te",

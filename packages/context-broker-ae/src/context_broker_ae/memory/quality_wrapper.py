@@ -224,25 +224,29 @@ class QualityWrapper:
             _log.warning("Invalid conversation_id for metadata: %s", conversation_id)
             return
 
-        await self.pool.execute(
-            """
-            INSERT INTO cea_quality_metadata
-                (target_type, target_id, durability, confidence, source_type,
-                 original_utterance, extraction_model, expires_at, user_id, conversation_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (target_type, target_id) DO NOTHING
-            """,
-            target_type,
-            target_id,
-            durability,
-            confidence,
-            source_type,
-            original_utterance,
-            extraction_model,
-            expires_at,
-            user_id,
-            conv_uuid,
-        )
+        try:
+            await self.pool.execute(
+                """
+                INSERT INTO cea_quality_metadata
+                    (target_type, target_id, durability, confidence, source_type,
+                     original_utterance, extraction_model, expires_at, user_id, conversation_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                ON CONFLICT (target_type, target_id) DO NOTHING
+                """,
+                target_type,
+                target_id,
+                durability,
+                confidence,
+                source_type,
+                original_utterance,
+                extraction_model,
+                expires_at,
+                user_id,
+                conv_uuid,
+            )
+        except asyncpg.UniqueViolationError:
+            # Natural-key dedup index collision under concurrent extraction — safe to ignore
+            _log.debug("Metadata natural-key collision (concurrent extraction): %s/%s", target_type, target_id)
 
     # ------------------------------------------------------------------
     # Read side

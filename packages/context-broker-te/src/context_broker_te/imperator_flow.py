@@ -67,6 +67,7 @@ class ImperatorState(TypedDict):
     error: Optional[str]
     iteration_count: int
     _user_message_stored: Optional[bool]  # V2: set by agent_node when get_context stores the user msg
+    _streaming: Optional[bool]  # Set by streaming route to use streaming-enabled LLM
 
 
 # ── Core search tools (depend on AE flow singletons) ──────────────────
@@ -406,6 +407,61 @@ async def init_context_node(state: ImperatorState) -> dict:
         except (ValueError, RuntimeError, OSError) as exc:
             _log.warning("Failed to load context via get_context: %s", exc)
 
+    # CEA: Optional CEAc enrichment (REQ-CEA-C01).
+    # If cea.ceac.enabled is true, run the CEAc enrichment subgraph to
+    # search knowledge and inject enriched context into the prompt.
+    cea_config = config.get("cea", {}).get("ceac", {})
+    if cea_config.get("enabled") and context_messages and user_query:
+        try:
+            from context_broker_te.cea_enrichment_flow import build_ceac_enrichment_flow
+
+            # Build tool callables that route through the AE dispatch
+            async def _search_fn(query, user_id=None, limit=10, **kwargs):
+                return await ctx.dispatch_tool(
+                    "knowledge_search",
+                    {"query": query, "user_id": user_id, "limit": limit},
+                    config,
+                    None,
+                )
+
+            async def _feedback_fn(target_type, target_id, event_type, agent_id, context=None, **kwargs):
+                result = await ctx.dispatch_tool(
+                    "knowledge_feedback",
+                    {
+                        "target_type": target_type,
+                        "target_id": target_id,
+                        "event_type": event_type,
+                        "agent_id": agent_id,
+                        "context": context,
+                    },
+                    config,
+                    None,
+                )
+                return result.get("status") == "recorded"
+
+            ceac_flow = build_ceac_enrichment_flow()
+            ceac_result = await ceac_flow.ainvoke({
+                "tiers": context_messages,
+                "query": user_query,
+                "user_id": imperator_cfg.get("user_id"),
+                "search_fn": _search_fn,
+                "feedback_fn": _feedback_fn,
+                "search_results": [],
+                "search_queries": [],
+                "ranked_results": [],
+                "enriched_context": "",
+                "feedback_events": [],
+                "iteration_count": 0,
+                "config": config,
+            })
+
+            enriched = ceac_result.get("enriched_context", "")
+            if enriched and enriched.strip():
+                history_messages.append(SystemMessage(content=enriched))
+                _log.info("CEAc enrichment injected (%d chars)", len(enriched))
+        except (ImportError, RuntimeError, ValueError, OSError) as exc:
+            _log.warning("CEAc enrichment failed (continuing without): %s", exc)
+
     result = {}
 
     # V2: Flag that user message was stored by get_context
@@ -443,8 +499,17 @@ async def llm_call_node(state: ImperatorState) -> dict:
 
     # R7-m14: Use the pre-bound LLM from graph compilation.
     # Falls back to runtime binding if _prebound_llm is not available (e.g., tests).
-    llm_with_tools = _prebound_llm
-    if llm_with_tools is None:
+    # When _streaming is set, use a streaming-enabled LLM for astream_events
+    # to produce on_chat_model_stream events. Non-streaming (default) avoids
+    # "No generations found in stream" errors from providers on tool-call-only turns.
+    if state.get("_streaming"):
+        imperator_config = config.get("imperator", {})
+        active_tools = _collect_tools(imperator_config)
+        llm = ctx.get_chat_model(config, role="imperator", streaming=True)
+        llm_with_tools = llm.bind_tools(active_tools)
+    elif _prebound_llm is not None:
+        llm_with_tools = _prebound_llm
+    else:
         imperator_config = config.get("imperator", {})
         active_tools = _collect_tools(imperator_config)
         llm = ctx.get_chat_model(config, role="imperator")
@@ -670,7 +735,12 @@ async def store_assistant_message(state: ImperatorState) -> dict:
         state.get("config", {}).get("imperator", {}).get("_request_user", "unknown")
     )
 
-    if conversation_id and response_text:
+    # Do not persist fallback error messages — they poison the conversation
+    # history and cause a cascade where every subsequent call also fails
+    # because the LLM sees a history full of error responses.
+    is_fallback = response_text.startswith("I was unable to generate")
+
+    if conversation_id and response_text and not is_fallback:
         try:
             ctx = get_ctx()
             await ctx.dispatch_tool(
