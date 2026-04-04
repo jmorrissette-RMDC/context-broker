@@ -239,7 +239,7 @@ async def dispatch_results(state: CEAsExtractionState) -> dict:
         original_utterance = fact.get("original_utterance", "")
         expires_at = resolve_temporal(fact.get("expires_at"), extraction_date)
 
-        memory_id = await wrapper.add(
+        add_result = await wrapper.add(
             content=content,
             user_id=user_id,
             conversation_id=conversation_id,
@@ -247,21 +247,42 @@ async def dispatch_results(state: CEAsExtractionState) -> dict:
             dedup_utterance=original_utterance,
         )
 
+        memory_id = add_result.get("memory_id")
         if not memory_id:
             continue
 
+        durability = float(fact.get("durability", 0.5))
+        confidence = float(fact.get("confidence", 0.5))
+        source_type = fact.get("source_type", "observation")
+
+        # Write quality metadata for the vector fact
         await wrapper.write_metadata(
             target_type="fact",
             target_id=memory_id,
-            durability=float(fact.get("durability", 0.5)),
-            confidence=float(fact.get("confidence", 0.5)),
-            source_type=fact.get("source_type", "observation"),
+            durability=durability,
+            confidence=confidence,
+            source_type=source_type,
             original_utterance=original_utterance,
             extraction_model=extraction_model,
             expires_at=expires_at,
             user_id=user_id,
             conversation_id=conversation_id,
         )
+
+        # Write quality metadata for any graph relations created by Mem0 (REQ-CEA-Q01)
+        for rel_id in add_result.get("relation_ids", []):
+            await wrapper.write_metadata(
+                target_type="relation",
+                target_id=rel_id,
+                durability=durability,
+                confidence=confidence,
+                source_type=source_type,
+                original_utterance=original_utterance,
+                extraction_model=extraction_model,
+                expires_at=expires_at,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
 
         if relationship == "NEW":
             counts["new"] += 1

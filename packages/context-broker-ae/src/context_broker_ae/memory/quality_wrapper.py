@@ -135,13 +135,15 @@ class QualityWrapper:
         metadata: Optional[dict] = None,
         skip_graph: bool = False,
         dedup_utterance: str = "",
-    ) -> Optional[str]:
+    ) -> dict:
         """Add a fact through Mem0 with idempotent dedup (REQ-CEA-A03).
 
-        Returns the Mem0 memory ID, or None if rejected or duplicate.
+        Returns {"memory_id": str, "relation_ids": list[str]} on success,
+        or {"memory_id": None, "relation_ids": []} if rejected or duplicate.
         """
+        _empty = {"memory_id": None, "relation_ids": []}
         if self._apply_rejection_rules(content):
-            return None
+            return _empty
 
         # Idempotency: check if this exact fact already exists by its natural key.
         # The composite unique index on (user_id, conversation_id, original_utterance)
@@ -163,7 +165,7 @@ class QualityWrapper:
             )
             if existing:
                 _log.debug("Duplicate fact detected (natural key match): %s", content[:50])
-                return None
+                return _empty
 
         await self._maybe_cleanup()
 
@@ -189,18 +191,26 @@ class QualityWrapper:
 
         if not memory_id:
             _log.warning("Mem0 add returned no memory ID for content: %s", content[:50])
-            return None
+            return _empty
 
-        # Capture graph relation IDs if Mem0 returned them (fix #9)
+        # Capture graph relation IDs from Mem0's graph extraction (REQ-CEA-S02).
+        # MemoryGraph.add() now returns elementId(r) for each created/merged relation.
+        relation_ids = []
         if isinstance(result, dict) and result.get("relations"):
-            for rel in result["relations"]:
-                rel_id = rel.get("relation_id")
-                if rel_id:
-                    # Store placeholder metadata for the graph relation
-                    # Full metadata written by dispatch_results in CEAs flow
-                    _log.debug("Graph relation created: %s", rel_id)
+            graph_result = result["relations"]
+            if isinstance(graph_result, dict):
+                for entity in graph_result.get("added_entities", []):
+                    if isinstance(entity, dict) and entity.get("relation_id"):
+                        relation_ids.append(entity["relation_id"])
+            elif isinstance(graph_result, list):
+                for item in graph_result:
+                    if isinstance(item, dict) and item.get("relation_id"):
+                        relation_ids.append(item["relation_id"])
 
-        return memory_id
+        if relation_ids:
+            _log.debug("Graph relations created: %s", relation_ids)
+
+        return {"memory_id": memory_id, "relation_ids": relation_ids}
 
     async def write_metadata(
         self,

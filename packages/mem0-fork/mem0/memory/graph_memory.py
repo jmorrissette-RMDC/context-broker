@@ -522,7 +522,7 @@ class MemoryGraph:
                     r.valid = true,
                     r.updated_at = timestamp(),
                     r.invalidated_at = null
-                RETURN source.name AS source, type(r) AS relationship, destination.name AS target
+                RETURN source.name AS source, type(r) AS relationship, destination.name AS target, elementId(r) AS relation_id
                 """
 
                 params = {
@@ -571,7 +571,7 @@ class MemoryGraph:
                     r.valid = true,
                     r.updated_at = timestamp(),
                     r.invalidated_at = null
-                RETURN source.name AS source, type(r) AS relationship, destination.name AS target
+                RETURN source.name AS source, type(r) AS relationship, destination.name AS target, elementId(r) AS relation_id
                 """
 
                 params = {
@@ -605,7 +605,7 @@ class MemoryGraph:
                     r.valid = true,
                     r.updated_at = timestamp(),
                     r.invalidated_at = null
-                RETURN source.name AS source, type(r) AS relationship, destination.name AS target
+                RETURN source.name AS source, type(r) AS relationship, destination.name AS target, elementId(r) AS relation_id
                 """
 
                 params = {
@@ -659,7 +659,7 @@ class MemoryGraph:
                     r.valid = true,
                     r.updated_at = timestamp(),
                     r.invalidated_at = null
-                RETURN source.name AS source, type(r) AS relationship, destination.name AS target
+                RETURN source.name AS source, type(r) AS relationship, destination.name AS target, elementId(r) AS relation_id
                 """
 
                 params = {

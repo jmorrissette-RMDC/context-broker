@@ -733,14 +733,15 @@ async def _dispatch_tool_inner(
         validated = KnowledgeAddInput(**arguments)
         from context_broker_ae.memory.quality_wrapper import get_quality_wrapper
         wrapper = await get_quality_wrapper(config)
-        memory_id = await wrapper.add(
+        add_result = await wrapper.add(
             content=validated.content,
             user_id=validated.user_id,
             conversation_id=validated.conversation_id or "",
         )
-        if memory_id is None:
+        memory_id = add_result.get("memory_id")
+        if not memory_id:
             return {"status": "rejected", "reason": "quality gate"}
-        # Write metadata if provided (fix #9: knowledge_add writes metadata)
+        # Write metadata if provided
         if validated.durability is not None or validated.confidence is not None:
             await wrapper.write_metadata(
                 target_type="fact",
