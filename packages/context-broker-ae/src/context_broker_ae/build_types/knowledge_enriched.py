@@ -234,23 +234,17 @@ async def ke_load_summaries(state: KnowledgeEnrichedRetrievalState) -> dict:
 async def ke_load_recent_messages(state: KnowledgeEnrichedRetrievalState) -> dict:
     """Load tier 1 (recent/live) verbatim messages within the remaining token budget.
 
-    Uses deadband config: tier1_floor_pct sets the minimum percentage for live
-    messages. The ceiling is lower than standard-tiered because knowledge-enriched
-    reserves budget for RAG layers (semantic_retrieval_pct and knowledge_graph_pct).
+    CEA: semantic_retrieval_pct and knowledge_graph_pct are deprecated. Server-side
+    enrichment is removed; CEAc handles enrichment client-side. The tier-1 budget
+    calculation no longer reserves space for RAG layers — same logic as standard-tiered.
     """
     pool = get_pg_pool()
     build_type_config = state["build_type_config"]
     max_budget = state["max_token_budget"]
 
-    # Deadband: floor percentage for tier 1 (live messages)
-    # Knowledge-enriched has a smaller floor to reserve budget for RAG layers
-    tier1_floor_pct = build_type_config.get("tier1_floor_pct", 0.15)
-    # Ceiling: remaining after RAG layer reservations
-    semantic_pct = build_type_config.get("semantic_retrieval_pct", 0)
-    kg_pct = build_type_config.get("knowledge_graph_pct", 0)
-    tier1_ceiling_pct = max(tier1_floor_pct, 1.0 - semantic_pct - kg_pct - 0.20)
-    tier1_pct = max(tier1_floor_pct, min(tier1_ceiling_pct, 0.50))
-    tier1_budget = int(max_budget * tier1_pct)
+    # Deadband: same as standard-tiered now that server-side RAG is removed
+    tier1_floor_pct = build_type_config.get("tier1_floor_pct", 0.20)
+    tier1_budget = int(max_budget * tier1_floor_pct)
 
     # Calculate tokens already used by summaries
     summary_tokens = 0
@@ -547,7 +541,7 @@ def ke_route_after_wait(state: KnowledgeEnrichedRetrievalState) -> str:
 def ke_route_after_semantic(state: KnowledgeEnrichedRetrievalState) -> str:
     # CEA: Dead code — retained only if someone re-enables server-side injection.
     build_type_config = state.get("build_type_config", {})
-    needs_kg = build_type_config.get("knowledge_graph_pct", 0) > 0
+    needs_kg = False  # CEA: deprecated, server-side KG injection removed
     if needs_kg:
         return "ke_inject_knowledge_graph"
     return "ke_assemble_context"
