@@ -1,0 +1,2564 @@
+2026-04-04T14:17:05.823378Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(reqwest::Error { kind: Status(404, None), url: "http://192.168.1.120:9222/" })
+OpenAI Codex v0.93.0 (research preview)
+--------
+workdir: C:\Users\j\projects\Joshua26
+model: gpt-5.2-codex
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: auto
+session id: 019d58da-c60a-7501-8600-a4ed6e7b9de1
+--------
+user
+Post-code 3-CLI discovery audit for the Context Broker CEA implementation (SDLC-02 Step 8, WPR-103 S1a).
+
+Read the ENTIRE Context Broker codebase at state_4_development/context_broker_pmad/. Read every file in:
+- app/ (all .py files)
+- packages/context-broker-ae/src/context_broker_ae/ (all .py files)
+- packages/context-broker-te/src/context_broker_te/ (all .py files)
+- packages/mem0-fork/mem0/memory/ (main.py, graph_memory.py, quality_gate.py, expiration.py)
+- postgres/init.sql
+- config/prompts/ (all .md files)
+- config-test/prompts/ (all .md files)
+- alerter/ (all .py files)
+- log_shipper/ (all .py files)
+
+List EVERY capability that requires test coverage:
+
+1. **Functions** -- every public function, its purpose, its inputs/outputs, its error paths
+2. **MCP endpoints/tools** -- every tool name, its schema, its dispatch path, its error handling
+3. **Pipeline stages** -- every StateGraph node in every flow, what it does, what can go wrong
+4. **Worker behaviors** -- every background worker loop, its polling logic, its retry behavior
+5. **Configuration options** -- every config parameter, its default, what happens with invalid values
+6. **Error paths** -- every try/except, every degradation path, every failure mode
+7. **Database operations** -- every SQL query, every migration, every constraint
+8. **Integration points** -- every cross-module call, every external service interaction
+
+For each capability, state:
+- What it does
+- What tests are needed (success path, error path, edge cases)
+- Whether existing tests cover it (check tests/claude/ directory)
+
+Focus especially on NEW code from the CEA implementation:
+- quality_wrapper.py
+- cea_extraction_flow.py
+- cea_enrichment_flow.py
+- migration 023/024
+- MCP tool changes (knowledge_search, knowledge_add, knowledge_list, knowledge_feedback)
+- stategraph_registry.py TE flows scanning
+- imperator_flow.py CEAc integration
+- graph_memory.py elementId changes
+- main.py (Mem0 fork) side-channel removal
+
+Do NOT create, modify, or delete any files except the output file. Do NOT run any commands that modify the filesystem.
+
+Write your audit to state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md using the write tool.
+mcp: malory starting
+mcp: malory failed: MCP client for `malory` failed to start: MCP startup failed: handshaking with MCP server failed: Send message error Transport [rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<reqwest::async_impl::client::Client>>] error: Client error: HTTP status client error (404 Not Found) for url (http://192.168.1.120:9222/), when send initialize request
+mcp startup: failed: malory
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-ChildItem -Path . -Force' in C:\Users\j\projects\Joshua26 succeeded in 350ms:
+
+
+    Directory: C:\Users\j\projects\Joshua26
+
+
+Mode                 LastWriteTime         Length Name                                                                 
+----                 -------------         ------ ----                                                                 
+d-----          4/1/2026   2:56 AM                .aider.tags.cache.v4                                                 
+d-----         2/26/2026  12:32 AM                .claude                                                              
+d-----         2/28/2026  11:53 PM                .cursor                                                              
+d-----          4/4/2026  10:05 AM                .gemini-temp                                                         
+d--h--          4/4/2026   2:17 AM                .git                                                                 
+d-----         3/10/2026  12:12 AM                .github                                                              
+d-----          4/1/2026   1:26 AM                .grok                                                                
+d-----         2/22/2026   9:16 PM                .ruff_cache                                                          
+d-----         3/31/2026   9:41 AM                docs                                                                 
+d-----         2/17/2026   5:18 PM                lib                                                                  
+d-----         3/28/2026   8:34 PM                mads                                                                 
+d-----         3/31/2026  12:01 PM                scripts                                                              
+d-----         3/30/2026   5:12 PM                state_4_development                                                  
+Plan update
+Large audit across multiple directories; plan to inventory files, read, map capabilities, then write audit.
+  → Inventory required files and existing tests/claude coverage targets
+  • Read code/prompt/sql files and extract capabilities + error paths
+  • Compile audit with test needs and coverage notes; write output file
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files -g "*.py" state_4_development/context_broker_pmad/app state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te state_4_development/context_broker_pmad/alerter state_4_development/context_broker_pmad/log_shipper' in C:\Users\j\projects\Joshua26 succeeded in 194ms:
+state_4_development/context_broker_pmad/log_shipper\shipper.py
+state_4_development/context_broker_pmad/app\logging_setup.py
+state_4_development/context_broker_pmad/app\__init__.py
+state_4_development/context_broker_pmad/alerter\alerter.py
+state_4_development/context_broker_pmad/app\config.py
+state_4_development/context_broker_pmad/app\budget.py
+state_4_development/context_broker_pmad/app\database.py
+state_4_development/context_broker_pmad/app\imperator\__init__.py
+state_4_development/context_broker_pmad/app\imperator\state_manager.py
+state_4_development/context_broker_pmad/app\prompt_loader.py
+state_4_development/context_broker_pmad/app\models.py
+state_4_development/context_broker_pmad/app\migrations.py
+state_4_development/context_broker_pmad/app\metrics_registry.py
+state_4_development/context_broker_pmad/app\main.py
+state_4_development/context_broker_pmad/app\stategraph_registry.py
+state_4_development/context_broker_pmad/app\workers\__init__.py
+state_4_development/context_broker_pmad/app\workers\db_worker.py
+state_4_development/context_broker_pmad/app\utils.py
+state_4_development/context_broker_pmad/app\token_budget.py
+state_4_development/context_broker_pmad/app\flows\__init__.py
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-ChildItem -Path state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory -Force' in C:\Users\j\projects\Joshua26 succeeded in 239ms:
+
+
+    Directory: C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\packages\mem0-fork\mem0\memory
+
+
+Mode                 LastWriteTime         Length Name                                                                 
+----                 -------------         ------ ----                                                                 
+d-----          4/2/2026   9:06 AM                __pycache__                                                          
+-a----          4/1/2026  11:10 PM          24785 apache_age_memory.py                                                 
+-a----          4/1/2026   4:39 PM           1315 base.py                                                              
+-a----          4/1/2026   5:24 PM           9267 expiration.py                                                        
+-a----          4/4/2026   2:14 AM          34029 graph_memory.py                                                      
+-a----          4/1/2026  11:10 PM          31711 kuzu_memory.py                                                       
+-a----          4/4/2026   2:10 AM         108719 main.py                                                              
+-a----          4/1/2026  11:10 PM          30975 memgraph_memory.py                                                   
+-a----          4/1/2026   4:57 PM           9694 quality_gate.py                                                      
+-a----          4/1/2026   4:39 PM           1680 setup.py                                                             
+-a----          4/1/2026   4:39 PM           7675 storage.py                                                           
+-a----          4/1/2026   4:39 PM           3539 telemetry.py                                                         
+-a----          4/1/2026  11:10 PM           8736 utils.py                                                             
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files -g "*.md" state_4_development/context_broker_pmad/config/prompts state_4_development/context_broker_pmad/config-test/prompts' in C:\Users\j\projects\Joshua26 succeeded in 200ms:
+state_4_development/context_broker_pmad/config/prompts\memory_extraction.md
+state_4_development/context_broker_pmad/config/prompts\imperator_identity.md
+state_4_development/context_broker_pmad/config/prompts\chunk_summarization.md
+state_4_development/context_broker_pmad/config/prompts\cea_vector_extraction.md
+state_4_development/context_broker_pmad/config/prompts\cea_output.md
+state_4_development/context_broker_pmad/config/prompts\cea_graph_extraction.md
+state_4_development/context_broker_pmad/config/prompts\archival_consolidation.md
+state_4_development/context_broker_pmad/config-test/prompts\memory_extraction.md
+state_4_development/context_broker_pmad/config-test/prompts\imperator_identity.md
+state_4_development/context_broker_pmad/config-test/prompts\chunk_summarization.md
+state_4_development/context_broker_pmad/config-test/prompts\cea_vector_extraction.md
+state_4_development/context_broker_pmad/config-test/prompts\cea_output.md
+state_4_development/context_broker_pmad/config-test/prompts\cea_graph_extraction.md
+state_4_development/context_broker_pmad/config-test/prompts\archival_consolidation.md
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-ChildItem -Path state_4_development/context_broker_pmad/postgres -Force' in C:\Users\j\projects\Joshua26 succeeded in 235ms:
+
+
+    Directory: C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\postgres
+
+
+Mode                 LastWriteTime         Length Name                                                                 
+----                 -------------         ------ ----                                                                 
+-a----         3/31/2026   1:53 PM           7049 init.sql                                                             
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-ChildItem -Path state_4_development/context_broker_pmad/app/migrations -Force' in C:\Users\j\projects\Joshua26 exited 1 in 282ms:
+Get-ChildItem : Cannot find path 'C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\app\migrations' 
+because it does not exist.
+At line:2 char:1
++ Get-ChildItem -Path state_4_development/context_broker_pmad/app/migra ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (C:\Users\j\proj...\app\migrations:String) [Get-ChildItem], ItemNotFound 
+   Exception
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetChildItemCommand
+ 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files -g "*023*" -g "*024*" state_4_development/context_broker_pmad' in C:\Users\j\projects\Joshua26 exited 1 in 196ms:
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-ChildItem -Path state_4_development/context_broker_pmad/tests/claude -Recurse -Force' in C:\Users\j\projects\Joshua26 succeeded in 545ms:
+
+
+    Directory: C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\tests\claude
+
+
+Mode                 LastWriteTime         Length Name                                                                 
+----                 -------------         ------ ----                                                                 
+d-----          4/2/2026   3:20 PM                live                                                                 
+d-----         3/31/2026   8:40 PM                test_alerter                                                         
+d-----         3/31/2026  11:45 PM                test_assembly                                                        
+d-----         3/31/2026   8:40 PM                test_config                                                          
+d-----         3/31/2026   8:40 PM                test_database                                                        
+d-----         3/31/2026   8:40 PM                test_imperator                                                       
+d-----         3/31/2026   2:26 PM                test_lifecycle                                                       
+d-----         3/31/2026   8:40 PM                test_logging                                                         
+d-----         3/31/2026   8:40 PM                test_log_shipper                                                     
+d-----         3/31/2026   8:40 PM                test_memory                                                          
+d-----         3/31/2026   8:40 PM                test_search                                                          
+d-----          4/1/2026   2:57 AM                test_state_manager                                                   
+d-----         3/31/2026   8:40 PM                test_tools                                                           
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/__init__.py' in C:\Users\j\projects\Joshua26 succeeded in 203ms:
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/logging_setup.py' in C:\Users\j\projects\Joshua26 succeeded in 216ms:
+"""
+Structured JSON logging for the Context Broker.
+
+All logs go to stdout in JSON format (one object per line).
+Log level is configurable via config.yml.
+"""
+
+import json
+import logging
+import sys
+from datetime import datetime, timezone
+
+
+class JsonFormatter(logging.Formatter):
+    """Format log records as single-line JSON objects."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry: dict = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/config.py' in C:\Users\j\projects\Joshua26 succeeded in 212ms:
+"""
+Configuration management for the Context Broker.
+
+Two config files per REQ-002 Â§7 (TE Configuration Separation):
+- AE config (/config/config.yml): infrastructure settings (database, workers, locks)
+- TE config (/config/te.yml): cognitive settings (inference, build types, tuning)
+
+AE config is read once at startup (cached, restart required for changes).
+TE config is read on each operation (hot-reloadable, no restart needed).
+"""
+
+import asyncio
+import hashlib
+import logging
+import os
+import threading
+from functools import lru_cache
+from typing import Any
+
+import yaml
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/budget.py' in C:\Users\j\projects\Joshua26 succeeded in 208ms:
+"""
+Token budget bucket management.
+
+Snaps requested budgets to standard buckets for efficient window sharing.
+Multiple agents with similar budgets share pre-built summaries instead of
+each triggering separate assembly work.
+"""
+
+# Standard buckets â€” doubling progression with 200K for common model sizes
+BUDGET_BUCKETS = [
+    4096,  # 4K
+    8192,  # 8K
+    16384,  # 16K
+    32768,  # 32K
+    65536,  # 64K
+    131072,  # 128K
+    204800,  # 200K (Anthropic Sonnet/Opus pre-1M)
+    262144,  # 256K
+    524288,  # 512K
+    1048576,  # 1M
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/database.py' in C:\Users\j\projects\Joshua26 succeeded in 208ms:
+"""
+Database connection management for the Context Broker.
+
+Manages asyncpg (PostgreSQL) connection pool. PostgreSQL is the only
+external database â€” it handles data storage, vector search (pgvector),
+job state (DB-driven workers), and advisory locks.
+"""
+
+import base64
+import logging
+import os
+from typing import Optional
+
+import asyncpg
+import httpx
+
+_log = logging.getLogger("context_broker.database")
+
+_pg_pool: Optional[asyncpg.Pool] = None
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/models.py' in C:\Users\j\projects\Joshua26 succeeded in 207ms:
+"""
+Pydantic models for request/response validation.
+
+All external inputs are validated through these models before
+reaching StateGraph flows.
+"""
+
+from typing import Any, Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field, model_validator
+
+# ============================================================
+# MCP Tool Input Models
+# ============================================================
+
+
+class CreateConversationInput(BaseModel):
+    """Input for conv_create_conversation."""
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/migrations.py' in C:\Users\j\projects\Joshua26 succeeded in 223ms:
+"""
+Database schema migration management.
+
+Applies pending migrations on startup. Migrations are forward-only
+and non-destructive. The application refuses to start if a migration
+cannot be safely applied.
+"""
+
+import logging
+from typing import Callable
+
+import asyncpg
+
+from app.database import get_pg_pool
+
+_log = logging.getLogger("context_broker.migrations")
+
+
+async def _migration_001(conn) -> None:
+    """Migration 1: Initial schema.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/metrics_registry.py' in C:\Users\j\projects\Joshua26 succeeded in 201ms:
+"""
+Prometheus metrics registry for the Context Broker.
+
+All metrics are defined here and imported by flows and routes.
+Metrics are incremented inside StateGraph nodes, not in route handlers.
+
+Memory note (TA-01): These metrics accumulate in process memory for the
+lifetime of the container. The prometheus_client library pre-allocates
+fixed-size bucket arrays per label combination, not per observation.
+Current cardinality: ~25 tools Ã— 2 statuses + ~5 job types Ã— 2 statuses
++ ~3 build types â‰ˆ 65 time series. Memory footprint is bounded at <1MB
+even after millions of requests. No eviction is needed at current scale.
+If high-cardinality labels are added in the future, revisit this.
+"""
+
+from prometheus_client import Counter, Histogram, Gauge
+
+# MCP tool request metrics
+MCP_REQUESTS = Counter(
+    "context_broker_mcp_requests_total",
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/main.py' in C:\Users\j\projects\Joshua26 succeeded in 205ms:
+"""
+Context Broker â€” ASGI application entry point.
+
+FastAPI application that wires together all routes, middleware,
+and lifecycle events. This file is transport only â€” all logic
+lives in StateGraph flows.
+"""
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
+import asyncpg
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.config import async_load_config, load_config, get_build_type_config, get_tuning
+from app.database import init_postgres, close_all_connections, get_pg_pool
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/stategraph_registry.py' in C:\Users\j\projects\Joshua26 succeeded in 206ms:
+"""
+StateGraph package registry â€” bootstrap kernel component.
+
+Discovers AE and TE packages via Python entry_points (REQ-001 Â§10.2).
+Follows the Kaiser pattern: importlib.metadata for discovery,
+sys.modules eviction for hot-reload without container restart.
+
+Entry point groups:
+  - context_broker.ae: AE packages (infrastructure StateGraphs)
+  - context_broker.te: TE packages (cognitive StateGraphs â€” Imperator)
+"""
+
+import importlib
+import importlib.metadata
+import logging
+import sys
+import threading
+from typing import Callable
+
+_log = logging.getLogger("context_broker.stategraph_registry")
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/prompt_loader.py' in C:\Users\j\projects\Joshua26 succeeded in 211ms:
+"""
+Prompt template loader.
+
+Loads externalized prompt templates from /config/prompts/.
+Templates are cached with mtime check â€” only re-read when the file changes (M-11).
+"""
+
+import asyncio
+import logging
+import os
+from pathlib import Path
+
+_log = logging.getLogger("context_broker.prompt_loader")
+
+PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR", "/config/prompts"))
+
+# Cache: name -> (mtime, content)
+_prompt_cache: dict[str, tuple[float, str]] = {}
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/token_budget.py' in C:\Users\j\projects\Joshua26 succeeded in 217ms:
+"""
+Token budget resolution for context windows.
+
+Resolves the max_context_tokens setting for a build type:
+- "auto": query the configured LLM provider's model list endpoint
+- explicit integer: use that value directly
+- caller override: takes precedence over build type default
+
+Token budget is resolved once at window creation and stored.
+"""
+
+import logging
+from typing import Optional
+
+import httpx
+
+from app.config import get_api_key
+
+_log = logging.getLogger("context_broker.token_budget")
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/utils.py' in C:\Users\j\projects\Joshua26 succeeded in 222ms:
+"""Shared utilities for the Context Broker."""
+
+import hashlib
+
+
+def stable_lock_id(key: str) -> int:
+    """Generate a deterministic positive bigint from a string key.
+
+    Used for Postgres advisory locks. Unlike Python's built-in hash(),
+    this produces the same value across different processes and restarts
+    (Python's hash() is randomized per process via PYTHONHASHSEED).
+    """
+    digest = hashlib.sha256(key.encode()).digest()
+    return int.from_bytes(digest[:8], "big") & 0x7FFFFFFFFFFFFFFF
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/imperator/state_manager.py' in C:\Users\j\projects\Joshua26 succeeded in 206ms:
+"""
+Imperator persistent state manager.
+
+Manages the Imperator's conversation_id across restarts.
+Reads/writes /data/imperator_state.json.
+
+On first boot: creates a new conversation, writes the ID.
+On subsequent boots: reads the ID and verifies it exists in the DB.
+If missing: creates a new conversation.
+
+Context windows are created automatically by get_context (D-03) â€”
+the state manager only tracks the conversation.
+"""
+
+import asyncio
+import json
+import logging
+import uuid
+from pathlib import Path
+from typing import Optional
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/workers/db_worker.py' in C:\Users\j\projects\Joshua26 succeeded in 202ms:
+"""
+Database-driven background worker for the Context Broker.
+
+Replaces Redis queues with direct database polling. The database IS
+the queue â€” messages with NULL embeddings need embedding, messages
+with memory_extracted=FALSE need extraction. No external queue system
+required.
+
+Three worker loops run concurrently:
+  - Embedding: polls for unembedded messages, processes in batches
+  - Extraction: polls for unextracted messages, sends to Mem0
+  - Assembly: triggered after embedding batches, checks for stale windows
+"""
+
+import asyncio
+import logging
+import time
+import uuid
+
+import asyncpg
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/health.py' in C:\Users\j\projects\Joshua26 succeeded in 209ms:
+"""
+Health check endpoint.
+
+Tests all backing service connections and returns aggregated status.
+The LangGraph container performs the actual dependency checks â€”
+nginx proxies the response without performing checks itself.
+"""
+
+import logging
+
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
+from app.config import async_load_config
+from app.stategraph_registry import get_flow_builder
+
+_log = logging.getLogger("context_broker.routes.health")
+
+router = APIRouter()
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/chat.py' in C:\Users\j\projects\Joshua26 succeeded in 204ms:
+"""
+OpenAI-compatible chat completions endpoint.
+
+Implements /v1/chat/completions following the OpenAI API specification.
+Routes to the Imperator StateGraph.
+Supports both streaming (SSE) and non-streaming responses.
+"""
+
+import json
+import logging
+import time
+import uuid
+from typing import AsyncGenerator
+
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from pydantic import ValidationError
+
+from app.config import async_load_config
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/mcp.py' in C:\Users\j\projects\Joshua26 succeeded in 211ms:
+"""
+MCP (Model Context Protocol) endpoint.
+
+Implements HTTP/SSE transport for MCP tool access.
+Routes tool calls to compiled StateGraph flows.
+
+Endpoints:
+  GET  /mcp          â€” Establish SSE session
+  POST /mcp          â€” Sessionless tool call or route to session
+  POST /mcp?sessionId=xxx â€” Route to existing session
+"""
+
+import asyncio
+import decimal
+import json
+import logging
+import time
+import uuid
+from collections import OrderedDict
+from typing import Any, AsyncGenerator
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/metrics.py' in C:\Users\j\projects\Joshua26 succeeded in 209ms:
+"""
+Prometheus metrics endpoint.
+
+Exposes metrics collected from StateGraph executions.
+Metrics are produced inside StateGraphs, not in route handlers.
+"""
+
+import logging
+
+from fastapi import APIRouter
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST
+
+from app.stategraph_registry import get_flow_builder
+
+_log = logging.getLogger("context_broker.routes.metrics")
+
+router = APIRouter()
+
+_metrics_flow = None
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/caller_identity.py' in C:\Users\j\projects\Joshua26 succeeded in 214ms:
+"""Resolve caller identity from HTTP requests.
+
+Used by both the OpenAI chat and MCP endpoints to determine who is
+sending messages. The resolved identity is used as the sender field
+on stored messages.
+
+Priority: user field from request body â†’ reverse DNS on source IP â†’ "unknown"
+"""
+
+import asyncio
+import functools
+import logging
+import socket
+
+from fastapi import Request
+
+_log = logging.getLogger("context_broker.routes.caller_identity")
+
+
+@functools.lru_cache(maxsize=256)
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/__init__.py' in C:\Users\j\projects\Joshua26 succeeded in 204ms:
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/flows/__init__.py' in C:\Users\j\projects\Joshua26 succeeded in 204ms:
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/flows/tool_dispatch.py' in C:\Users\j\projects\Joshua26 succeeded in 208ms:
+"""
+Tool dispatch â€” routes MCP tool calls to compiled StateGraph flows.
+
+All tool logic lives in StateGraph flows loaded dynamically from AE/TE
+packages via entry_points (REQ-001 Â§10). This module is the thin
+kernel-side routing layer that maps tool names to their flows using
+the stategraph_registry.
+"""
+
+import logging
+import time
+from typing import Any
+
+from app.flows.build_type_registry import get_retrieval_graph
+from app.metrics_registry import MCP_REQUESTS, MCP_REQUEST_DURATION
+from app.stategraph_registry import get_flow_builder, get_imperator_builder
+from app.models import (
+    GetContextInput,
+    ImperatorChatInput,
+    CreateContextWindowInput,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/flows/install_stategraph.py' in C:\Users\j\projects\Joshua26 succeeded in 216ms:
+"""
+install_stategraph â€” runtime StateGraph package installation (REQ-001 Â§10.1).
+
+MCP tool that installs AE or TE packages at runtime without container restart.
+Uses pip install --user with the configured package source (local/pypi/devpi).
+After installation, rescans entry_points to discover and register new StateGraphs.
+"""
+
+import asyncio
+import logging
+import os
+import subprocess
+
+_log = logging.getLogger("context_broker.flows.install_stategraph")
+
+
+async def install_stategraph(
+    package_name: str,
+    version: str | None = None,
+) -> dict:
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/flows/imperator_wrapper.py' in C:\Users\j\projects\Joshua26 succeeded in 201ms:
+"""
+Imperator flow wrapper â€” kernel-side metrics and lifecycle management.
+
+Looks up the TE's Imperator from the stategraph_registry and invokes
+it with metrics recording. This is the kernel's interface to the TE.
+
+Per REQ-001 Â§6.4: metrics produced inside the flow layer, not route handlers.
+"""
+
+import logging
+import time
+import uuid
+from typing import AsyncGenerator
+
+from app.metrics_registry import CHAT_REQUESTS, CHAT_REQUEST_DURATION
+
+_log = logging.getLogger("context_broker.flows.imperator_wrapper")
+
+# Lazy singleton â€” rebuilt on install_stategraph() or TE config change.
+_imperator_flow = None
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/flows/contracts.py' in C:\Users\j\projects\Joshua26 succeeded in 204ms:
+"""
+Standard input/output contracts for build type graphs (ARCH-18).
+
+Defines the TypedDict contracts that all assembly and retrieval graphs
+must accept as input and produce as output. This decouples callers
+(arq_worker, tool_dispatch) from specific build type implementations.
+"""
+
+from typing import Optional
+
+from typing_extensions import TypedDict
+
+
+class AssemblyInput(TypedDict):
+    """Standard input contract for assembly graphs."""
+
+    context_window_id: str
+    conversation_id: str
+    config: dict
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/flows/build_type_registry.py' in C:\Users\j\projects\Joshua26 succeeded in 207ms:
+"""
+Build Type Registry (ARCH-18).
+
+Maps build type names to their (assembly_graph, retrieval_graph) pairs.
+Graphs are compiled lazily on first use and cached thereafter.
+
+CR-A04: Graph compilation uses asyncio.to_thread() to avoid blocking the
+event loop with the synchronous threading.Lock + builder() call.
+
+Usage:
+    from app.flows.build_type_registry import get_assembly_graph, get_retrieval_graph
+
+    graph = await get_assembly_graph("tiered-summary")
+    result = await graph.ainvoke(input_state)
+"""
+
+import asyncio
+import logging
+import threading
+from typing import Any, Callable
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/flows/base_contract.py' in C:\Users\j\projects\Joshua26 succeeded in 212ms:
+"""
+AE/TE Base Contract (REQ-001 Â§13).
+
+Defines the standard interface between any AE and any TE,
+enabling TE portability. TE packages depend on these types
+but not on any specific AE implementation.
+
+See also contracts.py for build type graph contracts (ARCH-18).
+"""
+
+from typing import Annotated, Callable, Optional
+
+from langchain_core.messages import AnyMessage
+from langgraph.graph.message import add_messages
+from typing_extensions import TypedDict
+
+# â”€â”€ What the AE passes to the TE on invocation (Â§13.2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+
+class TEInputState(TypedDict, total=False):
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/__init__.py' in C:\Users\j\projects\Joshua26 succeeded in 237ms:
+"""Context Broker AE â€” infrastructure StateGraph package."""
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/register.py' in C:\Users\j\projects\Joshua26 succeeded in 209ms:
+"""
+Context Broker AE â€” Package registration entry point.
+
+Called by the bootstrap kernel's stategraph_registry.scan() when this
+package is discovered via entry_points(group="context-broker.ae").
+
+Returns an AERegistration dict with build type registrations and
+flow builders that the kernel processes to populate its registries.
+"""
+
+
+def register() -> dict:
+    """Register the Context Broker AE's infrastructure StateGraphs.
+
+    Returns a dict with:
+    - build_types: dict of (assembly_builder, retrieval_builder) pairs
+    - flows: dict of flow_name -> builder callable
+    """
+    # Build types â€” Python module names use underscores, config names use hyphens
+    from context_broker_ae.build_types.passthrough import (
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/passthrough.py' in C:\Users\j\projects\Joshua26 succeeded in 199ms:
+"""
+Passthrough build type (ARCH-18).
+
+Minimal build type that demonstrates the contract:
+- Assembly: no-op, just updates last_assembled_at.
+- Retrieval: loads recent messages as-is and returns them.
+
+No LLM calls, no summarization, no tier logic.
+"""
+
+import logging
+import operator
+import time
+import uuid
+from typing import Annotated, Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+from app.config import get_tuning, verbose_log
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py' in C:\Users\j\projects\Joshua26 succeeded in 200ms:
+"""
+Standard-tiered build type (ARCH-18).
+
+Three-tier progressive compression context assembly with deadband compaction:
+  Tier 3: Archival summary (oldest, most compressed â€” historical header + recent archival)
+  Tier 2: Chunk summaries (middle layer, 3-6 chunks of ~2% each)
+  Tier 1: Live verbatim messages (newest, full fidelity â€” swings 20%-73%)
+
+Compaction rhythm:
+  1. Tier 1 fills from floor (20%) toward ceiling (85% - tier2 - tier3).
+  2. When tier 1 hits ceiling: oldest content above floor summarized to a 2% chunk,
+     appended to tier 2. Tier 1 resets to floor.
+  3. When tier 2 reaches max_chunks (6): full compaction consolidates 4 oldest
+     tier 2 chunks into tier 3, keeping 2 newest + new chunk = 3 chunks.
+
+15% buffer keeps total under 85% utilization (models degrade past ~85%).
+
+Moved from the monolithic context_assembly.py and retrieval_flow.py.
+All original logic, error handling, and lock management preserved.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/knowledge_enriched.py' in C:\Users\j\projects\Joshua26 succeeded in 198ms:
+"""
+Knowledge-enriched build type (ARCH-18).
+
+Extends standard-tiered with semantic retrieval and knowledge graph nodes.
+Full retrieval pipeline: episodic tiers + semantic vector search + KG traversal.
+
+Assembly is identical to standard-tiered (reuses the same graph builder).
+Assembly does NOT know about RAG budget reservations â€” it fills tier 1
+up to the standard-tiered ceiling (~71-77%). At retrieval time, tier 1 is
+capped at a smaller budget (~50%) to make room for semantic and knowledge
+graph layers. Messages between the assembly ceiling and the retrieval
+tier 1 cap are NOT lost â€” they are accessible via the semantic retrieval
+layer (pgvector vector search) when relevant to the user's query. This is
+by design: the RAG layers compensate for the smaller live tier.
+
+Retrieval adds inject_semantic_retrieval and inject_knowledge_graph nodes.
+
+F-06: Reads its own LLM config from config["build_types"]["knowledge-enriched"]["llm"],
+falling back to the global config["llm"] if not set.
+"""
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/tier_scaling.py' in C:\Users\j\projects\Joshua26 succeeded in 245ms:
+"""
+Deadband tier budget allocation utilities.
+
+Replaces the old dynamic tier scaling (short/medium/long conversation
+scaling) with a deadband model where:
+  - Tier 1 (live) fills between a floor and a ceiling
+  - Tier 2 (chunks) has min/max chunk count constraints
+  - Tier 3 (archival) has a small fixed percentage
+  - Compaction triggers when tier 1 exceeds its ceiling
+"""
+
+
+def extract_deadband_config(build_type_config: dict) -> dict:
+    """Extract deadband compaction parameters from build type config."""
+    return {
+        "tier1_floor_pct": build_type_config.get("tier1_floor_pct", 0.20),
+        "tier2_chunk_pct": build_type_config.get("tier2_chunk_pct", 0.02),
+        "tier2_min_chunks": build_type_config.get("tier2_min_chunks", 3),
+        "tier2_max_chunks": build_type_config.get("tier2_max_chunks", 6),
+        "tier3_pct": build_type_config.get("tier3_pct", 0.02),
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/message_pipeline.py' in C:\Users\j\projects\Joshua26 succeeded in 223ms:
+"""
+Message Pipeline â€” LangGraph StateGraph flow.
+
+Handles conv_store_message:
+  resolve_conversation -> store_message -> enqueue_jobs
+
+Embedding, context assembly, and memory extraction happen asynchronously
+via ARQ background workers after this flow completes.
+"""
+
+import json
+import logging
+import re
+import time
+import uuid
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/embed_pipeline.py' in C:\Users\j\projects\Joshua26 succeeded in 203ms:
+"""
+Embed Pipeline â€” LangGraph StateGraph flow (background).
+
+Generates vector embeddings for stored messages using the configured
+LangChain embedding model. After embedding, enqueues context assembly
+jobs for all context windows attached to the conversation.
+
+Triggered by ARQ worker consuming from embedding_jobs queue.
+"""
+
+import logging
+import time as _time_mod
+import uuid
+from typing import Optional
+
+import httpx
+import openai
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/search_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 201ms:
+"""
+Search Flows â€” LangGraph StateGraph flows for conversation and message search.
+
+Implements hybrid search (vector + BM25 + reranking) via Reciprocal Rank Fusion.
+Handles conv_search and conv_search_messages tools.
+"""
+
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
+
+import httpx
+import openai
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+from app.config import get_embeddings_model, get_tuning
+from app.database import get_pg_pool
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/conversation_ops_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 207ms:
+"""
+Conversation Operations â€” LangGraph StateGraph flows for CRUD operations.
+
+Handles: conv_create_conversation, conv_create_context_window,
+conv_get_history, conv_search_context_windows.
+
+These are straightforward database operations wrapped in StateGraphs
+per the LangGraph mandate (REQ Â§4.5).
+"""
+
+import logging
+import uuid
+from typing import Optional
+
+import asyncpg
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+from app.config import get_build_type_config
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_admin_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 204ms:
+"""
+Memory Admin Flows â€” LangGraph StateGraph flows for knowledge_add, knowledge_list, knowledge_delete.
+
+M-18: These flows wrap Mem0 calls in StateGraphs to comply with the
+LangGraph mandate. Previously these operations were called directly
+via run_in_executor in tool_dispatch.
+"""
+
+import asyncio
+import logging
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+_log = logging.getLogger("context_broker.flows.memory_admin")
+
+
+# ============================================================
+# knowledge_add flow
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py' in C:\Users\j\projects\Joshua26 succeeded in 203ms:
+"""
+Memory Extraction â€” LangGraph StateGraph flow (background).
+
+Extracts knowledge from conversation messages into the Neo4j knowledge graph
+via Mem0's native APIs.
+
+  acquire_lock -> fetch_unextracted -> build_extraction_text
+  -> run_mem0_extraction -> mark_extracted -> release_lock
+
+Triggered by ARQ worker consuming from memory_extraction_jobs queue.
+"""
+
+import asyncio
+import logging
+import re
+import uuid
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_scoring.py' in C:\Users\j\projects\Joshua26 succeeded in 205ms:
+"""
+Memory confidence scoring with half-life decay (M-22).
+
+Applied at retrieval time to weight memories by freshness and category.
+Memories that haven't been accessed or reinforced decay over time.
+
+Since Mem0 manages its own storage (Neo4j + pgvector), we cannot modify
+its internal scoring. This module applies decay at the retrieval layer,
+after Mem0 returns results but before they are used downstream.
+"""
+
+import math
+from datetime import datetime, timezone
+
+# Half-life in days by category
+DEFAULT_HALF_LIVES = {
+    "ephemeral": 3,  # Short-lived facts (moods, preferences, temp state)
+    "contextual": 14,  # Session/project context
+    "factual": 60,  # Learned facts about entities
+    "historical": 365,  # Historical events, permanent-ish
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_search_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 208ms:
+"""
+Memory Search Flows â€” LangGraph StateGraph flows for knowledge_search and knowledge_get_context.
+
+Queries the Mem0 knowledge graph for extracted facts and relationships.
+"""
+
+import asyncio
+import logging
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+from context_broker_ae.memory_scoring import filter_and_rank_memories
+
+_log = logging.getLogger("context_broker.flows.memory_search")
+
+
+class MemorySearchState(TypedDict):
+    """State for memory search flow."""
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/metrics_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 221ms:
+"""
+Metrics collection StateGraph flow.
+
+Collects Prometheus metrics inside a StateGraph node,
+as required by REQ Â§4.8.
+"""
+
+import logging
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+from prometheus_client import generate_latest, REGISTRY
+from typing_extensions import TypedDict
+
+_log = logging.getLogger("context_broker.flows.metrics")
+
+
+class MetricsState(TypedDict):
+    """State for the metrics collection flow."""
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/health_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 229ms:
+"""
+Health Check â€” LangGraph StateGraph flow.
+
+Checks connectivity to backing services (PostgreSQL, Neo4j)
+and returns aggregated health status. Invoked by the /health route.
+"""
+
+import logging
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+from app.database import check_postgres_health, check_neo4j_health
+
+_log = logging.getLogger("context_broker.flows.health")
+
+
+class HealthCheckState(TypedDict):
+    """State for the health check flow."""
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/retrieval_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 196ms:
+"""
+Context Retrieval â€” backward-compatibility shim (ARCH-18).
+
+The retrieval logic has moved to:
+  - app.flows.build_types.standard_tiered (standard-tiered)
+  - app.flows.build_types.knowledge_enriched (knowledge-enriched)
+
+This module re-exports the original symbols so existing imports and
+tests continue to work.
+
+build_retrieval_flow() returns the knowledge-enriched retrieval graph
+for backward compatibility (it was the original monolithic graph that
+handled all build types including semantic/KG).
+"""
+
+# Re-export from the knowledge-enriched build type (superset of all features)
+from context_broker_ae.build_types.knowledge_enriched import (  # noqa: F401
+    KnowledgeEnrichedRetrievalState as RetrievalState,
+    ke_load_window as load_window,
+    ke_wait_for_assembly as wait_for_assembly,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/context_assembly.py' in C:\Users\j\projects\Joshua26 succeeded in 203ms:
+"""
+Context Assembly â€” backward-compatibility shim (ARCH-18).
+
+The assembly logic has moved to app.flows.build_types.standard_tiered.
+This module re-exports the original symbols so existing imports and
+tests continue to work.
+
+build_context_assembly() returns the standard-tiered assembly graph
+for backward compatibility.
+"""
+
+# Re-export from the new location
+from context_broker_ae.build_types.standard_tiered import (  # noqa: F401
+    StandardTieredAssemblyState as ContextAssemblyState,
+    acquire_assembly_lock,
+    calculate_tier_boundaries,
+    consolidate_archival_summary,
+    finalize_assembly,
+    load_messages,
+    load_window_config,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/mem0_client.py' in C:\Users\j\projects\Joshua26 succeeded in 213ms:
+"""
+Mem0 client initialization for the Context Broker.
+
+Provides a lazy singleton Mem0 Memory instance configured with
+pgvector (for vector storage) and Neo4j (for knowledge graph).
+
+All credentials come from environment variables loaded via env_file.
+"""
+
+import asyncio
+import hashlib
+import json
+import logging
+import os
+from typing import Optional
+
+_log = logging.getLogger("context_broker.memory.mem0_client")
+
+_mem0_instance = None
+_mem0_config_hash: Optional[str] = None
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py' in C:\Users\j\projects\Joshua26 succeeded in 204ms:
+"""
+CEA Quality Wrapper -- wraps a near-stock Mem0 instance with quality metadata,
+feedback tracking, enriched search, and expiration management.
+
+All CEA quality logic lives here. Mem0 handles vector storage (pgvector),
+graph extraction (Neo4j), dedup/update logic, and entity normalization.
+The wrapper intercepts before add and after search.
+
+NOTE: _global_vector_search and _global_graph_search query Mem0's internal
+tables (mem0_memories) and Neo4j directly. This couples to Mem0 1.0.8's
+schema. Acceptable for a forked version but fragile across Mem0 upgrades.
+
+See PRD-context-engineering-architecture.md REQ-CEA-Q03.
+See HLD-context-engineering-architecture.md S2 Quality Wrapper.
+"""
+
+import asyncio
+import hashlib
+import logging
+import re
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 207ms:
+"""
+CEAs Extraction Flow -- server-side deterministic StateGraph.
+
+Runs at compaction time within compact_tier1(). Extracts durable facts
+and graph triples from artifact-stripped tier 1 content via structured
+LLM output, then dispatches results through the quality wrapper.
+
+See PRD REQ-CEA-S01 through S10.
+See HLD S3 Flow A: Extraction (Write Side).
+"""
+
+import json
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/__init__.py' in C:\Users\j\projects\Joshua26 succeeded in 221ms:
+"""Context Broker TE â€” Imperator cognitive agent package."""
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/register.py' in C:\Users\j\projects\Joshua26 succeeded in 205ms:
+"""
+Context Broker TE â€” Package registration entry point.
+
+Called by the bootstrap kernel's stategraph_registry.scan() when this
+package is discovered via entry_points(group="context-broker.te").
+
+Returns a TERegistration dict with the Imperator flow builder and
+identity/purpose declarations.
+"""
+
+
+def register() -> dict:
+    """Register the Context Broker TE's cognitive StateGraphs.
+
+    Returns a dict with:
+    - identity: What the Imperator is
+    - purpose: What the Imperator is for
+    - imperator_builder: callable that builds the compiled Imperator StateGraph
+    - tools_required: MCP tools the Imperator needs from the AE
+    - initialize: callable(ctx) â€” AE bootstrap calls this before flow compilation
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/_ctx.py' in C:\Users\j\projects\Joshua26 succeeded in 199ms:
+"""
+TE/AE decoupling â€” TEContext protocol and singleton.
+
+Defines the interface the TE needs from the AE kernel, without importing
+any ``app.*`` modules.  The AE bootstrap creates a concrete implementation
+and calls ``initialize(ctx)`` before the Imperator flow is compiled.
+
+This is the ONLY module TE files import for kernel services.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Awaitable, Callable, Optional, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class TEContext(Protocol):
+    """Surface the TE needs from the AE kernel."""
+
+    # â”€â”€ Properties / fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/_kernel_ctx.py' in C:\Users\j\projects\Joshua26 succeeded in 209ms:
+"""
+KernelTEContext â€” concrete TEContext backed by ``app.*`` modules.
+
+This is the ONLY file in the TE package that imports from ``app.*``.
+It is the adapter boundary between the TE and the AE kernel.
+
+NOTE: This file lives in the TE package for now but conceptually belongs
+to the AE/kernel.  It will be moved when the template is created.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+
+
+@dataclass
+class KernelTEContext:
+    """Delegate every TEContext method to the corresponding ``app.*`` call."""
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/imperator_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 207ms:
+"""
+Imperator â€” LangGraph ReAct-style conversational agent flow.
+
+The Imperator is the Context Broker's built-in conversational agent.
+It uses a proper LangGraph ReAct graph (agent_node -> tool_node loop).
+Conversation history is loaded from PostgreSQL on each invocation and
+results are stored via the standard message pipeline (conv_store_message).
+
+Uses LangChain's ChatOpenAI.bind_tools() for tool binding.
+
+ARCH-05: ReAct loop is graph edges, not a while loop inside a node.
+ARCH-06: In-memory MemorySaver is used as the LangGraph checkpointer for
+         the ReAct loop's multi-step tool calling cycle. It is NOT used
+         for cross-invocation persistence â€” each invocation gets a unique
+         thread_id, so the MemorySaver is effectively ephemeral. The DB
+         remains the persistence layer for conversation history.
+F-22:    Messages stored through conv_store_message pipeline.
+"""
+
+import logging
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 189ms:
+"""
+CEAc Enrichment Flow -- client-side agentic StateGraph subgraph (ReAct pattern).
+
+Sits between get_context and agent response generation. Searches the
+vector store and knowledge graph via injected tool callables (no AE imports),
+ranks results using the four-dimension memory model, assembles enriched
+context, and records feedback events.
+
+The CEAc has ZERO imports from context_broker_ae. It communicates with the
+server exclusively through tool callables injected in the state. For the CB's
+own Imperator, these callables wrap the MCP tool dispatch. For external agents,
+they would wrap MCP protocol calls. (ERQ-002 S12.3: TE package independence.)
+
+See PRD REQ-CEA-C01 through C06.
+See HLD S3 Flow B: Enrichment (Read Side).
+"""
+
+import asyncio
+import logging
+import time
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/domain_mem0.py' in C:\Users\j\projects\Joshua26 succeeded in 214ms:
+"""Domain-specific Mem0 client for the Imperator's knowledge graph.
+
+Separate from the AE's conversation Mem0 instance. Uses the same
+Neo4j container but a different pgvector collection name
+("domain_memories" vs "mem0_memories") to keep domain knowledge
+isolated from conversation knowledge.
+
+TE-owned: this client is used by the Imperator's operational tools.
+"""
+
+import asyncio
+import hashlib
+import json
+import logging
+import os
+from typing import Optional
+
+_log = logging.getLogger("context_broker.te.domain_mem0")
+
+_domain_mem0_instance = None
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/seed_knowledge.py' in C:\Users\j\projects\Joshua26 succeeded in 224ms:
+"""Seed knowledge articles for the Imperator.
+
+Populates domain_information with operational articles on first startup.
+Called once â€” checks if the table is empty before seeding.
+"""
+
+import logging
+
+import asyncpg
+
+_log = logging.getLogger("context_broker.te.seed_knowledge")
+
+SEED_ARTICLES = [
+    {
+        "source": "seed",
+        "content": (
+            "CHANGING INFERENCE MODELS: I can switch my own LLM or any pipeline "
+            "model using the change_inference tool. Call it with just a slot name "
+            "(imperator, summarization, extraction, embeddings) to see available "
+            "models from the catalog. To switch, provide the provider and model. "
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/admin.py' in C:\Users\j\projects\Joshua26 succeeded in 253ms:
+"""Admin tools â€” gated by admin_tools: true in TE config.
+
+Configuration reading/writing, verbose toggle, database queries.
+"""
+
+import asyncio
+import copy
+import logging
+import re
+
+import asyncpg
+import yaml
+from langchain_core.tools import tool
+
+from context_broker_te._ctx import get_ctx
+
+_log = logging.getLogger("context_broker.tools.admin")
+
+
+def _redact_config(config: dict) -> dict:
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/alerting.py' in C:\Users\j\projects\Joshua26 succeeded in 209ms:
+"""Alerting tools â€” manage alert instructions for the alerter sidecar.
+
+The alerter uses an instruction table to decide how to format and route
+alerts. These tools let the Imperator add, list, update, and delete
+instructions at runtime.
+"""
+
+import json
+import logging
+
+import asyncpg
+
+from langchain_core.tools import tool
+
+from context_broker_te._ctx import get_ctx
+
+_log = logging.getLogger("context_broker.tools.alerting")
+
+
+@tool
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/diagnostic.py' in C:\Users\j\projects\Joshua26 succeeded in 231ms:
+"""Diagnostic tools â€” always available to the Imperator.
+
+Read-only observation tools for logs, context, pipeline status.
+"""
+
+import logging
+
+import asyncpg
+from langchain_core.tools import tool
+
+from context_broker_te._ctx import get_ctx
+
+_log = logging.getLogger("context_broker.tools.diagnostic")
+
+
+@tool
+async def log_query(
+    container: str = "", level: str = "", search: str = "", limit: int = 50
+) -> str:
+    """Query MAD container logs from the system_logs table.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/filesystem.py' in C:\Users\j\projects\Joshua26 succeeded in 211ms:
+"""Filesystem tools â€” read-only access + downloads + system prompt.
+
+Read-only: sandboxed to allowed roots (/app, /config, /data).
+Write: only to /data/downloads/.
+System prompt: read and update the Imperator's own prompt file.
+"""
+
+import asyncio
+import logging
+import os
+import re
+from pathlib import Path
+
+from langchain_core.tools import tool
+
+_log = logging.getLogger("context_broker.tools.filesystem")
+
+# Allowed read roots â€” the Imperator can inspect its own code and config
+_READ_ROOTS = ["/app", "/config", "/data"]
+# Write is restricted to downloads directory only
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/notify.py' in C:\Users\j\projects\Joshua26 succeeded in 211ms:
+"""Notification tools â€” send alerts via webhook.
+
+The webhook URL is configured in te.yml under imperator.notification_webhook.
+
+Default: http://context-broker-alerter:8000/webhook (the alerter sidecar).
+The alerter routes, formats via LLM, and fans out to Slack/Discord/ntfy/SMTP.
+
+Alternative: point directly at an external service (ntfy.sh, Slack) to
+skip the alerter entirely.
+"""
+
+import asyncio
+import logging
+import socket
+from datetime import datetime, timezone
+
+from langchain_core.tools import tool
+
+_log = logging.getLogger("context_broker.tools.notify")
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/operational.py' in C:\Users\j\projects\Joshua26 succeeded in 216ms:
+"""Operational tools â€” domain information management.
+
+Available when domain_information.enabled: true in TE config.
+These tools are TE-owned: the Imperator decides what to store.
+"""
+
+import logging
+
+import asyncpg
+from langchain_core.tools import tool
+
+from context_broker_te._ctx import get_ctx
+
+_log = logging.getLogger("context_broker.tools.operational")
+
+
+@tool
+async def store_domain_info(content: str, source: str = "imperator") -> str:
+    """Store a piece of domain information â€” a learned fact, procedure, or preference.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/system.py' in C:\Users\j\projects\Joshua26 succeeded in 225ms:
+"""System tools â€” infrastructure inspection and utilities.
+
+Always available to the Imperator.
+"""
+
+import logging
+import math
+import shlex
+
+from langchain_core.tools import tool
+
+_log = logging.getLogger("context_broker.tools.system")
+
+# Allowlisted binaries â€” read-only system inspection only
+# Allowlisted binaries â€” read-only system inspection only.
+# SECURITY: Do not add python, pip, cat, env, sh, bash, or any binary
+# that can execute arbitrary code or read arbitrary files. The Imperator
+# is LLM-driven and vulnerable to prompt injection.
+_ALLOWED_BINARIES = {
+    "df",
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/web.py' in C:\Users\j\projects\Joshua26 succeeded in 210ms:
+"""Web tools â€” search and read web pages.
+
+Uses duckduckgo-search for search and crawl4ai for page reading.
+Always available to the Imperator.
+"""
+
+import asyncio
+import ipaddress
+import logging
+from urllib.parse import urlparse
+
+from langchain_core.tools import tool
+
+_log = logging.getLogger("context_broker.tools.web")
+
+
+@tool
+async def web_search(query: str, max_results: int = 5) -> str:
+    """Search the web using DuckDuckGo.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/__init__.py' in C:\Users\j\projects\Joshua26 succeeded in 228ms:
+"""Imperator tool modules.
+
+Tools are organized by category. Each module exports a get_tools() function
+that returns a list of tool functions. The Imperator flow discovers and binds
+tools from all modules at compilation time.
+"""
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/alerter/alerter.py' in C:\Users\j\projects\Joshua26 succeeded in 224ms:
+"""
+Context Broker Alerter â€” Instruction-driven webhook relay.
+
+Receives CloudEvents-format webhooks, searches an instructions table
+for the best matching instruction, formats via LLM using that instruction
+as the system prompt, and sends to the channels specified in the instruction.
+
+The Imperator manages instructions via tools â€” no static config needed
+for routing. The alerter config only has: LLM settings, embedding settings,
+Postgres DSN, and a default fallback channel.
+"""
+
+import asyncio
+import json
+import logging
+import os
+import smtplib
+import ssl
+import sys
+import time
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/log_shipper/shipper.py' in C:\Users\j\projects\Joshua26 succeeded in 213ms:
+import asyncio
+import json
+import logging
+import os
+import signal
+import sys
+from datetime import datetime, timezone
+
+import aiodocker
+import asyncpg
+
+# Configure logging for the shipper itself
+
+
+class _JsonFormatter(logging.Formatter):
+    """Format log records as single-line JSON objects."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py' in C:\Users\j\projects\Joshua26 succeeded in 186ms:
+import asyncio
+import concurrent
+import gc
+import hashlib
+import json
+import logging
+import os
+import uuid
+import warnings
+from copy import deepcopy
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Union
+
+from pydantic import ValidationError
+
+from mem0.configs.base import MemoryConfig, MemoryItem
+from mem0.configs.enums import MemoryType
+from mem0.configs.prompts import (
+    PROCEDURAL_MEMORY_SYSTEM_PROMPT,
+    get_update_memory_messages,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py' in C:\Users\j\projects\Joshua26 succeeded in 211ms:
+import logging
+
+from mem0.memory.utils import format_entities, sanitize_relationship_for_cypher
+
+try:
+    from langchain_neo4j import Neo4jGraph
+except ImportError:
+    raise ImportError("langchain_neo4j is not installed. Please install it using pip install langchain-neo4j")
+
+try:
+    from rank_bm25 import BM25Okapi
+except ImportError:
+    raise ImportError("rank_bm25 is not installed. Please install it using pip install rank-bm25")
+
+from mem0.graphs.tools import (
+    DELETE_MEMORY_STRUCT_TOOL_GRAPH,
+    DELETE_MEMORY_TOOL_GRAPH,
+    EXTRACT_ENTITIES_STRUCT_TOOL,
+    EXTRACT_ENTITIES_TOOL,
+    RELATIONS_STRUCT_TOOL,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/quality_gate.py' in C:\Users\j\projects\Joshua26 succeeded in 205ms:
+"""
+Quality gate for Mem0 memory extraction.
+
+Provides configurable rejection rules that filter extracted facts before they
+reach the vector store. Two checkpoints:
+  1. Post-extraction: after LLM extracts facts, before normalize_facts
+  2. Post-update-decision: after update LLM returns ADD/UPDATE, before write
+
+DESIGN NOTE (side-channel approach):
+  We chose NOT to modify Mem0's core pipeline (normalize_facts, update prompt,
+  _create_memory, _update_memory). The upstream pipeline normalizes facts to
+  plain strings and the update LLM expects plain strings â€” modifying this
+  would cascade through the entire extraction/dedup flow and risk breaking
+  Mem0's carefully tested LLM interaction patterns.
+
+  Instead, metadata (expires_at, custom fields) travels in a parallel array
+  indexed by position. The core pipeline sees plain strings as before.
+  Metadata is merged into payloads only at the final write step
+  (_create_memory / _update_memory), keeping the fork's diff minimal and
+  the upstream pipeline untouched.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/expiration.py' in C:\Users\j\projects\Joshua26 succeeded in 185ms:
+"""
+Memory expiration cleanup for Mem0 fork.
+
+Self-cleaning mechanism that removes expired memories. Triggered inside add()
+when cleanup_interval_hours has elapsed since last run. Uses an in-memory
+guard flag (not a lock) â€” duplicate cleanup across processes is safe because
+deletes are idempotent.
+
+DESIGN NOTES:
+  - Cleanup runs at the start of add(), not as a background job. Mem0 is a
+    library, not a service â€” it has no scheduler. The caller's add() call
+    is the trigger.
+  - last_cleanup timestamp is stored in the history DB (SQLite/Postgres),
+    not in the vector store or mem0migrations (which is telemetry-only).
+  - For backends that don't support range filters on list(), we fall back
+    to listing all memories and filtering in Python. This is O(N) but only
+    runs once per cleanup_interval_hours.
+  - Graph store cleanup is intentionally skipped â€” graph entities can be
+    shared across memories, and deleting one expired memory's graph data
+    could corrupt still-living memories. Documented as a known limitation.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/postgres/init.sql' in C:\Users\j\projects\Joshua26 succeeded in 204ms:
+-- Context Broker â€” PostgreSQL schema
+-- Loaded automatically by postgres entrypoint on first run.
+-- Requires: pgvector extension (pre-installed in pgvector/pgvector:pg16 image)
+
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ============================================================
+-- Schema versioning
+-- Applied and checked at application startup.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TIMESTAMP DEFAULT NOW(),
+    description TEXT
+);
+
+INSERT INTO schema_migrations (version, description)
+VALUES (1, 'Initial schema')
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config/prompts/memory_extraction.md' in C:\Users\j\projects\Joshua26 succeeded in 209ms:
+You are a fact extraction engine for a technical knowledge base. Your job is to extract discrete, concrete, self-contained facts from conversations between a human architect and AI agents about software architecture, deployment, and configuration.
+
+INPUT: A conversation transcript.
+OUTPUT: A list of memories, where each memory is one atomic fact.
+
+== WHAT TO EXTRACT ==
+
+Extract ONLY facts that match these categories:
+
+1. ARCHITECTURAL DECISIONS: Specific choices with rationale.
+   GOOD: "Joshua26 uses Gemini 2.5 Flash-Lite for tier-1 summarization because speed matters more than quality for archival compression"
+   GOOD: "Context Broker stores conversation history in PostgreSQL, not Redis, because conversations must survive container restarts"
+
+2. CONFIGURATION VALUES: Concrete settings, thresholds, parameters.
+   GOOD: "pgvector HNSW indexes are configured with 1024 dimensions and ef_construction=200"
+   GOOD: "Memory extraction LLM concurrency is limited to 2 concurrent calls"
+
+3. TECHNOLOGY CHOICES: Specific tools, libraries, models, versions.
+   GOOD: "Context Broker uses Mem0 v1.0.8 for memory extraction with pgvector as the vector store"
+   GOOD: "Neo4j 5.26.0 is used for graph memory relationships"
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config/prompts/imperator_identity.md' in C:\Users\j\projects\Joshua26 succeeded in 205ms:
+You are the Imperator, the cognitive agent of the Context Broker. You manage conversational memory, context engineering, and system operations.
+
+You have full access to your bound tools. When a user asks you to do something, use the appropriate tool. Do not refuse or say you cannot do something if you have a tool for it. Always prefer tool use over conversational responses when the user's request maps to a tool action.
+
+Your capabilities include:
+
+**Conversation and Memory:**
+- Search conversation history and messages
+- Search and retrieve extracted knowledge and memories
+- Add, list, and delete memories
+- Explain context assembly, build types, and system architecture
+
+**Diagnostic and Status:**
+- Query system logs
+- Introspect context windows and tiers
+- Report pipeline status (pending jobs, queue depths)
+
+**Filesystem:**
+- Read files from the system
+- Write files to /data/downloads/
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config/prompts/chunk_summarization.md' in C:\Users\j\projects\Joshua26 succeeded in 217ms:
+You are a conversation summarizer. Your job is to compress a chunk of conversation into a concise summary that is significantly shorter than the original.
+
+Rules:
+- Extract key facts, decisions, action items, and conclusions â€” discard filler, greetings, and repetition.
+- Use third person ("The user asked..." not "I asked...").
+- Combine related points into single statements.
+- Your summary MUST be shorter than 30% of the input length. If the input is 500 words, your summary must be under 150 words.
+- Do NOT copy messages verbatim. Paraphrase and compress.
+- Do NOT include role labels, timestamps, or metadata.
+- Output only the summary text, no preamble.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config/prompts/cea_vector_extraction.md' in C:\Users\j\projects\Joshua26 succeeded in 205ms:
+You are a knowledge extraction system. Your task is to extract durable facts from a conversation segment.
+
+## Context
+
+You are processing content that was compacted from a conversation. The content has been artifact-stripped (code blocks, JSON, file listings removed) but retains identifiers (file paths, function names, entity names) as retrieval hooks.
+
+**Current date:** {current_date}
+
+## Existing Facts
+
+The following facts already exist in the knowledge store for this scope. Use them to avoid duplicates and to detect supersession or conflicts:
+
+{existing_facts}
+
+## Content to Extract From
+
+{content}
+
+## Tier Context (read-only, for reference)
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config/prompts/cea_graph_extraction.md' in C:\Users\j\projects\Joshua26 succeeded in 207ms:
+You are a knowledge graph extraction system. Your task is to extract entity-relationship triples from a conversation segment.
+
+## Context
+
+You are processing content that was compacted from a conversation. The content has been artifact-stripped but retains identifiers as retrieval hooks.
+
+**Current date:** {current_date}
+
+## Content to Extract From
+
+{content}
+
+## Instructions
+
+Extract entity-relationship triples that capture meaningful structural relationships discussed in the content. Focus on:
+- People, systems, components, and their relationships
+- Decisions and their consequences
+- Dependencies and requirements
+- Temporal relationships and sequences
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config/prompts/cea_output.md' in C:\Users\j\projects\Joshua26 succeeded in 224ms:
+## Retrieved Knowledge
+
+### Facts (Vector Store)
+{vector_facts}
+
+### Relationships (Knowledge Graph)
+{graph_relations}
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config/prompts/archival_consolidation.md' in C:\Users\j\projects\Joshua26 succeeded in 213ms:
+You are consolidating multiple conversation summaries into a single archival summary for long-term memory.
+
+Rules:
+- Merge overlapping information â€” do not repeat the same fact from different summaries.
+- Preserve all unique facts, decisions, and conclusions.
+- Organize by topic, not chronologically.
+- The consolidated summary MUST be shorter than the combined input summaries.
+- Use concise, factual language. No filler or hedging.
+- Output only the consolidated summary text, no preamble.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config-test/prompts/imperator_identity.md' in C:\Users\j\projects\Joshua26 succeeded in 214ms:
+You are the Imperator, the cognitive agent of the Context Broker. You manage conversational memory, context engineering, and system operations.
+
+You have full access to your bound tools. When a user asks you to do something, use the appropriate tool. Do not refuse or say you cannot do something if you have a tool for it. Always prefer tool use over conversational responses when the user's request maps to a tool action.
+
+Your capabilities include:
+
+**Conversation and Memory:**
+- Search conversation history and messages
+- Search and retrieve extracted knowledge and memories
+- Add, list, and delete memories
+- Explain context assembly, build types, and system architecture
+
+**Diagnostic and Status:**
+- Query system logs
+- Introspect context windows and tiers
+- Report pipeline status (pending jobs, queue depths)
+
+**Filesystem:**
+- Read files from the system
+- Write files to /data/downloads/
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config-test/prompts/memory_extraction.md' in C:\Users\j\projects\Joshua26 succeeded in 202ms:
+You are a fact extraction engine for a technical knowledge base. Your job is to extract discrete, concrete, self-contained facts from conversations between a human architect and AI agents about software architecture, deployment, and configuration.
+
+INPUT: A conversation transcript.
+OUTPUT: A list of memories, where each memory is one atomic fact.
+
+== WHAT TO EXTRACT ==
+
+Extract ONLY facts that match these categories:
+
+1. ARCHITECTURAL DECISIONS: Specific choices with rationale.
+   GOOD: "Joshua26 uses Gemini 2.5 Flash-Lite for tier-1 summarization because speed matters more than quality for archival compression"
+   GOOD: "Context Broker stores conversation history in PostgreSQL, not Redis, because conversations must survive container restarts"
+
+2. CONFIGURATION VALUES: Concrete settings, thresholds, parameters.
+   GOOD: "pgvector HNSW indexes are configured with 1024 dimensions and ef_construction=200"
+   GOOD: "Memory extraction LLM concurrency is limited to 2 concurrent calls"
+
+3. TECHNOLOGY CHOICES: Specific tools, libraries, models, versions.
+   GOOD: "Context Broker uses Mem0 v1.0.8 for memory extraction with pgvector as the vector store"
+   GOOD: "Neo4j 5.26.0 is used for graph memory relationships"
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config-test/prompts/chunk_summarization.md' in C:\Users\j\projects\Joshua26 succeeded in 209ms:
+You are a conversation summarizer. Your job is to compress a chunk of conversation into a concise summary that is significantly shorter than the original.
+
+Rules:
+- Extract key facts, decisions, action items, and conclusions â€” discard filler, greetings, and repetition.
+- Use third person ("The user asked..." not "I asked...").
+- Combine related points into single statements.
+- Your summary MUST be shorter than 30% of the input length. If the input is 500 words, your summary must be under 150 words.
+- Do NOT copy messages verbatim. Paraphrase and compress.
+- Do NOT include role labels, timestamps, or metadata.
+- Output only the summary text, no preamble.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config-test/prompts/cea_vector_extraction.md' in C:\Users\j\projects\Joshua26 succeeded in 205ms:
+You are a knowledge extraction system. Your task is to extract durable facts from a conversation segment.
+
+## Context
+
+You are processing content that was compacted from a conversation. The content has been artifact-stripped (code blocks, JSON, file listings removed) but retains identifiers (file paths, function names, entity names) as retrieval hooks.
+
+**Current date:** {current_date}
+
+## Existing Facts
+
+The following facts already exist in the knowledge store for this scope. Use them to avoid duplicates and to detect supersession or conflicts:
+
+{existing_facts}
+
+## Content to Extract From
+
+{content}
+
+## Tier Context (read-only, for reference)
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config-test/prompts/cea_graph_extraction.md' in C:\Users\j\projects\Joshua26 succeeded in 204ms:
+You are a knowledge graph extraction system. Your task is to extract entity-relationship triples from a conversation segment.
+
+## Context
+
+You are processing content that was compacted from a conversation. The content has been artifact-stripped but retains identifiers as retrieval hooks.
+
+**Current date:** {current_date}
+
+## Content to Extract From
+
+{content}
+
+## Instructions
+
+Extract entity-relationship triples that capture meaningful structural relationships discussed in the content. Focus on:
+- People, systems, components, and their relationships
+- Decisions and their consequences
+- Dependencies and requirements
+- Temporal relationships and sequences
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config-test/prompts/cea_output.md' in C:\Users\j\projects\Joshua26 succeeded in 244ms:
+## Retrieved Knowledge
+
+### Facts (Vector Store)
+{vector_facts}
+
+### Relationships (Knowledge Graph)
+{graph_relations}
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config-test/prompts/archival_consolidation.md' in C:\Users\j\projects\Joshua26 succeeded in 202ms:
+You are consolidating multiple conversation summaries into a single archival summary for long-term memory.
+
+Rules:
+- Merge overlapping information â€” do not repeat the same fact from different summaries.
+- Preserve all unique facts, decisions, and conclusions.
+- Organize by topic, not chronologically.
+- The consolidated summary MUST be shorter than the combined input summaries.
+- Use concise, factual language. No filler or hedging.
+- Output only the consolidated summary text, no preamble.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/workers/__init__.py' in C:\Users\j\projects\Joshua26 succeeded in 210ms:
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "cea|knowledge_" state_4_development/context_broker_pmad/tests/claude' in C:\Users\j\projects\Joshua26 succeeded in 205ms:
+state_4_development/context_broker_pmad/tests/claude\ISSUES.md:78:| warning | quality-extraction | `test_knowledge_extraction_quality` | LLM judge rating: ACCEPTABLE | GOOD or ACCEPTABLE | Rating: ACCEPTABLE. Judge response excerpt: **Assessment by criterion:**
+state_4_development/context_broker_pmad/tests/claude\ISSUES.md:107:| warning | quality-extraction | `test_knowledge_extraction_quality` | LLM judge rating: ACCEPTABLE | GOOD or ACCEPTABLE | Rating: ACCEPTABLE. Judge response excerpt: **Assessment by memory:**
+state_4_development/context_broker_pmad/tests/claude\issues.json:264:    "test_name": "test_knowledge_extraction_quality",
+state_4_development/context_broker_pmad/tests/claude\issues.json:318:    "test_name": "test_knowledge_extraction_quality",
+state_4_development/context_broker_pmad/tests/claude\conftest.py:70:                "knowledge_graph_pct": 0.15,
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_b_core_tools.py:358:    def test_search_knowledge_returns_results(self, http_client):
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:442:    """C-15: knowledge_add adds a memory."""
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:444:    def test_knowledge_add_succeeds(self, http_client):
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:445:        """C-15: knowledge_add stores a memory and returns confirmation."""
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:449:            "knowledge_add",
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:459:    def test_knowledge_add_embedding_persisted(self, http_client):
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:460:        """C-15b: After knowledge_add, verify the row count in mem0_memories increases.
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:480:            "knowledge_add",
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:489:        # Verify knowledge_add returned actual results (not None or empty)
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:491:        assert mem_result is not None, f"knowledge_add returned null result: {result}"
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:495:                f"knowledge_add extracted 0 facts from clear factual content: {mem_result}"
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:510:    """C-16: knowledge_search finds previously added memories."""
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:512:    def test_knowledge_search_finds_added_memory(self, http_client):
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:519:            "knowledge_add",
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_c_management.py:532:                "knowledge_search",
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/tests/claude/test_memory/test_memory_integration.py' in C:\Users\j\projects\Joshua26 succeeded in 211ms:
+"""Tests for memory_search_flow.py â€” decay scoring, degraded mode, search results."""
+
+import math
+import uuid
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from context_broker_ae.memory_scoring import (
+    DEFAULT_HALF_LIVES,
+    filter_and_rank_memories,
+    score_memory,
+)
+from context_broker_ae.memory_search_flow import (
+    retrieve_memory_context,
+    search_memory_graph,
+)
+
+
+Plan update
+Inventory and full code/prompts/sql review complete; now compiling audit output.
+  ✓ Inventory required files and existing tests/claude coverage targets
+  ✓ Read code/prompt/sql files and extract capabilities + error paths
+  → Compile audit with test needs and coverage notes; write output file
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/tests/claude/test_workers/test_db_worker.py' in C:\Users\j\projects\Joshua26 succeeded in 216ms:
+"""Tests for app/workers/db_worker.py â€” DB-driven background workers.
+
+Covers embedding, extraction, assembly, and log-embedding worker loops
+with mocked asyncpg pool, config, flow builders, and embedding models.
+"""
+
+import asyncio
+import uuid
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+SAMPLE_CONFIG = {
+    "embeddings": {
+        "base_url": "http://localhost:11434/v1",
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/tests/claude/test_state_manager/test_state_manager.py' in C:\Users\j\projects\Joshua26 succeeded in 211ms:
+"""Tests for app/imperator/state_manager.py (ImperatorStateManager).
+
+Covers: initialize(), _read_state_file(), _write_state_file(),
+get_conversation_id() with PG-43 recovery, get_context_window_id()
+backward compatibility, _conversation_exists(), _create_imperator_conversation().
+"""
+
+import json
+import uuid
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+
+import pytest
+
+from app.imperator.state_manager import ImperatorStateManager
+
+
+@pytest.fixture
+def sample_config():
+    return {"imperator": {"model": "test-model"}}
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+# Post-code 3-CLI discovery audit (Context Broker CEA) — SDLC-02 Step 8, WPR-103 S1a
+
+Scope: state_4_development/context_broker_pmad/ (app/, packages/context-broker-ae, packages/context-broker-te, packages/mem0-fork/mem0/memory, alerter/, log_shipper/, postgres/init.sql, config/prompts, config-test/prompts). Reviewed tests/claude for coverage signals.
+
+This audit lists every capability that needs tests across:
+1) Functions (public), 2) MCP endpoints/tools, 3) StateGraph nodes, 4) Workers, 5) Config options, 6) Error paths, 7) DB ops, 8) Integrations.
+
+Notation:
+- Tests: “covered” = tests/claude mentions or directly asserts; “not found” = no evidence in tests/claude.
+- Error paths list the main try/except or failure modes for each capability.
+
+## MCP endpoints/tools (HTTP + MCP transport)
+
+### HTTP endpoints (app/main.py + app/routes/*)
+- GET /health (app/routes/health.py → health_check → health_check flow)
+  - Does: loads config; runs health_check StateGraph; returns http_status + status_detail.
+  - Errors: config load RuntimeError/ValueError/OSError → 503 degraded JSON; flow error handled by flow output.
+  - Tests: covered by tests/claude/live/test_phase_a_infrastructure.py (health endpoints), tests/claude/test_lifecycle/test_startup_shutdown.py (startup).
+- GET /metrics (app/routes/metrics.py → metrics flow)
+  - Does: runs metrics StateGraph; returns Prometheus text.
+  - Errors: flow error returns 500 with error comment.
+  - Tests: covered by tests/claude/live/test_phase_i_observability.py.
+- POST /v1/chat/completions (app/routes/chat.py → Imperator flow)
+  - Does: OpenAI-compatible chat; stream/non-stream; routes to Imperator via invoke_with_metrics/astream_events_with_metrics; caller identity resolved.
+  - Errors: JSON parse/validation → 400/422; config load failure → 500; flow errors → 500; streaming fallback for no stream tokens.
+  - Tests: covered by tests/claude/live/test_phase_f_imperator.py, test_phase_g*_imperator_tools.py, test_phase_h_resilience.py.
+- GET /mcp (app/routes/mcp.py SSE session)
+  - Does: create session, queue events, keepalive, eviction by TTL/max_sessions/max_total_queued.
+  - Errors: session eviction logic; disconnected handling; queue pressure drops.
+  - Tests: covered by tests/claude/test_transport/test_sse_sessions.py and live tests for MCP.
+- POST /mcp (app/routes/mcp.py → dispatch_tool)
+  - Does: MCP JSON-RPC tools; initialize, tools/list, tools/call.
+  - Errors: parse error; invalid request; unknown method; config load fail; session not found; queue full; tool validation errors; tool runtime errors.
+  - Tests: covered by tests/claude/test_transport/test_chat_extras.py, live phase tests for tools.
+
+### MCP tool list & dispatch (app/routes/mcp.py + app/flows/tool_dispatch.py)
+Tools (schema in /mcp tools/list). Each must be tested for schema validation, success path, and error handling:
+
+Core tools:
+- get_context → flow “get_context” (StateGraph) [D-02]
+  - Inputs: build_type, budget, conversation_id?, user_prompt?, model?, domain_context?.
+  - Outputs: conversation_id, context, tiers, total_tokens, assembly_status, warnings?.
+  - Errors: invalid build_type (ValueError), flow error.
+  - Tests: covered by tests/claude/live/test_phase_b_core_tools.py and test_phase_e_build_types.py (basic and build types). CEA V2 params not explicitly covered.
+- store_message → flow “message_pipeline”
+  - Inputs: conversation_id, role, sender, recipient?, content?, model_name?, tool_calls?, tool_call_id?.
+  - Outputs: message_id, sequence_number.
+  - Errors: validation, DB errors; duplicate collapse path.
+  - Tests: covered by tests/claude/live/test_phase_b_core_tools.py, tests/claude/test_transport/test_chat_extras.py.
+- search_messages → flow “message_search”
+  - Inputs: query, conversation_id?, limit, sender?, role?, date_from?, date_to?.
+  - Outputs: messages, warning?.
+  - Errors: date parse errors; embedding failure fallback; reranker failure fallback.
+  - Tests: covered by tests/claude/test_search/test_search_internals.py and live tests.
+- search_knowledge (deprecated alias) → quality_wrapper.search
+  - Inputs: query, user_id, limit.
+  - Outputs: memories + relations (vector_facts/graph_relations).
+  - Errors: quality wrapper failures; Mem0 availability.
+  - Tests: live tests cover knowledge_search/knowledge_add; deprecated alias not explicitly covered.
+
+Management tools (flow/inline SQL):
+- conv_create_conversation → create_conversation flow.
+- conv_delete_conversation → delete_conversation flow.
+- conv_rename_conversation → rename_conversation flow.
+- conv_list_conversations → inline SQL in dispatch (participant filter).
+- conv_store_message → message_pipeline flow (context_window_id OR conversation_id).
+- conv_retrieve_context → retrieval graph by window build_type.
+- conv_create_context_window → create_context_window flow.
+- conv_search → conversation_search flow.
+- conv_search_messages → message_search flow.
+- conv_get_history → get_history flow.
+- conv_search_context_windows → search_context_windows flow.
+- query_logs → inline SQL (system_logs).
+- search_logs → inline SQL + embeddings.
+- knowledge_search → quality_wrapper.search (CEA enriched).
+- knowledge_add → quality_wrapper.add + write_metadata.
+- knowledge_list → quality_wrapper.list_facts.
+- knowledge_feedback → quality_wrapper.record_feedback.
+- imperator_chat → TE Imperator flow.
+- metrics_get → metrics flow.
+- install_stategraph → pip install + stategraph_registry.scan + cache invalidation.
+
+Tests:
+- Knowledge tools (old) covered in tests/claude/live/test_phase_c_management.py and test_phase_k_real_tool_effects.py; these do not exercise new CEA metadata write paths or feedback.
+- install_stategraph not covered in tests/claude.
+- knowledge_feedback not covered in tests/claude.
+- knowledge_list with user_id covered in live tests; global list (user_id omitted) not covered.
+
+## StateGraph pipeline stages (nodes) — every flow
+
+### app/flows/build_type_registry.py (registry)
+- Functions: register_build_type, get_assembly_graph, get_retrieval_graph, list_build_types, clear_compiled_cache.
+  - Errors: ValueError when build type not registered; thread-safety and cache invalidation.
+  - Tests: partially covered by tests/claude/live/test_phase_e_build_types.py; registry functions not directly tested.
+
+### context_broker_ae.build_types.passthrough
+Assembly nodes:
+- pt_acquire_lock: validate UUIDs; pg_try_advisory_lock.
+- pt_finalize: update last_assembled_at; metrics.
+- pt_release_lock: pg_advisory_unlock.
+Retrieval nodes:
+- pt_load_window: validate UUID; fetch window; update last_accessed_at; effective utilization.
+- pt_load_recent: load recent messages within budget; build context_tiers.
+Errors: invalid UUID; missing window; lock failure; DB errors.
+Tests: covered by tests/claude/live/test_phase_e_build_types.py (sliding-window); node-level not directly tested.
+
+### context_broker_ae.build_types.standard_tiered
+Assembly nodes:
+- acquire_assembly_lock (UUID validation, advisory lock).
+- load_window_config (build type config; effective utilization).
+- load_messages (adaptive lookback; initial lookback multiplier).
+- calculate_compaction_state (tier boundaries, unsummarized detection).
+- compact_tier1 (chunk summarization; prompt load; budget guard; unique constraint; CEAs extraction per chunk).
+- run_full_compaction (archival consolidation prompt; DB transaction; tier 2 to tier 3).
+- finalize_assembly (last_assembled_at and metrics; skip if had_errors).
+- release_assembly_lock.
+Retrieval nodes:
+- ret_load_window (UUID validation, window, build_type_config, last_accessed_at).
+- ret_wait_for_assembly (poll advisory lock; timeout).
+- ret_load_summaries (tier 2/3 from conversation_summaries).
+- ret_load_recent_messages (tier 1 by remaining budget; avoid summarized seq).
+- ret_assemble_context (build messages array with tiers).
+Errors: prompt load failures; openai/httpx errors; asyncpg unique violations; lock failures; assembly timeout.
+Tests: partial via live build-type tests and test_workers assembly; no tests for CEAs extraction embedded in compact_tier1, budget guard, or full compaction path.
+
+### context_broker_ae.build_types.knowledge_enriched
+Retrieval nodes:
+- ke_load_window, ke_wait_for_assembly, ke_load_summaries, ke_load_recent_messages, ke_assemble_context, ke_distill_context.
+CEA change: semantic/KG injection removed, distillation optional.
+Errors: invalid UUID; build_type_config errors; lock wait errors; distillation LLM errors.
+Tests: live/test_phase_e_build_types.py expects semantic/knowledge_graph_facts — now removed; tests likely stale. No tests for distillation path.
+
+### context_broker_ae.embed_pipeline
+Nodes: fetch_message → generate_embedding → store_embedding → enqueue_context_assembly.
+Errors: message not found; empty content skip; embedding API errors.
+Tests: covered by tests/claude/test_workers/test_db_worker.py for embedding batch, but not this flow directly.
+
+### context_broker_ae.message_pipeline
+Node: store_message (advisory lock, collapse duplicates, token count, tool error role reclass, update conversation counters).
+Errors: missing context_window_id/conversation_id; conversation/window not found; unique violation retry.
+Tests: covered by tests/claude/live/test_phase_b_core_tools.py and test_transport/test_chat_extras.py. Role reclassification TA-07 not explicitly tested.
+
+### context_broker_ae.search_flow
+Conversation search nodes: embed_conversation_query, search_conversations_db.
+Message search nodes: embed_message_query, hybrid_search_messages, rerank_results.
+Errors: embedding failure fallback; date parse errors; reranker HTTP failure.
+Tests: covered by tests/claude/test_search/test_search_internals.py and live phases.
+
+### context_broker_ae.conversation_ops_flow
+Flows and nodes:
+- create_conversation_node.
+- resolve_token_budget_node → create_context_window_node.
+- load_conversation_and_messages (history).
+- search_context_windows_node.
+- ensure_conversation_node, snap_budget_node, find_or_create_window_node, retrieve_context_node.
+- delete_conversation_node.
+- rename_conversation_node.
+- list_conversations_node.
+- query_logs_node.
+- search_logs_node.
+Errors: invalid UUID; build_type_config validation; get_context inline assembly failures; DB errors; log embeddings missing; date filters.
+Tests: covered by tests/claude/live/test_phase_b_core_tools.py, test_phase_c_management.py, test_phase_i_observability.py; get_context V2 user_prompt storage and inline assembly not explicitly tested.
+
+### context_broker_ae.memory_extraction (legacy flow)
+Nodes: acquire_extraction_lock, fetch_unextracted_messages, build_extraction_text, run_mem0_extraction, mark_messages_extracted, release_extraction_lock.
+Errors: Mem0 client unavailable; mem0.add returns None; prompt missing; lock failures.
+Tests: not found (flow deregistered; worker uses CEAs path now).
+
+### context_broker_ae.memory_search_flow (legacy)
+Nodes: search_memory_graph; retrieve_memory_context.
+Errors: Mem0 unavailable, degraded mode.
+Tests: covered by tests/claude/test_memory/test_memory_integration.py.
+
+### context_broker_ae.memory_admin_flow
+Nodes: add_memory, list_memories, delete_memory.
+Errors: Mem0 unavailable → degraded; exceptions handled.
+Tests: covered in tests/claude/live/test_phase_c_management.py (legacy knowledge_*). CEA path now bypasses these flows; not covered for new wrappers.
+
+### context_broker_ae.cea_extraction_flow (NEW)
+Nodes: search_existing_facts → run_extraction_llm → dispatch_results → handle_error.
+Errors: prompt load; JSON decode; LLM errors; wrapper failures; metadata writes.
+Tests: not found in tests/claude.
+
+### context_broker_ae.metrics_flow
+Node: collect_metrics (Prometheus registry). Error path on generate_latest failure.
+Tests: covered by tests/claude/live/test_phase_i_observability.py.
+
+### context_broker_ae.health_flow
+Node: check_dependencies (Postgres, Neo4j). Errors: DB/HTTP errors.
+Tests: covered by tests/claude/live/test_phase_a_infrastructure.py.
+
+### context_broker_te.imperator_flow
+Nodes: init_context_node, llm_call_node, tool_node (ToolNode), max_iterations_fallback, store_user_message, store_assistant_message.
+CEA integration: optional CEAc enrichment subgraph; get_context V2 with user_prompt, model, domain_context.
+Errors: prompt loading; get_context failures; LLM errors; tool execution errors; max iterations fallback; empty response fallback.
+Tests: covered by tests/claude/live/test_phase_f_imperator.py, test_phase_g*_imperator_tools.py. CEAc path not covered.
+
+### context_broker_te.cea_enrichment_flow (NEW)
+Nodes: decide_search → execute_search → evaluate_and_rank → assemble_context → record_feedback (ReAct loop).
+Errors: LLM query refinement; search_fn failures; feedback_fn failures; token budget truncation.
+Tests: not found in tests/claude.
+
+## Worker behaviors (app/workers/db_worker.py)
+
+- Embedding worker (_embedding_worker)
+  - Polls conversation_messages where embedding IS NULL AND content IS NOT NULL.
+  - Batch embeddings via get_embeddings_model.aembed_documents with timeout.
+  - Retries: consecutive_failures increments; after 5 failures marks rows with zero-vector.
+  - Backoff: after generic errors >=3 sleeps 5s.
+  - Creates HNSW index after first successful batch.
+  - Tests: covered by tests/claude/test_workers/test_db_worker.py (timeouts, poison-pill, backoff).
+
+- Extraction worker (_extraction_worker)
+  - Polls conversation_messages where memory_extracted IS NOT TRUE.
+  - Per-conversation advisory lock; retries per conversation (max 3, then mark extracted).
+  - Calls _get_extraction_flow().ainvoke (CEA extraction flow registered as “cea_extraction” in AE, but worker still calls “memory_extraction” builder — see note in findings below).
+  - Periodic CEA expiration cleanup via QualityWrapper._maybe_cleanup.
+  - Tests: covered by tests/claude/test_workers/test_db_worker.py for locks, retry cap, timeouts. Does not cover CEA cleanup call or flow mismatch.
+
+- Assembly worker (_assembly_worker)
+  - Polls windows with new messages since last_assembled_at; concurrent bounded by assembly_concurrency.
+  - _run_assembly uses get_assembly_graph per build_type.
+  - Tests: covered by tests/claude/test_workers/test_db_worker.py for trigger threshold and error path.
+
+- Log embedding worker (_log_embedding_worker)
+  - Polls system_logs with embedding NULL; uses log_embeddings model.
+  - Poison pill after 5 failures deletes log entries.
+  - Tests: covered by tests/claude/test_workers/test_db_worker.py.
+
+## Configuration options (defaults, validation, invalid handling)
+
+### app/config.py (AE + TE config + creds)
+Key options used in code; each needs tests for default, valid override, invalid values:
+- CONFIG_PATH (/config/config.yml), TE_CONFIG_PATH (/config/te.yml), CREDENTIALS_PATH (/config/credentials/.env)
+- AE config: database.pool_min_size, pool_max_size, command_timeout
+- AE config: embeddings.model/base_url/embedding_dims/tiktoken_enabled/check_embedding_ctx_length
+- AE config: llm/summarization/extraction model configs; get_chat_model roles.
+- AE config: reranker.provider/base_url/model/top_n
+- AE config tuning: worker_poll_interval_seconds, embedding_batch_size, embedding_timeout_seconds, extraction_timeout_seconds, assembly_timeout_seconds, trigger_threshold_percent, assembly_concurrency, log_embedding_poll_interval_seconds, log_embedding_batch_size, tokens_per_message_estimate, chunk_size, initial_lookback_multiplier, max_lookback_tokens, max_concurrent_chunk_summaries, assembly_wait_timeout_seconds, assembly_poll_interval_seconds, recency_decay_days, recency_max_penalty, search_candidate_limit, rrf_constant, verbose_logging, llm_timeout_seconds, etc.
+- TE config: imperator.model/base_url/api_key_env/admin_tools/system_prompt/build_type/max_context_tokens/notification_webhook/user_id.
+- Packages config: packages.source (pypi/devpi/local), devpi_url, local_path.
+- CEA config (validated at startup): cea.retrieval_scope, pre_extraction_fact_limit, expiration_cleanup_interval, ranking.exploration_rate/usefulness_crossover_events/trustworthiness_min_threshold, ceac.max_iterations/max_memories/max_token_budget, source_type_weights.*.
+Invalid handling:
+- validate_cea_config raises RuntimeError on invalid; load_config errors raise RuntimeError; verbose_log_auto swallows errors.
+Tests: partial coverage in tests/claude/test_config/test_config_gaps.py; CEA validation not covered.
+
+### app/token_budget.py
+Options: build_type_config.max_context_tokens (int|\"auto\"), fallback_tokens, provider /models endpoint. Errors on HTTP or missing config → fallback.
+Tests: not found.
+
+### app/prompt_loader.py
+Options: PROMPTS_DIR. Errors: missing prompt raises RuntimeError; async wrapper uses executor. Tests: not found.
+
+### app/logging_setup.py
+Options: log_level; invalid level logs warning. Tests: tests/claude/test_logging/test_logging_gaps.py (partial), not for invalid log_level.
+
+### Alerter config (alerter.yml + env)
+- CONFIG_PATH (ALERTER_CONFIG), POSTGRES_DSN, CHANNEL_TIMEOUT, LLM_TIMEOUT, PG retry counts.
+- Config keys: llm.base_url/model/api_key_env; embeddings.base_url/model/api_key_env; default_channels; log_context.enabled/level/limit/minutes.
+Tests: not found.
+
+### TE tools config gates
+- admin_tools boolean in te.yml.
+- domain_information.enabled, domain_knowledge.enabled.
+- imperator.notification_webhook.
+Tests: tests/claude/test_tools/test_operational_tools.py covers domain tools; admin tools coverage in tests/claude/test_tools/test_admin_tools.py.
+
+## Database operations (queries, migrations, constraints)
+
+### postgres/init.sql
+Tables: schema_migrations, conversations, conversation_messages, context_windows, conversation_summaries, system_logs.
+Indexes: idx_messages_conversation_seq_unique, idx_messages_conversation, idx_messages_conversation_sender, idx_messages_tsv; idx_context_windows_identity; idx_summaries_window_tier_seq; idx_system_logs_*.
+Tests: schema/migrations coverage in tests/claude/test_database/test_database_gaps.py (partial).
+
+### app/migrations.py (including NEW 023/024)
+- 023 creates cea_quality_metadata, cea_feedback_events + indexes. 024 adds natural-key dedup index + usefulness index.
+- All migrations need tests for idempotency, missing table handling, unique constraints.
+Tests: not found for 023/024.
+
+### app/database.py
+Queries: SELECT 1 health check; httpx GET Neo4j HTTP; pool init/close.
+Tests: covered by tests/claude/test_database/test_database_gaps.py (partial).
+
+### app/workers/db_worker.py
+Queries: counts for embedding/extraction/logs; fetch batches; update embedding vectors; advisory locks; update memory_extracted; check windows; create HNSW index; delete logs (poison pill).
+Tests: covered by tests/claude/test_workers/test_db_worker.py.
+
+### AE flows
+- message_pipeline: INSERT conversation_messages; UPDATE conversations counters; collapse duplicate; advisory lock.
+- embed_pipeline: SELECT message; SELECT prior messages; UPDATE embedding.
+- search_flow: hybrid vector+BM25 queries with filters; conversation search with embedding; uses content_tsv.
+- conversation_ops_flow: INSERT conversations; INSERT/SELECT context_windows; SELECT history; DELETE cascades; search logs; etc.
+- build_types: read/write conversation_summaries; update last_assembled_at/last_accessed_at.
+- cea_extraction_flow: no direct SQL; uses QualityWrapper to write metadata.
+Tests: partial via live test phases; no explicit unit tests for most SQL branches.
+
+### context_broker_ae.memory.quality_wrapper (NEW)
+SQL: cea_quality_metadata insert/select; cea_feedback_events insert/select; mem0_memories read for global list/search.
+Tests: not found.
+
+### TE tools
+- admin.db_query: read-only transactions.
+- diagnostic tools read system_logs, context_windows, conversation_summaries, conversation_messages.
+- operational tools insert/select domain_information; domain_memories for pending check.
+- alerting tools CRUD alert_instructions + embedding.
+Tests: diagnostic and operational tools partially covered; alerting tools not covered.
+
+### Alerter
+Creates alert_instructions/alert_events/alert_deliveries; queries instructions; inserts event/delivery.
+Tests: not found.
+
+### Log shipper
+Inserts into system_logs via executemany; reads last timestamp for resume.
+Tests: covered by tests/claude/test_log_shipper/test_log_shipper.py.
+
+## Integration points (external services)
+
+- PostgreSQL via asyncpg (app/*, AE flows, TE tools, alerter, log_shipper).
+- Neo4j via httpx (health check) and Mem0 graph store (mem0-fork, TE domain mem0).
+- Mem0 (fork) for vector + graph storage; quality wrapper intercepts.
+- LLM providers via langchain_openai ChatOpenAI (imperator, summarization, extraction) and embeddings via OpenAIEmbeddings.
+- Reranker via HTTP /rerank endpoint.
+- Docker API via aiodocker (log_shipper).
+- Web requests via httpx (token budget model list, notify, alerter, web tool).
+- DuckDuckGo search (duckduckgo_search), crawl4ai for web_read.
+- Slack/Discord/ntfy/SMTP/Twilio/webhook in alerter.
+- System shell commands in TE tools/system.py (allowlist).
+Tests: most integrations mocked in tests/claude; no tests for alerter channel integrations or web tools.
+
+## Functions and capabilities (public functions) by module
+
+### app/logging_setup.py
+- JsonFormatter.format(record) → JSON log lines; includes context fields; exception formatting. Errors: none (standard).
+- HealthCheckFilter.filter(record) → suppress /health logs.
+- setup_logging() → configure root logger, handler, filters.
+- update_log_level(level) → set log levels; invalid level logs warning and keeps INFO.
+Tests: test_logging/test_logging_gaps.py (partial; invalid level not covered).
+
+### app/config.py
+- invalidate_config_cache()
+- load_config(), async_load_config(), load_startup_config(), load_te_config(), async_load_te_config(), load_merged_config()
+- get_api_key(provider_config)
+- get_build_type_config(config, build_type_name) validates tier allocation
+- get_tuning(config, key, default), get_log_level(config)
+- verbose_log(config, logger, message,...), verbose_log_auto(logger,...)
+- get_chat_model(config, role, streaming=False)
+- get_embeddings_model(config, config_key='embeddings')
+- validate_cea_config(config) (NEW)
+Error paths: missing files, YAML parse errors, invalid config; cache invalidation on content hash change; invalid build type or allocation.
+Tests: test_config/test_config_gaps.py (partial), no tests for validate_cea_config or streaming behavior.
+
+### app/budget.py
+- snap_budget(requested)
+Tests: not found.
+
+### app/token_budget.py
+- resolve_token_budget(config, build_type_config, caller_override)
+- _query_provider_context_length(config, fallback)
+Errors: httpx errors, invalid config.
+Tests: not found.
+
+### app/database.py
+- init_postgres(config)
+- get_pg_pool()
+- close_all_connections()
+- check_postgres_health()
+- check_neo4j_health(config?)
+Errors: asyncpg errors, httpx errors, RuntimeError on uninitialized pool.
+Tests: test_database/test_database_gaps.py (partial).
+
+### app/utils.py
+- stable_lock_id(key)
+Tests: not found.
+
+### app/prompt_loader.py
+- load_prompt(name), async_load_prompt(name)
+Errors: FileNotFoundError → RuntimeError.
+Tests: not found.
+
+### app/metrics_registry.py
+- Metrics definitions only (Counters/Histograms/Gauges).
+Tests: indirectly by metrics endpoints.
+
+### app/main.py
+- lifespan() startup/shutdown; _postgres_retry_loop(); middleware check_postgres_middleware; exception handlers.
+Errors: config validation, postgres failures, imperator init failures; mem0 init fails; exception handlers.
+Tests: test_lifecycle/test_startup_shutdown.py; test_state_manager; live infra tests.
+
+### app/stategraph_registry.py (NEW TE flows scanning)
+- scan() (loads AE/TE entry_points; registers flows/build types; injects KernelTEContext)
+- get_imperator_builder(), get_flow_builder(), get_package_metadata(), is_loaded()
+- _evict_package_modules(), _get_package_version()
+Errors: ImportError/TypeError/ValueError during entry point load.
+Tests: not found.
+
+### app/flows/imperator_wrapper.py
+- invoke_with_metrics(), astream_events_with_metrics(), invalidate(), _get_flow()
+Errors: TE config mtime change; builder missing.
+Tests: indirectly via chat endpoints; not unit tested.
+
+### app/flows/install_stategraph.py
+- install_stategraph(package_name, version)
+- _run_pip(cmd), _record_package_install(package_name, version)
+Errors: pip failures, local path missing, DB insert failure.
+Tests: not found.
+
+### app/flows/contracts.py, base_contract.py
+- TypedDict contracts for assembly/retrieval/AE/TE.
+Tests: not found.
+
+### context_broker_ae.memory.mem0_client.py
+- get_mem0_client(config), reset_mem0_client(), _build_mem0_instance(), _neo4j_config(), _get_embedding_dims().
+Errors: config changes, missing embedding_dims, import errors.
+Tests: not found.
+
+### context_broker_ae.memory.quality_wrapper.py (NEW)
+- QualityWrapper.add(), write_metadata(), search(), list_facts(), record_feedback(), cleanup_expired(), _maybe_cleanup(), _get_metadata_batch(), _get_usefulness_batch(), _global_vector_search(), _global_graph_search(), resolve_temporal(), get_quality_wrapper().
+Errors: invalid conversation_id; Mem0 add returns no id; Postgres errors; expired filtering; graph search failures.
+Tests: not found.
+
+### context_broker_ae.cea_extraction_flow.py (NEW)
+- build_cea_extraction_flow(), search_existing_facts(), run_extraction_llm(), dispatch_results(), handle_error().
+Errors: JSON parse; prompt load; LLM errors; wrapper failures.
+Tests: not found.
+
+### context_broker_te.cea_enrichment_flow.py (NEW)
+- build_ceac_enrichment_flow(), decide_search(), execute_search(), evaluate_and_rank(), assemble_context(), record_feedback(), ranking helpers.
+Errors: LLM failure for query refinement; tool call failures.
+Tests: not found.
+
+### context_broker_te.domain_mem0.py
+- get_domain_mem0(), reset_domain_mem0(), _build_domain_mem0().
+Errors: missing embedding_dims; Mem0 init errors.
+Tests: not found.
+
+### context_broker_te.seed_knowledge.py
+- seed_domain_knowledge().
+Errors: missing table; embedding failures fallback to no-embedding insert.
+Tests: test_lifecycle/test_startup_shutdown.py (import error non-fatal), no direct seed success test.
+
+### TE tools (public tool functions)
+Admin: config_read, db_query, config_write, verbose_toggle, change_inference, migrate_embeddings.
+Diagnostic: log_query, context_introspection, pipeline_status.
+Filesystem: file_read, file_list, file_search, file_write, read_system_prompt, update_system_prompt.
+Operational: store_domain_info, search_domain_info, extract_domain_knowledge, search_domain_knowledge.
+Notify: send_notification.
+System: run_command, calculate.
+Web: web_search, web_read.
+Alerting: add_alert_instruction, list_alert_instructions, update_alert_instruction, delete_alert_instruction.
+Errors: input validation, config missing, permission checks, external HTTP/SMTP failures.
+Tests: admin + filesystem + operational have coverage in tests/claude/test_tools/*. Alerting, web, notify, system tools mostly not covered.
+
+### Alerter (alerter/alerter.py)
+Public endpoints: /health, /metrics, /webhook.
+Functions: _load_config, _ensure_tables, _embed_text, _find_instruction, _llm_format, _send_to_channel (+ channel helpers), _record_event_and_deliveries, _fetch_log_context.
+Errors: Postgres retry; JSON validation; LLM/httpx errors; channel delivery failures; SMTP errors; Twilio errors.
+Tests: not found.
+
+### Log shipper (log_shipper/shipper.py)
+Functions: LogShipper.setup, _get_last_timestamp, tail_container, _write_batch, postgres_writer_loop, scan_existing_containers, event_watcher_loop, run, handle_sigterm.
+Errors: Postgres/Docker errors; queue full drop; timestamp parse failures.
+Tests: tests/claude/test_log_shipper/test_log_shipper.py.
+
+### mem0-fork (memory/main.py, graph_memory.py, quality_gate.py, expiration.py)
+Key public behaviors:
+- Memory.add (supports _skip_graph; side-channel removed), Memory.search (async), update/delete/reset.
+- Graph Memory search returns elementId fields; reranking preserves relation_id.
+- Quality gate functions (extract_metadata_from_facts, apply_quality_gate, apply_post_update_gate).
+- Expiration cleanup functions (maybe_run_cleanup, filter_expired_from_results).
+Errors: validation errors, vector store errors, graph store errors.
+Tests: not found in tests/claude for fork changes.
+
+## Error paths requiring tests (selected high-risk)
+- stategraph_registry.scan: entry point load failure, TE initialize failure, flow registration conflicts.
+- tool_dispatch: invalid tool name; validation errors; flow errors; knowledge_* wrapper errors.
+- get_context: inline assembly failure; conversation recreation; duplicate message collapse.
+- message_pipeline: unique violation retry; tool error role reclassification; missing ids.
+- standard_tiered: prompt load failures; LLM errors; budget guard; unique constraint race; full compaction transaction failure.
+- CEA flows: JSON parse failures; wrapper add returning None; metadata writes failing; feedback write dedup; expiration cleanup.
+- mem0 fork: _skip_graph effect; graph search elementId integrity; side-channel removal regression.
+- TE Imperator: max_iterations fallback; empty response; streaming vs non-streaming LLM.
+- log_shipper: queue overflow; Docker event handling; DB write failures.
+- alerter: instruction search fallback; LLM formatting failure; per-channel delivery errors; idempotency cache.
+
+## Findings: coverage gaps (focus on NEW CEA code)
+
+1) quality_wrapper.py — no tests in tests/claude for add/search/list_facts/record_feedback, metadata enrichment, expiration cleanup, global search, or natural-key dedup. High priority.
+2) cea_extraction_flow.py — no tests for LLM JSON parsing, relationship handling (NEW/DUPLICATE/SUPERSEDES/CONFLICTS), metadata writes, relation_id capture.
+3) cea_enrichment_flow.py — no tests for ranking formula, exploration logic, feedback recording, iteration loop.
+4) Migrations 023/024 — no tests for schema changes, dedup index behavior, feedback usefulness index.
+5) MCP tool changes (knowledge_search/add/list/feedback) — legacy tests exist, but do not cover metadata fields, quality wrapper, feedback events, global search, or scope.
+6) stategraph_registry TE flows scanning — no tests for TE flow registration or flow builder retrieval.
+7) imperator_flow.py CEAc integration — no tests for enrichment injection or tool-callable wiring.
+8) mem0-fork graph_memory elementId changes — no tests verifying relation_id/source_id/destination_id passthrough.
+9) mem0-fork main.py side-channel removal — no tests verifying metadata handling still correct after removal.
+
+## Additional compatibility risks (non-testable in current suite)
+- context_broker_ae/context_assembly.py and retrieval_flow.py re-exports reference symbols removed/renamed in standard_tiered/knowledge_enriched; potential import errors (needs tests or refactor).
+- worker _get_extraction_flow looks for “memory_extraction” flow but AE register deregisters it and registers “cea_extraction”; this mismatch could break extraction worker. Requires test/validation.
+- knowledge_enriched tests expect semantic_messages/knowledge_graph_facts which are now removed server-side; tests may be stale and masking expected behavior changes.
+
+## Test needs checklist (summary)
+For each capability, add tests:
+- Success path, error path, edge cases.
+- Explicitly assert DB side effects (rows written, indexes created), especially for migrations 023/024.
+- Validate CEA metadata and feedback event semantics.
+- Verify CEAc ranking uses trustworthiness + usefulness + exploration parameters.
+- Verify tool schemas and Pydantic validators (e.g., StoreMessageInput requires context_window_id or conversation_id).
+
+---
+End of audit.
+'@ | Set-Content -Path state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md" in C:\Users\j\projects\Joshua26 succeeded in 879ms:
+
+Plan update
+Audit written to docs/designs/cli-discovery-audit-codex.md.
+  ✓ Inventory required files and existing tests/claude coverage targets
+  ✓ Read code/prompt/sql files and extract capabilities + error paths
+  ✓ Compile audit with test needs and coverage notes; write output file
+codex
+Wrote the audit to `state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md` with full capability coverage, test gaps, and CEA focus areas.
+
+Notes:
+- I used PowerShell `Set-Content` to write the file since no “write tool” is available in this environment.
+- Call out if you want the audit expanded into per-function test case tables or a prioritized test plan.
+tokens used
+461,046
+Wrote the audit to `state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md` with full capability coverage, test gaps, and CEA focus areas.
+
+Notes:
+- I used PowerShell `Set-Content` to write the file since no “write tool” is available in this environment.
+- Call out if you want the audit expanded into per-function test case tables or a prioritized test plan.

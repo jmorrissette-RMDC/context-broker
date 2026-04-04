@@ -1,0 +1,2237 @@
+2026-04-04T14:19:00.635713Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(reqwest::Error { kind: Status(404, None), url: "http://192.168.1.120:9222/" })
+OpenAI Codex v0.93.0 (research preview)
+--------
+workdir: C:\Users\j\projects\Joshua26
+model: gpt-5.2-codex
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: auto
+session id: 019d58dc-867e-7783-93a2-fe626d2a5692
+--------
+user
+Post-code 3-CLI discovery audit for the Context Broker CEA implementation (SDLC-02 Step 8, WPR-103 S1a).
+
+Read the ENTIRE Context Broker codebase at state_4_development/context_broker_pmad/. Read every file in:
+- app/ (all .py files)
+- packages/context-broker-ae/src/context_broker_ae/ (all .py files)
+- packages/context-broker-te/src/context_broker_te/ (all .py files)
+- packages/mem0-fork/mem0/memory/ (main.py, graph_memory.py, quality_gate.py, expiration.py)
+- postgres/init.sql
+- config/prompts/ (all .md files)
+- config-test/prompts/ (all .md files)
+- alerter/ (all .py files)
+- log_shipper/ (all .py files)
+
+List EVERY capability that requires test coverage:
+
+1. **Functions** -- every public function, its purpose, its inputs/outputs, its error paths
+2. **MCP endpoints/tools** -- every tool name, its schema, its dispatch path, its error handling
+3. **Pipeline stages** -- every StateGraph node in every flow, what it does, what can go wrong
+4. **Worker behaviors** -- every background worker loop, its polling logic, its retry behavior
+5. **Configuration options** -- every config parameter, its default, what happens with invalid values
+6. **Error paths** -- every try/except, every degradation path, every failure mode
+7. **Database operations** -- every SQL query, every migration, every constraint
+8. **Integration points** -- every cross-module call, every external service interaction
+
+For each capability, state:
+- What it does
+- What tests are needed (success path, error path, edge cases)
+- Whether existing tests cover it (check tests/claude/ directory)
+
+Focus especially on NEW code from the CEA implementation:
+- quality_wrapper.py
+- cea_extraction_flow.py
+- cea_enrichment_flow.py
+- migration 023/024
+- MCP tool changes (knowledge_search, knowledge_add, knowledge_list, knowledge_feedback)
+- stategraph_registry.py TE flows scanning
+- imperator_flow.py CEAc integration
+- graph_memory.py elementId changes
+- main.py (Mem0 fork) side-channel removal
+
+Do NOT create, modify, or delete any files except the output file. Do NOT run any commands that modify the filesystem.
+
+Write your audit to state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md using the write tool.
+mcp: malory starting
+mcp: malory failed: MCP client for `malory` failed to start: MCP startup failed: handshaking with MCP server failed: Send message error Transport [rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<reqwest::async_impl::client::Client>>] error: Client error: HTTP status client error (404 Not Found) for url (http://192.168.1.120:9222/), when send initialize request
+mcp startup: failed: malory
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-ChildItem -Recurse -File state_4_development/context_broker_pmad | Select-Object FullName' in C:\Users\j\projects\Joshua26 succeeded in 1.69s:
+
+FullName                                                                                                               
+--------                                                                                                               
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\'user_id'                                         
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\.gitignore                                        
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\all_code.txt                                      
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\config.example.yml                                
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\deploy.sh                                         
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\docker-compose.claude-test.yml                    
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\docker-compose.yml                                
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\Dockerfile                                        
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\entrypoint.sh                                     
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\inference-models.yml                              
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\I_WILL_FOLLOW_THE_GUIDES.txt                      
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\parsed_capabilities.txt                           
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\parsed_tests.txt                                  
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\parse_ast.py                                      
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\parse_tests.py                                    
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\README.md                                         
+C:\Users\j\projects\Joshua26\state_4_development\context_broker_pmad\requirements.txt                                  
+Plan update
+Large multi-area audit; tracking progress.
+  → Inventory required files and extract target code paths (CEA, MCP tools, migrations, mem0 fork) plus test coverage in tests/claude.
+  • Read required code/prompt/sql files and build capability list by category.
+  • Map capabilities to existing tests and write audit report to docs/designs/cli-discovery-audit-codex.md.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files state_4_development/context_broker_pmad/app -g "*.py"' in C:\Users\j\projects\Joshua26 succeeded in 214ms:
+state_4_development/context_broker_pmad/app\__init__.py
+state_4_development/context_broker_pmad/app\imperator\__init__.py
+state_4_development/context_broker_pmad/app\imperator\state_manager.py
+state_4_development/context_broker_pmad/app\workers\__init__.py
+state_4_development/context_broker_pmad/app\workers\db_worker.py
+state_4_development/context_broker_pmad/app\utils.py
+state_4_development/context_broker_pmad/app\token_budget.py
+state_4_development/context_broker_pmad/app\stategraph_registry.py
+state_4_development/context_broker_pmad/app\flows\__init__.py
+state_4_development/context_broker_pmad/app\flows\tool_dispatch.py
+state_4_development/context_broker_pmad/app\flows\install_stategraph.py
+state_4_development/context_broker_pmad/app\flows\imperator_wrapper.py
+state_4_development/context_broker_pmad/app\flows\contracts.py
+state_4_development/context_broker_pmad/app\flows\build_type_registry.py
+state_4_development/context_broker_pmad/app\flows\base_contract.py
+state_4_development/context_broker_pmad/app\database.py
+state_4_development/context_broker_pmad/app\config.py
+state_4_development/context_broker_pmad/app\budget.py
+state_4_development/context_broker_pmad/app\metrics_registry.py
+state_4_development/context_broker_pmad/app\main.py
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files -g "quality_wrapper.py" -g "cea_extraction_flow.py" -g "cea_enrichment_flow.py" -g "imperator_flow.py" -g "stategraph_registry.py" -g "graph_memory.py" -g "main.py" state_4_development/context_broker_pmad' in C:\Users\j\projects\Joshua26 succeeded in 200ms:
+state_4_development/context_broker_pmad\app\stategraph_registry.py
+state_4_development/context_broker_pmad\app\main.py
+state_4_development/context_broker_pmad\packages\mem0-fork\mem0\proxy\main.py
+state_4_development/context_broker_pmad\packages\mem0-fork\mem0\memory\graph_memory.py
+state_4_development/context_broker_pmad\packages\mem0-fork\mem0\memory\main.py
+state_4_development/context_broker_pmad\packages\mem0-fork\mem0\client\main.py
+state_4_development/context_broker_pmad\packages\context-broker-ae\src\context_broker_ae\memory\quality_wrapper.py
+state_4_development/context_broker_pmad\packages\context-broker-ae\src\context_broker_ae\cea_extraction_flow.py
+state_4_development/context_broker_pmad\packages\context-broker-te\src\context_broker_te\cea_enrichment_flow.py
+state_4_development/context_broker_pmad\packages\context-broker-te\src\context_broker_te\imperator_flow.py
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files state_4_development/context_broker_pmad/tests/claude' in C:\Users\j\projects\Joshua26 succeeded in 199ms:
+state_4_development/context_broker_pmad/tests/claude\issues.json
+state_4_development/context_broker_pmad/tests/claude\conftest.py
+state_4_development/context_broker_pmad/tests/claude\test_rating_parser.py
+state_4_development/context_broker_pmad/tests/claude\TEST_PLAN.md
+state_4_development/context_broker_pmad/tests/claude\__init__.py
+state_4_development/context_broker_pmad/tests/claude\test_memory\__init__.py
+state_4_development/context_broker_pmad/tests/claude\test_memory\test_memory_integration.py
+state_4_development/context_broker_pmad/tests/claude\ISSUES.md
+state_4_development/context_broker_pmad/tests/claude\test_assembly\__init__.py
+state_4_development/context_broker_pmad/tests/claude\test_assembly\test_assembly_guards.py
+state_4_development/context_broker_pmad/tests/claude\test_helpers.py
+state_4_development/context_broker_pmad/tests/claude\test_workers\__init__.py
+state_4_development/context_broker_pmad/tests/claude\test_workers\test_db_worker.py
+state_4_development/context_broker_pmad/tests/claude\test_lifecycle\__init__.py
+state_4_development/context_broker_pmad/tests/claude\test_log_shipper\__init__.py
+state_4_development/context_broker_pmad/tests/claude\test_lifecycle\test_startup_shutdown.py
+state_4_development/context_broker_pmad/tests/claude\test_log_shipper\test_log_shipper.py
+state_4_development/context_broker_pmad/tests/claude\PERFORMANCE.md
+state_4_development/context_broker_pmad/tests/claude\test_logging\__init__.py
+state_4_development/context_broker_pmad/tests/claude\test_logging\test_logging_gaps.py
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae -g "*.py"' in C:\Users\j\projects\Joshua26 succeeded in 205ms:
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\__init__.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\search_flow.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\retrieval_flow.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\register.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\metrics_flow.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\message_pipeline.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\memory_search_flow.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\memory_scoring.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\memory_extraction.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\memory_admin_flow.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\memory\__init__.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\memory\quality_wrapper.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\memory\mem0_client.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\health_flow.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\embed_pipeline.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\context_assembly.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\cea_extraction_flow.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\build_types\__init__.py
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\build_types\tier_scaling.py
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te -g "*.py"' in C:\Users\j\projects\Joshua26 succeeded in 179ms:
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\__init__.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\_kernel_ctx.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\_ctx.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\imperator_flow.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\domain_mem0.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\cea_enrichment_flow.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\register.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\seed_knowledge.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\tools\__init__.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\tools\web.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\tools\system.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\tools\operational.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\tools\notify.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\tools\filesystem.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\tools\diagnostic.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\tools\alerting.py
+state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te\tools\admin.py
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files state_4_development/context_broker_pmad/log_shipper -g "*.py"' in C:\Users\j\projects\Joshua26 succeeded in 180ms:
+state_4_development/context_broker_pmad/log_shipper\shipper.py
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files state_4_development/context_broker_pmad -g "*023*" -g "*024*"' in C:\Users\j\projects\Joshua26 exited 1 in 197ms:
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files state_4_development/context_broker_pmad/app -g "*.py" | ForEach-Object {"`n# FILE: $_`n"; Get-Content -Raw $_}' in C:\Users\j\projects\Joshua26 succeeded in 274ms:
+
+# FILE: state_4_development/context_broker_pmad/app\__init__.py
+
+
+# FILE: state_4_development/context_broker_pmad/app\workers\__init__.py
+
+
+# FILE: state_4_development/context_broker_pmad/app\workers\db_worker.py
+
+"""
+Database-driven background worker for the Context Broker.
+
+Replaces Redis queues with direct database polling. The database IS
+the queue â€” messages with NULL embeddings need embedding, messages
+with memory_extracted=FALSE need extraction. No external queue system
+required.
+
+Three worker loops run concurrently:
+  - Embedding: polls for unembedded messages, processes in batches
+  - Extraction: polls for unextracted messages, sends to Mem0
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/config.py' in C:\Users\j\projects\Joshua26 succeeded in 189ms:
+"""
+Configuration management for the Context Broker.
+
+Two config files per REQ-002 Â§7 (TE Configuration Separation):
+- AE config (/config/config.yml): infrastructure settings (database, workers, locks)
+- TE config (/config/te.yml): cognitive settings (inference, build types, tuning)
+
+AE config is read once at startup (cached, restart required for changes).
+TE config is read on each operation (hot-reloadable, no restart needed).
+"""
+
+import asyncio
+import hashlib
+import logging
+import os
+import threading
+from functools import lru_cache
+from typing import Any
+
+import yaml
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex-v2.txt' in C:\Users\j\projects\Joshua26 succeeded in 230ms:
+2026-04-04T14:17:05.823378Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(reqwest::Error { kind: Status(404, None), url: "http://192.168.1.120:9222/" })
+OpenAI Codex v0.93.0 (research preview)
+--------
+workdir: C:\Users\j\projects\Joshua26
+model: gpt-5.2-codex
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: auto
+session id: 019d58da-c60a-7501-8600-a4ed6e7b9de1
+--------
+user
+Post-code 3-CLI discovery audit for the Context Broker CEA implementation (SDLC-02 Step 8, WPR-103 S1a).
+
+Read the ENTIRE Context Broker codebase at state_4_development/context_broker_pmad/. Read every file in:
+- app/ (all .py files)
+- packages/context-broker-ae/src/context_broker_ae/ (all .py files)
+- packages/context-broker-te/src/context_broker_te/ (all .py files)
+- packages/mem0-fork/mem0/memory/ (main.py, graph_memory.py, quality_gate.py, expiration.py)
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py' in C:\Users\j\projects\Joshua26 succeeded in 197ms:
+"""
+CEA Quality Wrapper -- wraps a near-stock Mem0 instance with quality metadata,
+feedback tracking, enriched search, and expiration management.
+
+All CEA quality logic lives here. Mem0 handles vector storage (pgvector),
+graph extraction (Neo4j), dedup/update logic, and entity normalization.
+The wrapper intercepts before add and after search.
+
+NOTE: _global_vector_search and _global_graph_search query Mem0's internal
+tables (mem0_memories) and Neo4j directly. This couples to Mem0 1.0.8's
+schema. Acceptable for a forked version but fragile across Mem0 upgrades.
+
+See PRD-context-engineering-architecture.md REQ-CEA-Q03.
+See HLD-context-engineering-architecture.md S2 Quality Wrapper.
+"""
+
+import asyncio
+import hashlib
+import logging
+import re
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 197ms:
+"""
+CEAs Extraction Flow -- server-side deterministic StateGraph.
+
+Runs at compaction time within compact_tier1(). Extracts durable facts
+and graph triples from artifact-stripped tier 1 content via structured
+LLM output, then dispatches results through the quality wrapper.
+
+See PRD REQ-CEA-S01 through S10.
+See HLD S3 Flow A: Extraction (Write Side).
+"""
+
+import json
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 229ms:
+"""
+CEAc Enrichment Flow -- client-side agentic StateGraph subgraph (ReAct pattern).
+
+Sits between get_context and agent response generation. Searches the
+vector store and knowledge graph via injected tool callables (no AE imports),
+ranks results using the four-dimension memory model, assembles enriched
+context, and records feedback events.
+
+The CEAc has ZERO imports from context_broker_ae. It communicates with the
+server exclusively through tool callables injected in the state. For the CB's
+own Imperator, these callables wrap the MCP tool dispatch. For external agents,
+they would wrap MCP protocol calls. (ERQ-002 S12.3: TE package independence.)
+
+See PRD REQ-CEA-C01 through C06.
+See HLD S3 Flow B: Enrichment (Read Side).
+"""
+
+import asyncio
+import logging
+import time
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/imperator_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 225ms:
+"""
+Imperator â€” LangGraph ReAct-style conversational agent flow.
+
+The Imperator is the Context Broker's built-in conversational agent.
+It uses a proper LangGraph ReAct graph (agent_node -> tool_node loop).
+Conversation history is loaded from PostgreSQL on each invocation and
+results are stored via the standard message pipeline (conv_store_message).
+
+Uses LangChain's ChatOpenAI.bind_tools() for tool binding.
+
+ARCH-05: ReAct loop is graph edges, not a while loop inside a node.
+ARCH-06: In-memory MemorySaver is used as the LangGraph checkpointer for
+         the ReAct loop's multi-step tool calling cycle. It is NOT used
+         for cross-invocation persistence â€” each invocation gets a unique
+         thread_id, so the MemorySaver is effectively ephemeral. The DB
+         remains the persistence layer for conversation history.
+F-22:    Messages stored through conv_store_message pipeline.
+"""
+
+import logging
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/stategraph_registry.py' in C:\Users\j\projects\Joshua26 succeeded in 238ms:
+"""
+StateGraph package registry â€” bootstrap kernel component.
+
+Discovers AE and TE packages via Python entry_points (REQ-001 Â§10.2).
+Follows the Kaiser pattern: importlib.metadata for discovery,
+sys.modules eviction for hot-reload without container restart.
+
+Entry point groups:
+  - context_broker.ae: AE packages (infrastructure StateGraphs)
+  - context_broker.te: TE packages (cognitive StateGraphs â€” Imperator)
+"""
+
+import importlib
+import importlib.metadata
+import logging
+import sys
+import threading
+from typing import Callable
+
+_log = logging.getLogger("context_broker.stategraph_registry")
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py' in C:\Users\j\projects\Joshua26 succeeded in 226ms:
+import logging
+
+from mem0.memory.utils import format_entities, sanitize_relationship_for_cypher
+
+try:
+    from langchain_neo4j import Neo4jGraph
+except ImportError:
+    raise ImportError("langchain_neo4j is not installed. Please install it using pip install langchain-neo4j")
+
+try:
+    from rank_bm25 import BM25Okapi
+except ImportError:
+    raise ImportError("rank_bm25 is not installed. Please install it using pip install rank-bm25")
+
+from mem0.graphs.tools import (
+    DELETE_MEMORY_STRUCT_TOOL_GRAPH,
+    DELETE_MEMORY_TOOL_GRAPH,
+    EXTRACT_ENTITIES_STRUCT_TOOL,
+    EXTRACT_ENTITIES_TOOL,
+    RELATIONS_STRUCT_TOOL,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py' in C:\Users\j\projects\Joshua26 succeeded in 202ms:
+import asyncio
+import concurrent
+import gc
+import hashlib
+import json
+import logging
+import os
+import uuid
+import warnings
+from copy import deepcopy
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Union
+
+from pydantic import ValidationError
+
+from mem0.configs.base import MemoryConfig, MemoryItem
+from mem0.configs.enums import MemoryType
+from mem0.configs.prompts import (
+    PROCEDURAL_MEMORY_SYSTEM_PROMPT,
+    get_update_memory_messages,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/quality_gate.py' in C:\Users\j\projects\Joshua26 succeeded in 222ms:
+"""
+Quality gate for Mem0 memory extraction.
+
+Provides configurable rejection rules that filter extracted facts before they
+reach the vector store. Two checkpoints:
+  1. Post-extraction: after LLM extracts facts, before normalize_facts
+  2. Post-update-decision: after update LLM returns ADD/UPDATE, before write
+
+DESIGN NOTE (side-channel approach):
+  We chose NOT to modify Mem0's core pipeline (normalize_facts, update prompt,
+  _create_memory, _update_memory). The upstream pipeline normalizes facts to
+  plain strings and the update LLM expects plain strings â€” modifying this
+  would cascade through the entire extraction/dedup flow and risk breaking
+  Mem0's carefully tested LLM interaction patterns.
+
+  Instead, metadata (expires_at, custom fields) travels in a parallel array
+  indexed by position. The core pipeline sees plain strings as before.
+  Metadata is merged into payloads only at the final write step
+  (_create_memory / _update_memory), keeping the fork's diff minimal and
+  the upstream pipeline untouched.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/expiration.py' in C:\Users\j\projects\Joshua26 succeeded in 228ms:
+"""
+Memory expiration cleanup for Mem0 fork.
+
+Self-cleaning mechanism that removes expired memories. Triggered inside add()
+when cleanup_interval_hours has elapsed since last run. Uses an in-memory
+guard flag (not a lock) â€” duplicate cleanup across processes is safe because
+deletes are idempotent.
+
+DESIGN NOTES:
+  - Cleanup runs at the start of add(), not as a background job. Mem0 is a
+    library, not a service â€” it has no scheduler. The caller's add() call
+    is the trigger.
+  - last_cleanup timestamp is stored in the history DB (SQLite/Postgres),
+    not in the vector store or mem0migrations (which is telemetry-only).
+  - For backends that don't support range filters on list(), we fall back
+    to listing all memories and filtering in Python. This is O(N) but only
+    runs once per cleanup_interval_hours.
+  - Graph store cleanup is intentionally skipped â€” graph entities can be
+    shared across memories, and deleting one expired memory's graph data
+    could corrupt still-living memories. Documented as a known limitation.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/mcp.py' in C:\Users\j\projects\Joshua26 succeeded in 191ms:
+"""
+MCP (Model Context Protocol) endpoint.
+
+Implements HTTP/SSE transport for MCP tool access.
+Routes tool calls to compiled StateGraph flows.
+
+Endpoints:
+  GET  /mcp          â€” Establish SSE session
+  POST /mcp          â€” Sessionless tool call or route to session
+  POST /mcp?sessionId=xxx â€” Route to existing session
+"""
+
+import asyncio
+import decimal
+import json
+import logging
+import time
+import uuid
+from collections import OrderedDict
+from typing import Any, AsyncGenerator
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/flows/tool_dispatch.py' in C:\Users\j\projects\Joshua26 succeeded in 235ms:
+"""
+Tool dispatch â€” routes MCP tool calls to compiled StateGraph flows.
+
+All tool logic lives in StateGraph flows loaded dynamically from AE/TE
+packages via entry_points (REQ-001 Â§10). This module is the thin
+kernel-side routing layer that maps tool names to their flows using
+the stategraph_registry.
+"""
+
+import logging
+import time
+from typing import Any
+
+from app.flows.build_type_registry import get_retrieval_graph
+from app.metrics_registry import MCP_REQUESTS, MCP_REQUEST_DURATION
+from app.stategraph_registry import get_flow_builder, get_imperator_builder
+from app.models import (
+    GetContextInput,
+    ImperatorChatInput,
+    CreateContextWindowInput,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/chat.py' in C:\Users\j\projects\Joshua26 succeeded in 195ms:
+"""
+OpenAI-compatible chat completions endpoint.
+
+Implements /v1/chat/completions following the OpenAI API specification.
+Routes to the Imperator StateGraph.
+Supports both streaming (SSE) and non-streaming responses.
+"""
+
+import json
+import logging
+import time
+import uuid
+from typing import AsyncGenerator
+
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from pydantic import ValidationError
+
+from app.config import async_load_config
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/health.py' in C:\Users\j\projects\Joshua26 succeeded in 196ms:
+"""
+Health check endpoint.
+
+Tests all backing service connections and returns aggregated status.
+The LangGraph container performs the actual dependency checks â€”
+nginx proxies the response without performing checks itself.
+"""
+
+import logging
+
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
+from app.config import async_load_config
+from app.stategraph_registry import get_flow_builder
+
+_log = logging.getLogger("context_broker.routes.health")
+
+router = APIRouter()
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/metrics.py' in C:\Users\j\projects\Joshua26 succeeded in 194ms:
+"""
+Prometheus metrics endpoint.
+
+Exposes metrics collected from StateGraph executions.
+Metrics are produced inside StateGraphs, not in route handlers.
+"""
+
+import logging
+
+from fastapi import APIRouter
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST
+
+from app.stategraph_registry import get_flow_builder
+
+_log = logging.getLogger("context_broker.routes.metrics")
+
+router = APIRouter()
+
+_metrics_flow = None
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/caller_identity.py' in C:\Users\j\projects\Joshua26 succeeded in 225ms:
+"""Resolve caller identity from HTTP requests.
+
+Used by both the OpenAI chat and MCP endpoints to determine who is
+sending messages. The resolved identity is used as the sender field
+on stored messages.
+
+Priority: user field from request body â†’ reverse DNS on source IP â†’ "unknown"
+"""
+
+import asyncio
+import functools
+import logging
+import socket
+
+from fastapi import Request
+
+_log = logging.getLogger("context_broker.routes.caller_identity")
+
+
+@functools.lru_cache(maxsize=256)
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/database.py' in C:\Users\j\projects\Joshua26 succeeded in 183ms:
+"""
+Database connection management for the Context Broker.
+
+Manages asyncpg (PostgreSQL) connection pool. PostgreSQL is the only
+external database â€” it handles data storage, vector search (pgvector),
+job state (DB-driven workers), and advisory locks.
+"""
+
+import base64
+import logging
+import os
+from typing import Optional
+
+import asyncpg
+import httpx
+
+_log = logging.getLogger("context_broker.database")
+
+_pg_pool: Optional[asyncpg.Pool] = None
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/prompt_loader.py' in C:\Users\j\projects\Joshua26 succeeded in 204ms:
+"""
+Prompt template loader.
+
+Loads externalized prompt templates from /config/prompts/.
+Templates are cached with mtime check â€” only re-read when the file changes (M-11).
+"""
+
+import asyncio
+import logging
+import os
+from pathlib import Path
+
+_log = logging.getLogger("context_broker.prompt_loader")
+
+PROMPTS_DIR = Path(os.environ.get("PROMPTS_DIR", "/config/prompts"))
+
+# Cache: name -> (mtime, content)
+_prompt_cache: dict[str, tuple[float, str]] = {}
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/models.py' in C:\Users\j\projects\Joshua26 succeeded in 228ms:
+"""
+Pydantic models for request/response validation.
+
+All external inputs are validated through these models before
+reaching StateGraph flows.
+"""
+
+from typing import Any, Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field, model_validator
+
+# ============================================================
+# MCP Tool Input Models
+# ============================================================
+
+
+class CreateConversationInput(BaseModel):
+    """Input for conv_create_conversation."""
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "_migration_0(23|24)" state_4_development/context_broker_pmad/app/migrations.py' in C:\Users\j\projects\Joshua26 succeeded in 211ms:
+554:async def _migration_023(conn) -> None:
+615:async def _migration_024(conn) -> None:
+719:        _migration_023,
+724:        _migration_024,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/migrations.py' in C:\Users\j\projects\Joshua26 succeeded in 188ms:
+"""
+Database schema migration management.
+
+Applies pending migrations on startup. Migrations are forward-only
+and non-destructive. The application refuses to start if a migration
+cannot be safely applied.
+"""
+
+import logging
+from typing import Callable
+
+import asyncpg
+
+from app.database import get_pg_pool
+
+_log = logging.getLogger("context_broker.migrations")
+
+
+async def _migration_001(conn) -> None:
+    """Migration 1: Initial schema.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/main.py' in C:\Users\j\projects\Joshua26 succeeded in 212ms:
+"""
+Context Broker â€” ASGI application entry point.
+
+FastAPI application that wires together all routes, middleware,
+and lifecycle events. This file is transport only â€” all logic
+lives in StateGraph flows.
+"""
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
+import asyncpg
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.config import async_load_config, load_config, get_build_type_config, get_tuning
+from app.database import init_postgres, close_all_connections, get_pg_pool
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/utils.py' in C:\Users\j\projects\Joshua26 succeeded in 189ms:
+"""Shared utilities for the Context Broker."""
+
+import hashlib
+
+
+def stable_lock_id(key: str) -> int:
+    """Generate a deterministic positive bigint from a string key.
+
+    Used for Postgres advisory locks. Unlike Python's built-in hash(),
+    this produces the same value across different processes and restarts
+    (Python's hash() is randomized per process via PYTHONHASHSEED).
+    """
+    digest = hashlib.sha256(key.encode()).digest()
+    return int.from_bytes(digest[:8], "big") & 0x7FFFFFFFFFFFFFFF
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/token_budget.py' in C:\Users\j\projects\Joshua26 succeeded in 214ms:
+"""
+Token budget resolution for context windows.
+
+Resolves the max_context_tokens setting for a build type:
+- "auto": query the configured LLM provider's model list endpoint
+- explicit integer: use that value directly
+- caller override: takes precedence over build type default
+
+Token budget is resolved once at window creation and stored.
+"""
+
+import logging
+from typing import Optional
+
+import httpx
+
+from app.config import get_api_key
+
+_log = logging.getLogger("context_broker.token_budget")
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/budget.py' in C:\Users\j\projects\Joshua26 succeeded in 206ms:
+"""
+Token budget bucket management.
+
+Snaps requested budgets to standard buckets for efficient window sharing.
+Multiple agents with similar budgets share pre-built summaries instead of
+each triggering separate assembly work.
+"""
+
+# Standard buckets â€” doubling progression with 200K for common model sizes
+BUDGET_BUCKETS = [
+    4096,  # 4K
+    8192,  # 8K
+    16384,  # 16K
+    32768,  # 32K
+    65536,  # 64K
+    131072,  # 128K
+    204800,  # 200K (Anthropic Sonnet/Opus pre-1M)
+    262144,  # 256K
+    524288,  # 512K
+    1048576,  # 1M
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"add_node\\(\" state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te state_4_development/context_broker_pmad/app/flows" in C:\Users\j\projects\Joshua26 succeeded in 210ms:
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\health_flow.py:73:    workflow.add_node("check_dependencies", check_dependencies)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\cea_extraction_flow.py:374:    workflow.add_node("search_existing_facts", search_existing_facts)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\cea_extraction_flow.py:375:    workflow.add_node("run_extraction_llm", run_extraction_llm)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\cea_extraction_flow.py:376:    workflow.add_node("dispatch_results", dispatch_results)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\cea_extraction_flow.py:377:    workflow.add_node("handle_error", handle_error)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:84:    workflow.add_node("create_conversation_node", create_conversation_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:198:    workflow.add_node("resolve_token_budget_node", resolve_token_budget_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:199:    workflow.add_node("create_context_window_node", create_context_window_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:294:    workflow.add_node("load_conversation_and_messages", load_conversation_and_messages)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:409:    workflow.add_node("search_context_windows_node", search_context_windows_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:716:    workflow.add_node("ensure_conversation_node", ensure_conversation_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:717:    workflow.add_node("snap_budget_node", snap_budget_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:718:    workflow.add_node("find_or_create_window_node", find_or_create_window_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:719:    workflow.add_node("retrieve_context_node", retrieve_context_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:780:    workflow.add_node("delete_conversation_node", delete_conversation_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:819:    workflow.add_node("rename_conversation_node", rename_conversation_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:896:    workflow.add_node("list_conversations_node", list_conversations_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:983:    workflow.add_node("query_logs_node", query_logs_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\conversation_ops_flow.py:1079:    workflow.add_node("search_logs_node", search_logs_node)
+state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae\embed_pipeline.py:180:    workflow.add_node("fetch_message", fetch_message)
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/tests/claude/TEST_PLAN.md' in C:\Users\j\projects\Joshua26 succeeded in 204ms:
+# Test Plan â€” Claude Test Suite
+
+**Author:** Claude Opus 4.6
+**Date:** 2026-03-27
+**Scope:** 100% coverage of all 255 capabilities â€” mock unit tests + live integration tests
+
+---
+
+## Architecture
+
+The suite has two layers:
+
+1. **Mock tests** (315 tests) â€” unit tests with mocked dependencies. Cover error paths, edge cases, and logic that can't be triggered against live infrastructure. Run anywhere, no infra needed.
+
+2. **Live tests** (123 tests) â€” integration tests against a **dedicated Docker Compose test stack** (`docker-compose.claude-test.yml`). Use the full Phase 1/2/3 datasets with the nominal inference model set. The test stack runs on port 8081 alongside the production stack with no conflicts.
+
+**Total: 438 tests covering all 255 capabilities.**
+
+## Running
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "cea|CEAc|quality" state_4_development/context_broker_pmad/tests/claude' in C:\Users\j\projects\Joshua26 succeeded in 203ms:
+state_4_development/context_broker_pmad/tests/claude\test_rating_parser.py:3:The _extract_rating function is used by Phase L quality evaluation tests.
+state_4_development/context_broker_pmad/tests/claude\test_rating_parser.py:20:from test_phase_l_quality_eval import _extract_rating
+state_4_development/context_broker_pmad/tests/claude\test_rating_parser.py:62:            "The quality is actually quite GOOD"
+state_4_development/context_broker_pmad/tests/claude\test_rating_parser.py:104:            "This is definitely not POOR quality. The summaries capture "
+state_4_development/context_broker_pmad/tests/claude\ISSUES.md:65:| error | quality-tiered | `test_tiered_summary_quality` | LLM judge rating: POOR | GOOD or ACCEPTABLE | Rating: POOR. Judge response excerpt: The assembled context has several issues worth noting:
+state_4_development/context_broker_pmad/tests/claude\ISSUES.md:74:| error | quality-enriched | `test_enriched_quality` | LLM judge rating: POOR | GOOD or ACCEPTABLE | Rating: POOR. Judge response excerpt: The enriched context output consists entirely of repeated `<local-command-caveat>` wrapper messages with no actual content â€” the last entry is even truncated mid-sentence. There is:
+state_4_development/context_broker_pmad/tests/claude\ISSUES.md:78:| warning | quality-extraction | `test_knowledge_extraction_quality` | LLM judge rating: ACCEPTABLE | GOOD or ACCEPTABLE | Rating: ACCEPTABLE. Judge response excerpt: **Assessment by criterion:**
+state_4_development/context_broker_pmad/tests/claude\ISSUES.md:84:| warning | quality-imperator | `test_imperator_coherence` | LLM judge rating: ACCEPTABLE | GOOD or ACCEPTABLE | Rating: ACCEPTABLE. Judge response excerpt: **Evaluation of Imperator's Response**
+state_4_development/context_broker_pmad/tests/claude\ISSUES.md:93:| warning | quality-tiered | `test_tiered_summary_quality` | LLM judge rating: ACCEPTABLE | GOOD or ACCEPTABLE | Rating: ACCEPTABLE. Judge response excerpt: The assembled context is essentially a verbatim copy of the original messages â€” no summarization occurred. The "messages" are synthetic test payloads (UUIDs, concurrent sender labels) with no meaningful conversational content to summarize.
+state_4_development/context_broker_pmad/tests/claude\ISSUES.md:98:| error | quality-enriched | `test_enriched_quality` | LLM judge rating: POOR | GOOD or ACCEPTABLE | Rating: POOR. Judge response excerpt: The enriched context has several significant quality issues:
+state_4_development/context_broker_pmad/tests/claude\ISSUES.md:107:| warning | quality-extraction | `test_knowledge_extraction_quality` | LLM judge rating: ACCEPTABLE | GOOD or ACCEPTABLE | Rating: ACCEPTABLE. Judge response excerpt: **Assessment by memory:**
+state_4_development/context_broker_pmad/tests/claude\ISSUES.md:113:| warning | quality-imperator | `test_imperator_coherence` | LLM judge rating: ACCEPTABLE | GOOD or ACCEPTABLE | Rating: ACCEPTABLE. Judge response excerpt: **Evaluation of Imperator's Response**
+state_4_development/context_broker_pmad/tests/claude\live\test_phase_i_observability.py:80:        # This is a quality check -- warn but don't hard-fail
+state_4_development/context_broker_pmad/tests/claude\issues.json:246:    "test_name": "test_tiered_summary_quality",
+state_4_development/context_broker_pmad/tests/claude\issues.json:249:    "category": "quality-tiered",
+state_4_development/context_broker_pmad/tests/claude\issues.json:255:    "test_name": "test_enriched_quality",
+state_4_development/context_broker_pmad/tests/claude\issues.json:258:    "category": "quality-enriched",
+state_4_development/context_broker_pmad/tests/claude\issues.json:264:    "test_name": "test_knowledge_extraction_quality",
+state_4_development/context_broker_pmad/tests/claude\issues.json:267:    "category": "quality-extraction",
+state_4_development/context_broker_pmad/tests/claude\issues.json:276:    "category": "quality-imperator",
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files state_4_development/context_broker_pmad/config/prompts state_4_development/context_broker_pmad/config-test/prompts -g "*.md" | ForEach-Object {"`n# FILE: $_`n"; Get-Content -Raw $_}' in C:\Users\j\projects\Joshua26 succeeded in 248ms:
+
+# FILE: state_4_development/context_broker_pmad/config/prompts\memory_extraction.md
+
+You are a fact extraction engine for a technical knowledge base. Your job is to extract discrete, concrete, self-contained facts from conversations between a human architect and AI agents about software architecture, deployment, and configuration.
+
+INPUT: A conversation transcript.
+OUTPUT: A list of memories, where each memory is one atomic fact.
+
+== WHAT TO EXTRACT ==
+
+Extract ONLY facts that match these categories:
+
+1. ARCHITECTURAL DECISIONS: Specific choices with rationale.
+   GOOD: "Joshua26 uses Gemini 2.5 Flash-Lite for tier-1 summarization because speed matters more than quality for archival compression"
+   GOOD: "Context Broker stores conversation history in PostgreSQL, not Redis, because conversations must survive container restarts"
+
+2. CONFIGURATION VALUES: Concrete settings, thresholds, parameters.
+   GOOD: "pgvector HNSW indexes are configured with 1024 dimensions and ef_construction=200"
+   GOOD: "Memory extraction LLM concurrency is limited to 2 concurrent calls"
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/postgres/init.sql' in C:\Users\j\projects\Joshua26 succeeded in 196ms:
+-- Context Broker â€” PostgreSQL schema
+-- Loaded automatically by postgres entrypoint on first run.
+-- Requires: pgvector extension (pre-installed in pgvector/pgvector:pg16 image)
+
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ============================================================
+-- Schema versioning
+-- Applied and checked at application startup.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TIMESTAMP DEFAULT NOW(),
+    description TEXT
+);
+
+INSERT INTO schema_migrations (version, description)
+VALUES (1, 'Initial schema')
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/alerter/alerter.py' in C:\Users\j\projects\Joshua26 succeeded in 194ms:
+"""
+Context Broker Alerter â€” Instruction-driven webhook relay.
+
+Receives CloudEvents-format webhooks, searches an instructions table
+for the best matching instruction, formats via LLM using that instruction
+as the system prompt, and sends to the channels specified in the instruction.
+
+The Imperator manages instructions via tools â€” no static config needed
+for routing. The alerter config only has: LLM settings, embedding settings,
+Postgres DSN, and a default fallback channel.
+"""
+
+import asyncio
+import json
+import logging
+import os
+import smtplib
+import ssl
+import sys
+import time
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/log_shipper/shipper.py' in C:\Users\j\projects\Joshua26 succeeded in 217ms:
+import asyncio
+import json
+import logging
+import os
+import signal
+import sys
+from datetime import datetime, timezone
+
+import aiodocker
+import asyncpg
+
+# Configure logging for the shipper itself
+
+
+class _JsonFormatter(logging.Formatter):
+    """Format log records as single-line JSON objects."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools -g "*.py" | ForEach-Object {"`n# FILE: $_`n"; Get-Content -Raw $_}' in C:\Users\j\projects\Joshua26 succeeded in 266ms:
+
+# FILE: state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools\filesystem.py
+
+"""Filesystem tools â€” read-only access + downloads + system prompt.
+
+Read-only: sandboxed to allowed roots (/app, /config, /data).
+Write: only to /data/downloads/.
+System prompt: read and update the Imperator's own prompt file.
+"""
+
+import asyncio
+import logging
+import os
+import re
+from pathlib import Path
+
+from langchain_core.tools import tool
+
+_log = logging.getLogger("context_broker.tools.filesystem")
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/admin.py' in C:\Users\j\projects\Joshua26 succeeded in 189ms:
+"""Admin tools â€” gated by admin_tools: true in TE config.
+
+Configuration reading/writing, verbose toggle, database queries.
+"""
+
+import asyncio
+import copy
+import logging
+import re
+
+import asyncpg
+import yaml
+from langchain_core.tools import tool
+
+from context_broker_te._ctx import get_ctx
+
+_log = logging.getLogger("context_broker.tools.admin")
+
+
+def _redact_config(config: dict) -> dict:
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/alerting.py' in C:\Users\j\projects\Joshua26 succeeded in 226ms:
+"""Alerting tools â€” manage alert instructions for the alerter sidecar.
+
+The alerter uses an instruction table to decide how to format and route
+alerts. These tools let the Imperator add, list, update, and delete
+instructions at runtime.
+"""
+
+import json
+import logging
+
+import asyncpg
+
+from langchain_core.tools import tool
+
+from context_broker_te._ctx import get_ctx
+
+_log = logging.getLogger("context_broker.tools.alerting")
+
+
+@tool
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/notify.py' in C:\Users\j\projects\Joshua26 succeeded in 213ms:
+"""Notification tools â€” send alerts via webhook.
+
+The webhook URL is configured in te.yml under imperator.notification_webhook.
+
+Default: http://context-broker-alerter:8000/webhook (the alerter sidecar).
+The alerter routes, formats via LLM, and fans out to Slack/Discord/ntfy/SMTP.
+
+Alternative: point directly at an external service (ntfy.sh, Slack) to
+skip the alerter entirely.
+"""
+
+import asyncio
+import logging
+import socket
+from datetime import datetime, timezone
+
+from langchain_core.tools import tool
+
+_log = logging.getLogger("context_broker.tools.notify")
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/tools/diagnostic.py' in C:\Users\j\projects\Joshua26 succeeded in 200ms:
+"""Diagnostic tools â€” always available to the Imperator.
+
+Read-only observation tools for logs, context, pipeline status.
+"""
+
+import logging
+
+import asyncpg
+from langchain_core.tools import tool
+
+from context_broker_te._ctx import get_ctx
+
+_log = logging.getLogger("context_broker.tools.diagnostic")
+
+
+@tool
+async def log_query(
+    container: str = "", level: str = "", search: str = "", limit: int = 50
+) -> str:
+    """Query MAD container logs from the system_logs table.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/_ctx.py' in C:\Users\j\projects\Joshua26 succeeded in 190ms:
+"""
+TE/AE decoupling â€” TEContext protocol and singleton.
+
+Defines the interface the TE needs from the AE kernel, without importing
+any ``app.*`` modules.  The AE bootstrap creates a concrete implementation
+and calls ``initialize(ctx)`` before the Imperator flow is compiled.
+
+This is the ONLY module TE files import for kernel services.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Awaitable, Callable, Optional, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class TEContext(Protocol):
+    """Surface the TE needs from the AE kernel."""
+
+    # â”€â”€ Properties / fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/_kernel_ctx.py' in C:\Users\j\projects\Joshua26 succeeded in 194ms:
+"""
+KernelTEContext â€” concrete TEContext backed by ``app.*`` modules.
+
+This is the ONLY file in the TE package that imports from ``app.*``.
+It is the adapter boundary between the TE and the AE kernel.
+
+NOTE: This file lives in the TE package for now but conceptually belongs
+to the AE/kernel.  It will be moved when the template is created.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+
+
+@dataclass
+class KernelTEContext:
+    """Delegate every TEContext method to the corresponding ``app.*`` call."""
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/register.py' in C:\Users\j\projects\Joshua26 succeeded in 193ms:
+"""
+Context Broker TE â€” Package registration entry point.
+
+Called by the bootstrap kernel's stategraph_registry.scan() when this
+package is discovered via entry_points(group="context-broker.te").
+
+Returns a TERegistration dict with the Imperator flow builder and
+identity/purpose declarations.
+"""
+
+
+def register() -> dict:
+    """Register the Context Broker TE's cognitive StateGraphs.
+
+    Returns a dict with:
+    - identity: What the Imperator is
+    - purpose: What the Imperator is for
+    - imperator_builder: callable that builds the compiled Imperator StateGraph
+    - tools_required: MCP tools the Imperator needs from the AE
+    - initialize: callable(ctx) â€” AE bootstrap calls this before flow compilation
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/domain_mem0.py' in C:\Users\j\projects\Joshua26 succeeded in 200ms:
+"""Domain-specific Mem0 client for the Imperator's knowledge graph.
+
+Separate from the AE's conversation Mem0 instance. Uses the same
+Neo4j container but a different pgvector collection name
+("domain_memories" vs "mem0_memories") to keep domain knowledge
+isolated from conversation knowledge.
+
+TE-owned: this client is used by the Imperator's operational tools.
+"""
+
+import asyncio
+import hashlib
+import json
+import logging
+import os
+from typing import Optional
+
+_log = logging.getLogger("context_broker.te.domain_mem0")
+
+_domain_mem0_instance = None
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/seed_knowledge.py' in C:\Users\j\projects\Joshua26 succeeded in 217ms:
+"""Seed knowledge articles for the Imperator.
+
+Populates domain_information with operational articles on first startup.
+Called once â€” checks if the table is empty before seeding.
+"""
+
+import logging
+
+import asyncpg
+
+_log = logging.getLogger("context_broker.te.seed_knowledge")
+
+SEED_ARTICLES = [
+    {
+        "source": "seed",
+        "content": (
+            "CHANGING INFERENCE MODELS: I can switch my own LLM or any pipeline "
+            "model using the change_inference tool. Call it with just a slot name "
+            "(imperator, summarization, extraction, embeddings) to see available "
+            "models from the catalog. To switch, provide the provider and model. "
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/parsed_capabilities.txt' in C:\Users\j\projects\Joshua26 succeeded in 211ms:
+
+--- app\budget.py ---
+Module Doc: Token budget bucket management.
+Function: snap_budget
+  Doc: Snap a requested token budget to the nearest bucket (always up).
+
+--- app\config.py ---
+Module Doc: Configuration management for the Context Broker.
+Function: _read_and_parse_config
+  Doc: Read config.yml from disk and return (parsed_dict, raw_text).
+Function: _apply_config
+  Doc: Update global cache state after a successful config read.
+Function: load_config
+  Doc: Load and return the AE configuration from /config/config.yml.
+Function: load_merged_config
+  Doc: Load and return merged AE + TE configuration.
+Function: async_load_config
+  Doc: Async wrapper that returns merged AE + TE configuration.
+Function: load_startup_config
+  Doc: Load AE configuration once at startup for infrastructure settings.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/parse_ast.py' in C:\Users\j\projects\Joshua26 succeeded in 229ms:
+import ast
+import os
+
+dirs = ["app", "packages", "alerter"]
+files_to_parse = []
+for d in dirs:
+    for root, _, files in os.walk(d):
+        if "build" in root or "__pycache__" in root:
+            continue
+        for file in files:
+            if file.endswith(".py"):
+                files_to_parse.append(os.path.join(root, file))
+
+for fp in files_to_parse:
+    try:
+        with open(fp, "r", encoding="utf-8") as f:
+            code = f.read()
+        tree = ast.parse(code)
+        
+        print(f"\n--- {fp} ---")
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "''^(async )?def " state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py' in C:\Users\j\projects\Joshua26 succeeded in 198ms:
+56:def _normalize_iso_timestamp_to_utc(timestamp: Optional[str]) -> Optional[str]:
+112:def _is_sensitive_field(field_name: str) -> bool:
+128:def _safe_deepcopy_config(config):
+162:def _build_filters_and_metadata(
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "def " state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py' in C:\Users\j\projects\Joshua26 succeeded in 194ms:
+56:def _normalize_iso_timestamp_to_utc(timestamp: Optional[str]) -> Optional[str]:
+112:def _is_sensitive_field(field_name: str) -> bool:
+128:def _safe_deepcopy_config(config):
+162:def _build_filters_and_metadata(
+248:    def __init__(self, config: MemoryConfig = MemoryConfig()):
+311:    def from_config(cls, config_dict: Dict[str, Any]):
+321:    def _process_config(config_dict: Dict[str, Any]) -> Dict[str, Any]:
+335:    def _should_use_agent_memory_extraction(self, messages, metadata):
+356:    def add(
+470:    def _add_to_vector_store(self, messages, metadata, filters, infer):
+708:    def _add_to_graph(self, messages, filters):
+719:    def get(self, memory_id):
+764:    def get_all(
+822:    def _get_all_from_vector_store(self, filters, limit):
+871:    def search(
+971:    def _process_metadata_filters(self, metadata_filters: Dict[str, Any]) -> Dict[str, Any]:
+983:        def process_condition(key: str, condition: Any) -> Dict[str, Any]:
+1040:    def _has_advanced_operators(self, filters: Dict[str, Any]) -> bool:
+1067:    def _search_vector_store(self, query, filters, limit, threshold: Optional[float] = None):
+1107:    def update(self, memory_id, data, metadata: Optional[Dict[str, Any]] = None):
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/parsed_tests.txt' in C:\Users\j\projects\Joshua26 succeeded in 223ms:
+
+=== tests\conftest.py ===
+
+=== tests\conftest_e2e.py ===
+
+=== tests\test_budget.py ===
+
+=== tests\test_build_type_registry.py ===
+
+=== tests\test_caller_identity.py ===
+
+=== tests\test_change_inference.py ===
+
+=== tests\test_config.py ===
+
+=== tests\test_domain_mem0.py ===
+
+=== tests\test_e2e_chat.py ===
+
+=== tests\test_e2e_health.py ===
+Plan update
+Read all requested files and gathered function/node/tool lists; now drafting audit report.
+  ✓ Inventory required files and extract target code paths (CEA, MCP tools, migrations, mem0 fork) plus test coverage in tests/claude.
+  ✓ Read required code/prompt/sql files and build capability list by category.
+  → Map capabilities to existing tests and write audit report to docs/designs/cli-discovery-audit-codex.md.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files state_4_development/context_broker_pmad/app/workers' in C:\Users\j\projects\Joshua26 succeeded in 195ms:
+state_4_development/context_broker_pmad/app/workers\__init__.py
+state_4_development/context_broker_pmad/app/workers\db_worker.py
+2026-04-04T14:24:34.033435Z ERROR codex_core::exec: exec error: The filename or extension is too long. (os error 206)
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+# CLI Discovery Audit — Context Broker CEA (SDLC-02 Step 8, WPR-103 S1a)
+
+## Scope
+- Codebase: "'`state_4_development/context_broker_pmad/`
+- Files read: all `.py` in `app/`, `packages/context-broker-ae/src/context_broker_ae/`, `packages/context-broker-te/src/context_broker_te/`, `alerter/`, `log_shipper/`; `packages/mem0-fork/mem0/memory/{main.py,graph_memory.py,quality_gate.py,expiration.py}`; `postgres/init.sql`; all `.md` in `config/prompts/` and `config-test/prompts/`.
+- Tests checked for coverage: `tests/claude/` (unit + live suites as described in `tests/claude/TEST_PLAN.md`).
+
+## 1. Functions (public API surface)
+Format per row: Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage in `tests/claude`
+
+### app/
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage in tests/claude |
+|---|---|---|---|---|---|
+| `app.budget.snap_budget` | Snap requested token budget to nearest bucket (ceil). | in: int requested; out: int bucket. | None. | bucket boundary tests (exact, between, > max). | Covered by `tests/claude/test_config` + live phase H (budget snapping). |
+| `app.config.invalidate_config_cache` | Forces next config read from disk. | no args; out: None. | None. | cache invalidation + subsequent read uses new file. | Covered in `tests/claude/test_config/test_config_gaps.py`. |
+| `app.config.load_config` | Load AE config with mtime+hash cache. | in: none; out: dict. | File missing, YAML parse, bad top-level type. | missing file, bad YAML, cache hit/miss. | Covered in `tests/claude/test_config`. |
+| `app.config.async_load_config` | Async merged AE+TE load with mtime cache. | in: none; out: dict. | file missing, YAML parse, bad type; executor errors. | hot-reload TE, AE cache hit, missing TE. | Covered in `tests/claude/test_config`, live phase H. |
+| `app.config.load_te_config` / `async_load_te_config` | Load TE config with cache. | in: none; out: dict. | file missing, YAML parse. | TE missing, malformed, cache hit/miss. | Covered in `tests/claude/test_config`. |
+| `app.config.load_merged_config` | Merge AE + TE (TE overrides). | in: none; out: dict. | TE missing handled. | TE absent fallback, overlay precedence. | Covered in `tests/claude/test_config`. |
+| `app.config.get_api_key` | Resolve API key via credentials file or env. | in: provider_config; out: str (possibly empty). | credentials file read failures. | precedence test, missing env key. | Covered in `tests/claude/test_config`. |
+| `app.config.get_build_type_config` | Validate build type config and tier allocation. | in: config dict, build type name; out: build type dict. | missing build type, invalid utilization. | error on invalid allocation, valid configs. | Covered in `tests/claude/test_config`. |
+| `app.config.get_tuning` | Read tuning param from tuning/workers/locks. | in: config, key, default; out: Any. | None. | precedence order, default fallback. | Covered in `tests/claude/test_config`. |
+| `app.config.get_log_level` | Return log level. | in: config; out: str. | None. | default INFO, casing. | Covered in `tests/claude/test_logging`. |
+| `app.config.verbose_log` / `verbose_log_auto` | Conditional logging when verbose enabled. | in: config, logger, message. | config load errors (auto). | no-op on disabled; handles bad YAML. | Covered in `tests/claude/test_logging/test_logging_gaps.py`. |
+| `app.config.get_chat_model` | Cache ChatOpenAI clients by role. | in: config, role, streaming; out: ChatOpenAI. | missing provider config, cache eviction. | cache hit/miss, streaming flag, eviction. | Partial in `tests/claude/test_config` (mock), no streaming coverage. |
+| `app.config.get_embeddings_model` | Cache OpenAIEmbeddings by config. | in: config, config_key; out: OpenAIEmbeddings. | bad dims, cache eviction. | dims handling, cache reuse. | Partial in `tests/claude/test_config`. |
+| `app.config.validate_cea_config` | Validate CEA config (REQ-CEA-A05). | in: config; out: None. | invalid ranges / types. | invalid retrieval_scope, thresholds, ceac limits. | **Not covered** in tests/claude. |
+| `app.database.init_postgres` | Initialize asyncpg pool. | in: config; out: pool. | connection failure. | success + reinit closes previous pool. | Covered in `tests/claude/test_database/test_database_gaps.py` + live phase A. |
+| `app.database.get_pg_pool` | Return pool or error. | out: pool. | RuntimeError if not init. | error path and success. | Covered in `tests/claude/test_database`. |
+| `app.database.close_all_connections` | Close pool. | out: None. | OSError from pool close. | close with/without pool. | Covered in `tests/claude/test_lifecycle`. |
+| `app.database.check_postgres_health` | Health probe via SELECT 1. | out: bool. | Postgres errors, pool missing. | failure -> false. | Covered in live phase A. |
+| `app.database.check_neo4j_health` | HTTP probe to Neo4j. | out: bool. | http errors. | auth header, failure -> false. | Covered in live phase A. |
+| `app.logging_setup.JsonFormatter.format` | JSON log formatting. | in: LogRecord; out: str. | None. | JSON fields present. | Covered in `tests/claude/test_logging`. |
+| `app.logging_setup.HealthCheckFilter.filter` | Filter /health logs. | in: LogRecord; out: bool. | None. | log suppression behavior. | Covered in `tests/claude/test_logging`. |
+| `app.logging_setup.setup_logging` / `update_log_level` | Configure logging and apply log level. | in: log level; out: None. | invalid level. | update after config load. | Covered in `tests/claude/test_logging`. |
+| `app.main._postgres_retry_loop` | Background retry for Postgres + Imperator init. | in: app, config; out: None. | asyncpg errors. | retry success/failure, imperator reinit. | Covered in `tests/claude/test_lifecycle`. |
+| `app.main.lifespan` | Startup/shutdown lifecycle. | in: app; out: context manager. | config errors, invalid build types, embedding dims missing. | startup failfast, degraded mode, shutdown cancels tasks. | Covered in `tests/claude/test_lifecycle` + live phase A/H. |
+| `app.main.check_postgres_middleware` | 503 when Postgres down (except /health,/metrics). | in: Request; out: Response. | None. | exempt paths, non-exempt. | Covered in `tests/claude/test_transport`. |
+| `app.main.http_exception_handler` / `validation_exception_handler` / `known_exception_handler` | Structured error responses. | in: Request, exc; out: JSONResponse. | None. | error code mapping. | Covered in `tests/claude/test_transport`. |
+| `app.prompt_loader.load_prompt` / `async_load_prompt` | Prompt loading with cache. | in: name; out: str. | File missing, read errors. | cache hit/miss, file change. | Covered in `tests/claude/test_config` + `test_imperator`. |
+| `app.stategraph_registry.scan` | Discover AE/TE entry points; register flows. | out: dict of packages. | Import/load errors. | hot-reload evict, TE flow registration. | Covered in live phase H; **TE flow scanning not explicitly covered**. |
+| `app.stategraph_registry.get_flow_builder` / `get_imperator_builder` | Return builders from registry. | out: callable/None. | None. | builder lookup. | Covered in `tests/claude/test_imperator`. |
+| `app.stategraph_registry.get_package_metadata` / `is_loaded` | Package metadata and loaded state. | out: dict/bool. | None. | metadata after scan. | Not explicitly covered. |
+| `app.token_budget.resolve_token_budget` | Resolve budget (override, fixed, auto). | in: config, build_type_config, override; out: int. | invalid values. | override precedence, auto fallback. | Covered in `tests/claude/test_config` + live phase H. |
+| `app.token_budget._query_provider_context_length` | Query provider /models for context length. | out: int. | http errors, missing model. | fallback path, 401 handling. | Not covered. |
+| `app.utils.stable_lock_id` | Deterministic advisory lock ID. | in: str; out: int. | None. | determinism, range. | Covered in `tests/claude/test_workers`. |
+| `app.flows.build_type_registry.register_build_type` | Register build type builders. | in: name, builders. | None. | list/register, overwrite. | Covered in `tests/claude/test_assembly`. |
+| `app.flows.build_type_registry.get_assembly_graph` / `get_retrieval_graph` | Compile & cache graphs. | in: build type; out: compiled graph. | missing build type. | lazy compile, cache hit, missing build type. | Covered in `tests/claude/test_assembly`. |
+| `app.flows.build_type_registry.list_build_types` / `clear_compiled_cache` | Inspect/clear registry cache. | out: list/None. | None. | cache cleared. | Not explicitly covered. |
+| `app.flows.imperator_wrapper.invoke_with_metrics` | Invoke Imperator flow with metrics. | in: state; out: state. | flow errors. | increments metrics, error path. | Covered in live phase F + test_imperator. |
+| `app.flows.imperator_wrapper.astream_events_with_metrics` | Stream Imperator events + metrics. | in: state; out: async generator. | streaming errors. | stream + fallback. | Covered in live phase F; streaming fallback in `test_transport`. |
+| `app.flows.install_stategraph.install_stategraph` | pip install package + rescan registry. | in: package, version; out: result. | pip failure, record failure. | install success/fail. | Covered in live phase C. |
+| `app.flows.tool_dispatch.dispatch_tool` | Validate inputs and route to flow. | in: tool, args, config; out: dict. | ValueError, runtime errors. | each tool success/error. | Covered in live phases B/C and mock tests in `tests/claude/test_tools` + `test_search`. |
+| `app.routes.mcp.mcp_sse_session` | SSE session creation for MCP. | in: Request; out: StreamingResponse. | None. | session TTL, queue cap, keepalive. | Covered in `tests/claude/test_transport/test_sse_sessions.py`. |
+| `app.routes.mcp.mcp_tool_call` | MCP JSON-RPC tool calls. | in: Request; out: JSONResponse. | invalid JSON, invalid method, tool errors. | parse errors, session not found, queue full. | Covered in `tests/claude/test_transport` + live phase A/B/C. |
+| `app.routes.mcp._get_tool_list` | Tool list schema. | out: list[dict]. | config load errors tolerated. | schema includes new knowledge_* tools. | Covered in `tests/claude/test_tools/test_operational_tools.py` (partial). |
+| `app.routes.chat.chat_completions` | OpenAI-compatible chat endpoint. | in: Request; out: JSON/SSE. | invalid JSON, validation error, config errors. | streaming + non-streaming. | Covered in `tests/claude/test_transport/test_chat_extras.py` + live phase F. |
+| `app.routes.health.health_check` | Health endpoint (flow-based). | out: JSONResponse. | config load failure returns degraded. | healthy/unhealthy + degraded. | Covered in live phase A. |
+| `app.routes.metrics.get_metrics` | Prometheus metrics endpoint. | out: Response. | flow error -> 500. | metrics success + failure path. | Covered in live phase I. |
+| `app.routes.caller_identity.resolve_caller` | Determine caller identity. | in: Request, user field; out: str. | reverse DNS errors. | user field precedence. | Covered in `tests/claude/test_transport`. |
+| `app.workers.db_worker.start_background_worker` | Start embedding/extraction/assembly/log loops. | in: config; out: None. | loop cancellations, DB errors. | start/stop, backoff, partial failures. | Covered in `tests/claude/test_workers`. |
+| `app.imperator.state_manager.ImperatorStateManager` methods | Manage persistent Imperator convo/window IDs. | in: config; out: ids/None. | file read/write errors, DB missing. | create/read state, missing conversation, file corruption. | Covered in `tests/claude/test_state_manager`. |
+
+### packages/context-broker-ae (selected key public functions)
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `context_broker_ae.register.register` | Register AE build types and flows. | out: dict with build_types, flows. | import errors. | registration contents, missing flow. | Covered in live phase H. |
+| `context_broker_ae.build_types.passthrough.build_passthrough_*` | Build passthrough assembly/retrieval graphs. | in: state; out: state. | DB errors, lock failure. | lock acquire/release, no-op assembly. | Covered in live phase E. |
+| `context_broker_ae.build_types.standard_tiered.*` | Standard tiered assembly/retrieval nodes. | in: state; out: state. | DB errors, LLM errors, lock timeouts. | compaction thresholds, tier transitions, summarization errors. | Covered in live phase E + `tests/claude/test_assembly`. |
+| `context_broker_ae.build_types.knowledge_enriched.*` | Knowledge-enriched retrieval (semantic + KG). | in: state; out: state. | embedding/LLM errors, KG failures. | semantic retrieval, KG injection, distillation. | Covered in live phase E (partial), **CEA additions not covered**. |
+| `context_broker_ae.build_types.tier_scaling.extract_deadband_config` | Read tier allocation config. | in: build type config; out: dict. | None. | correct defaults. | Covered in `tests/claude/test_assembly`. |
+| `context_broker_ae.message_pipeline.store_message` | Insert message and update counters. | in: state; out: state. | DB errors, invalid IDs. | message insert, tool call fields, priority. | Covered in live phase B/C, `tests/claude/test_workers`. |
+| `context_broker_ae.embed_pipeline.build_embed_pipeline` + nodes | Fetch message, embed, store. | in: state; out: state. | OpenAI/httpx errors, null content. | batch embedding, timeouts. | Covered in live phase D + `tests/claude/test_workers`. |
+| `context_broker_ae.search_flow.build_*` + nodes | Conversation/message search + rerank. | in: state; out: results. | embedding errors, rerank API errors. | vector search, BM25, RRF, rerank fallback. | Covered in `tests/claude/test_search` + live phase B. |
+| `context_broker_ae.conversation_ops_flow.build_*` + nodes | CRUD conv/window/history/logs. | in: state; out: records. | DB errors, invalid IDs. | create/rename/delete, list/filter. | Covered in live phase C + `tests/claude/test_database`. |
+| `context_broker_ae.memory_extraction.build_memory_extraction` + nodes | Extract facts via Mem0. | in: state; out: counts. | lock fail, LLM errors, Mem0 errors. | extraction text chunking, redaction. | Covered in live phase D + `tests/claude/test_memory`. |
+| `context_broker_ae.memory_search_flow.build_*` + nodes | Mem0 search + context formatting. | in: state; out: memories/relations. | Mem0 errors. | degraded path, ranking. | Covered in live phase B/C (knowledge search). |
+| `context_broker_ae.memory_admin_flow.build_*` + nodes | Mem0 add/list/delete flows. | in: state; out: results. | Mem0 errors. | add/list/delete. | Covered in live phase C. |
+| `context_broker_ae.memory_scoring.score_memory` / `filter_and_rank_memories` | Apply decay & ranking. | in: memories; out: ranked list. | None. | decay correctness. | Covered in `tests/claude/test_search/test_search_internals.py`. |
+| `context_broker_ae.memory.mem0_client.get_mem0_client` | Initialize Mem0 with config. | out: Memory instance. | missing dims, config errors. | singleton reuse, reset. | Covered in `tests/claude/test_memory/test_memory_integration.py`. |
+| `context_broker_ae.memory.quality_wrapper` (CEA) | Quality wrapper around Mem0. | in: content/query; out: enriched results. | asyncpg errors, Mem0 errors. | dedup, metadata write, feedback, expiration cleanup. | **Not covered** in tests/claude. |
+| `context_broker_ae.cea_extraction_flow.build_cea_extraction_flow` (CEA) | CEAs extraction StateGraph. | in: tier1 content; out: dispatch counts. | JSON parse errors, LLM errors, wrapper errors. | LLM JSON validity, dispatch relationships. | **Not covered** in tests/claude. |
+
+### packages/context-broker-te
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `context_broker_te.register.register` | Register Imperator + CEAc flow. | out: dict. | import errors. | tools_required list includes knowledge_* tools. | Covered in live phase H (partial). |
+| `context_broker_te.imperator_flow.build_imperator_flow` | Build Imperator ReAct graph. | in: config; out: compiled graph. | tool binding errors. | tool loop, max iteration fallback. | Covered in live phase F/G + `tests/claude/test_imperator`. |
+| `context_broker_te.imperator_flow.init_context_node` | Load prompt, get_context, optional CEAc. | in: state; out: state. | prompt load failure, get_context errors. | CEAc integration paths. | Partially covered in live phase F; **CEAc not covered**. |
+| `context_broker_te.imperator_flow.llm_call_node` | LLM call with tools. | in: state; out: state. | OpenAI/httpx errors, empty responses. | tool call vs content, retry on empty. | Covered in live phase F. |
+| `context_broker_te.imperator_flow.store_user_message/store_assistant_message` | Persist messages via tool. | in: state; out: state. | dispatch_tool errors, empty content. | skip duplicate, fallback text behavior. | Covered in live phase F. |
+| `context_broker_te.cea_enrichment_flow.build_ceac_enrichment_flow` (CEA) | CEAc ReAct enrichment subgraph. | in: tiers, query, tool fns; out: enriched_context. | search_fn errors, feedback_fn errors. | ranking logic, exploration, feedback recording. | **Not covered** in tests/claude. |
+| `context_broker_te.domain_mem0.get_domain_mem0` | Domain Mem0 singleton. | out: Memory or None. | config invalid, missing dims. | config hash change, init failure. | Covered in `tests/claude/test_imperator/test_domain_knowledge_seeding.py` (partial). |
+| `context_broker_te.seed_knowledge.seed_domain_knowledge` | Seed domain_information. | out: count. | DB errors, embedding errors. | seed with/without embeddings. | Covered in `tests/claude/test_imperator`. |
+| TE tools (admin/alerting/diagnostic/filesystem/notify/operational/system/web) | Imperator tool functions. | in: tool params; out: str. | DB/HTTP/fs errors. | success + invalid inputs. | Covered in `tests/claude/test_tools` + live phase G. |
+
+### packages/mem0-fork/mem0/memory
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `mem0.memory.main.Memory.add` | Extract/store memory (vector+graph). | in: messages, ids, metadata; out: dict results. | validation, embed, vector/graph errors. | _skip_graph path, dedup, invalid inputs. | **Not covered** in tests/claude (Mem0 treated as black box). |
+| `mem0.memory.main.Memory.search/get/get_all/update/delete/delete_all/history/reset` | Core Mem0 operations. | inputs per method; outputs dict/list. | vector store errors, missing ids. | success/error paths, graph search on/off. | **Not covered** in tests/claude. |
+| `mem0.memory.graph_memory.MemoryGraph.*` | Neo4j entity extraction, search, add, delete. | in: text, filters; out: dict/list. | LLM tool errors, Neo4j query errors. | elementId mapping, threshold behavior. | **Not covered** in tests/claude. |
+| `mem0.memory.quality_gate.*` | Side-channel metadata extraction + rejection. | in: facts/meta; out: filtered lists. | invalid regex, invalid expires_at. | rejects too-short, regex, bad date. | **Not covered** in tests/claude. |
+| `mem0.memory.expiration.*` | Expiration cleanup + filtering. | in: vector_store, db; out: deleted count. | unsupported list filters, DB errors. | cleanup interval, idempotent cleanup. | **Not covered** in tests/claude. |
+
+### alerter/
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `alerter._startup/_shutdown` | Load config, connect Postgres. | none. | asyncpg errors. | retry behavior. | Covered in `tests/claude/test_alerter`. |
+| `alerter.webhook` | CloudEvents webhook → instruction → channel fanout. | in: Request; out: JSONResponse. | invalid JSON, missing type, channel errors. | idempotency, default channels, instruction match. | Covered in `tests/claude/test_alerter`. |
+| `alerter._find_instruction` | Vector or text search over instructions. | in: event; out: dict/None. | embed errors, DB errors. | vector search + fallback. | Covered in `tests/claude/test_alerter_logic`. |
+| `alerter._send_*` | Channel delivery (slack/discord/ntfy/smtp/twilio/webhook). | in: config, message; out: None. | http/smtp errors. | missing config validation. | Covered in `tests/claude/test_alerter_logic`. |
+
+### log_shipper/
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `log_shipper.LogShipper.setup` | Connect Postgres + Docker, discover network. | out: None. | Docker errors, Postgres errors. | network discovery fallback. | Covered in `tests/claude/test_log_shipper`. |
+| `log_shipper.LogShipper.tail_container` | Tail Docker logs into queue. | in: container id; out: None. | parse errors, queue full. | JSON log parsing, timestamp parse. | Covered in `tests/claude/test_log_shipper`. |
+| `log_shipper.LogShipper.postgres_writer_loop` | Batch write logs to DB. | out: None. | DB errors, timeout. | batch flush conditions. | Covered in `tests/claude/test_log_shipper`. |
+| `log_shipper.LogShipper.event_watcher_loop` | Watch Docker network connect/disconnect. | out: None. | Docker errors. | task start/stop on connect/disconnect. | Covered in `tests/claude/test_log_shipper`. |
+
+## 2. MCP endpoints/tools (schema + dispatch + error handling)
+Tools list is defined in `app.routes.mcp._get_tool_list`, dispatched in `app.flows.tool_dispatch._dispatch_tool_inner`.
+
+| Tool | Schema highlights | Dispatch path | Error handling | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `get_context` | build_type (enum), budget (int), conversation_id?, user_prompt?, model?, domain_context? | `tool_dispatch` → flow `get_context` | ValueError on flow error. | new v2 params; domain_context injection. | Covered in live phase B; no explicit domain_context test. |
+| `store_message` | conversation_id, role, sender, content?, tool_calls? | `message_pipeline` flow | validation errors. | tool_calls/tool_call_id persistence. | Covered in live phase B/C. |
+| `search_messages` | query required, conversation_id?, role?, sender? | `message_search` flow | flow error. | rerank optional. | Covered in live phase B + `test_search`. |
+| `conv_create_conversation` | optional conversation_id/title/flow_id/user_id | `create_conversation` flow | flow error. | idempotent create. | Covered live phase C. |
+| `conv_delete_conversation` | conversation_id | `delete_conversation` flow | flow error. | cascade delete. | Covered live phase C. |
+| `conv_rename_conversation` | conversation_id/title | `rename_conversation` flow | flow error. | rename no-op. | Covered live phase C. |
+| `conv_list_conversations` | participant?, limit/offset | direct SQL in `tool_dispatch` | asyncpg errors. | participant filter vs no filter. | Covered live phase C + `tests/claude/test_database`. |
+| `conv_store_message` | context_window_id? or conversation_id? | `message_pipeline` flow | validation error if both missing. | context window resolution path. | Covered live phase C. |
+| `conv_retrieve_context` | context_window_id | build_type lookup → retrieval graph | missing window/build_type. | retrieval warnings surfaced. | Covered live phase C/E. |
+| `conv_create_context_window` | conversation_id, participant_id, build_type, max_tokens? | `create_context_window` flow | flow error. | budget override. | Covered live phase C. |
+| `conv_search` | query?, limit/offset, filters | `conversation_search` flow | flow error. | date range filters. | Covered live phase C. |
+| `conv_search_messages` | query, filters | `message_search` flow | flow error. | filter combinations. | Covered live phase C. |
+| `conv_get_history` | conversation_id, limit? | `get_history` flow | flow error. | ordering, limit. | Covered live phase C. |
+| `conv_search_context_windows` | filters | `search_context_windows` flow | flow error. | filter combos. | Covered live phase C. |
+| `query_logs` | container, level, since/until, keyword | SQL in `tool_dispatch` | asyncpg errors. | filter combinations. | Covered live phase I. |
+| `search_logs` | query required, filters | embed query + SQL vector search | missing log_embeddings config. | semantic search with vector. | Covered live phase I. |
+| `knowledge_search` (CEA) | query, user_id?, limit | quality_wrapper.search | wrapper errors. | global search path + graph fallback. | **Not covered** in tests/claude. |
+| `knowledge_add` (CEA) | content, user_id, conversation_id?, durability?, confidence?, source_type?, original_utterance? | quality_wrapper.add + write_metadata | wrapper rejects; metadata write errors. | dedup, quality gate, metadata. | **Not covered** in tests/claude. |
+| `knowledge_list` (CEA) | user_id?, limit | quality_wrapper.list_facts | wrapper errors. | global list direct pgvector query. | **Not covered** in tests/claude. |
+| `knowledge_feedback` (CEA) | target_type/id, event_type, agent_id, context? | quality_wrapper.record_feedback | asyncpg errors, dedup. | duplicate event idempotency. | **Not covered** in tests/claude. |
+| `imperator_chat` | message, context_window_id? | TE Imperator flow | flow error. | streaming and non-streaming. | Covered live phase F. |
+| `metrics_get` | no args | metrics flow | flow error. | metrics output. | Covered live phase I. |
+| `install_stategraph` | package_name, version? | install_stategraph + cache invalidation | pip errors. | invalid package. | Covered live phase C. |
+
+## 3. Pipeline stages (StateGraph nodes)
+Each node requires tests for success + failure + edge conditions. Coverage references tests/claude (live + mock).
+
+### CEA (new)
+| Flow | Node | What it does | Failure modes | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `cea_extraction_flow` | `search_existing_facts` | query quality wrapper for existing facts by scope | wrapper errors, user_id extraction failure | scope=user/global/conversation; tier2 query logic | **Not covered** |
+| `cea_extraction_flow` | `run_extraction_llm` | call LLM with `cea_vector_extraction` prompt | JSON parse error, invalid schema, LLM error | invalid JSON, missing keys, structured output validity | **Not covered** |
+| `cea_extraction_flow` | `dispatch_results` | add facts to Mem0 via wrapper, write metadata, feedback on supersedes/conflicts | wrapper add failure, metadata insert errors | relationship handling, dedup by utterance | **Not covered** |
+| `cea_extraction_flow` | `handle_error` | logs error and returns counts | none | error path coverage | **Not covered** |
+| `cea_enrichment_flow` | `decide_search` | LLM-driven query selection for CEAc | LLM errors, DONE path | iterative query behavior | **Not covered** |
+| `cea_enrichment_flow` | `execute_search` | call injected search_fn | search errors | user_id propagation, dedup results | **Not covered** |
+| `cea_enrichment_flow` | `evaluate_and_rank` | ranking and budget enforcement | none | trustworthiness threshold, exploration | **Not covered** |
+| `cea_enrichment_flow` | `assemble_context` | format results with template | prompt load failures | output template fallback | **Not covered** |
+| `cea_enrichment_flow` | `record_feedback` | send used/discarded events | feedback errors | idempotency, partial failures | **Not covered** |
+
+### Core AE flows (selected)
+| Flow | Node | What it does | Failure modes | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `message_pipeline` | `store_message` | insert message + update counters | DB errors | tool_calls, sequence_number. | Covered live phase B/C. |
+| `embed_pipeline` | `fetch_message` | load message row | missing message | missing id. | Covered live phase D. |
+| `embed_pipeline` | `generate_embedding` | call embeddings model | timeout, OSError, API errors | timeout path + retry. | Covered live phase D. |
+| `embed_pipeline` | `store_embedding` | update embedding column | DB errors | vector formatting. | Covered live phase D. |
+| `conversation_search` | `embed_conversation_query` | embed query | embed errors | embedding None path. | Covered live phase B. |
+| `conversation_search` | `search_conversations_db` | SQL search | DB errors | filters, ordering. | Covered live phase B/C. |
+| `message_search` | `hybrid_search_messages` | vector + BM25 + RRF | DB errors | tsvector and vector. | Covered live phase B + `test_search`. |
+| `memory_extraction` | `build_extraction_text` | chunk and clean text | invalid input | chunking, redaction. | Covered in `tests/claude/test_memory`. |
+| `memory_extraction` | `run_mem0_extraction` | Mem0 add | Mem0 errors | _skip_graph path, latency. | Covered in `tests/claude/test_memory`. |
+| `metrics_flow` | `collect_metrics` | dump Prometheus registry | registry errors | metrics output. | Covered live phase I. |
+| `health_flow` | `check_dependencies` | postgres+neo4j health | network errors | degraded status. | Covered live phase A. |
+| `build_types.standard_tiered` | `acquire_assembly_lock` | Postgres advisory lock | lock fail | concurrent assembly. | Covered `test_assembly`. |
+| `build_types.standard_tiered` | `calculate_compaction_state` | compute tier boundaries | invalid config | tier allocations. | Covered `test_assembly`. |
+| `build_types.standard_tiered` | `compact_tier1` | summarize tier1 and store tier2 | LLM errors | chunk summaries. | Covered live phase E. |
+| `build_types.standard_tiered` | `run_full_compaction` | consolidate archival | LLM errors | consolidation logic. | Covered live phase E. |
+| `build_types.standard_tiered` | `finalize_assembly` | persist last_assembled_at, metrics | DB errors | last_assembled_at. | Covered live phase E. |
+| `build_types.knowledge_enriched` | `inject_semantic_retrieval` | semantic search for query | embeddings errors | top-k logic. | Partial in live phase E. |
+| `build_types.knowledge_enriched` | `inject_knowledge_graph` | Mem0 graph retrieval | Mem0 errors | graph format. | Partial in live phase E. |
+
+## 4. Worker behaviors
+| Worker loop | Polling logic | Retry behavior | Failure modes | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| DB embedding worker (`_embedding_worker`) | Polls messages with `embedding IS NULL` every `worker_poll_interval_seconds` | timeout on embedding, backoff after failures; poison pill after 5 failures writes zero-vector | embedding model errors, DB errors, HNSW creation failure | timeout + poison pill, HNSW creation, batch size. | Covered in `tests/claude/test_workers/test_db_worker.py` + live phase D. |
+| DB extraction worker (`_extraction_worker`) | Polls messages with `memory_extracted IS NOT TRUE` | per-conversation retries (max 3), then mark extracted true | Mem0 errors, lock failure, timeout | conv retry cap, advisory lock concurrency. | Covered in `tests/claude/test_workers` + live phase D. |
+| DB assembly check (`_check_assembly_needed`) | triggers assembly when new tokens > threshold | no retry; catches timeouts | assembly timeout, graph errors | threshold logic, last_assembled_at. | Covered in `tests/claude/test_workers`. |
+| DB assembly worker (`_assembly_worker`) | poll windows with stale tokens | retries with backoff | graph errors, lock failure | window selection and ordering. | Covered in `tests/claude/test_workers`. |
+| Log embedding worker (`_log_embedding_worker`) | poll system_logs with `embedding IS NULL` | backoff after failures | embedding errors | log embedding path. | Covered in live phase I. |
+| Log shipper (`LogShipper.postgres_writer_loop`) | queue drain with timeout `FLUSH_INTERVAL_SEC` | on DB error sleep 1s | DB errors, queue overflow | batch size/flush, drop policy. | Covered in `tests/claude/test_log_shipper`. |
+
+## 5. Configuration options
+Only options referenced in code; include defaults and invalid handling.
+
+### app/config.py
+- `CONFIG_PATH` (env): default `/config/config.yml`; missing → RuntimeError.
+- `TE_CONFIG_PATH` (env): default `/config/te.yml`; missing TE treated as legacy, unless direct TE load.
+- `CREDENTIALS_PATH`: `/config/credentials/.env`; missing → fallback to env only.
+- CEA validation (`cea.*`):
+  - `retrieval_scope`: default `conversation`; invalid → RuntimeError.
+  - `pre_extraction_fact_limit`: default 20; invalid (<0/non-int) → RuntimeError.
+  - `expiration_cleanup_interval`: default 3600s; invalid (<0) → RuntimeError.
+  - `ranking.exploration_rate`: default 0.1; outside 0-1 → RuntimeError.
+  - `ranking.usefulness_crossover_events`: default 10; <=0 → RuntimeError.
+  - `ranking.trustworthiness_min_threshold`: default 0.1; outside 0-1 → RuntimeError.
+  - `ceac.max_iterations`: default 3; <1 → RuntimeError.
+  - `ceac.max_memories`: default 50; <1 → RuntimeError.
+  - `ceac.max_token_budget`: default 8000; <100 → RuntimeError.
+  - `source_type_weights.*`: each 0-1; invalid → RuntimeError.
+
+### app/main.py + workers
+- `log_level`: default INFO.
+- `workers.worker_poll_interval_seconds`: default 2s.
+- `workers.embedding_batch_size`: default 50.
+- `workers.embedding_timeout_seconds`: default 300.
+- `workers.extraction_timeout_seconds`: default 600.
+- `workers.assembly_timeout_seconds`: default 600.
+- `workers.trigger_threshold_percent`: default 0.1.
+- `workers.postgres_retry_interval_seconds`: default 10.
+- `workers.log_embedding_batch_size`: default 50 (from code, if present).
+
+### Token budgets
+- `build_types.*.max_context_tokens`: int or `auto`; invalid → fallback.
+- `build_types.*.fallback_tokens`: default 8192.
+- `build_types.*` tier allocation: `tier1_floor_pct`, `tier2_chunk_pct`, `tier2_min_chunks`, `tier2_max_chunks`, `tier3_pct`, `semantic_retrieval_pct`, `knowledge_graph_pct`, `effective_utilization`.
+  Invalid total_pct > utilization → ValueError at startup (fail fast).
+
+### MCP session tuning
+- `tuning.mcp_max_sessions`: default 1000.
+- `tuning.mcp_session_ttl_seconds`: default 3600.
+- `tuning.mcp_max_total_queued`: default 10000.
+
+### TE config keys (used in code)
+- `imperator.system_prompt` (default `imperator_identity`).
+- `imperator.build_type` (default `tiered-summary`).
+- `imperator.max_context_tokens` (default 8192).
+- `imperator.max_react_messages` (default 40).
+- `imperator.max_iterations` (default 5).
+- `imperator.user_id` (optional) for CEAc.
+- `imperator.notification_webhook`.
+- `imperator.admin_tools` (bool).
+- `domain_information.enabled` (default true for tools).
+- `domain_knowledge.enabled` (default false for tools).
+- `cea.ceac.enabled` (bool).
+
+### Alerter config (`/config/alerter.yml`)
+- `llm.base_url`, `llm.model`, `llm.api_key_env`.
+- `embeddings.base_url`, `embeddings.model`, `embeddings.api_key_env`.
+- `default_channels` list; missing → fallback to log.
+- `log_context.enabled/level/limit/minutes`.
+- Invalid values handled by returning errors or fallback default channels.
+
+### Log shipper env
+- `POSTGRES_DSN` required; missing → exit(1).
+- `BATCH_SIZE` default 100.
+- `FLUSH_INTERVAL_SEC` default 1.0.
+
+## 6. Error paths / degradation modes (high-signal)
+- Config load failures in MCP/chat/health return 500/503 with structured error.
+- MCP session queue full → 503 with explicit error.
+- Embedding worker poison pill after 5 consecutive failures writes zero-vector and resets failure count.
+- Extraction worker caps retries per conversation; after max retries, marks messages extracted to stop retry storms.
+- Assembly worker catches timeouts and errors and records warnings.
+- CEAs extraction: JSON parse errors mark failure but allow compaction to proceed.
+- Quality wrapper: global graph search errors are caught and logged; returns empty relations.
+- Imperator flow: empty LLM responses trigger retries and fallback message; max iterations fallback to a safe response.
+- Log shipper: queue overflow drops logs; DB errors drop batch and continue.
+- Alerter: per-channel failure recorded; partial success still returns processed.
+
+## 7. Database operations (SQL / schema / constraints)
+### init.sql (base schema)
+- Tables: `schema_migrations`, `conversations`, `conversation_messages`, `context_windows`, `conversation_summaries`, `system_logs`.
+- Key constraints: `idx_messages_conversation_seq_unique`, `idx_context_windows_identity`, `conversation_summaries_tier_check` (tier 2/3), FK constraints to conversations/context_windows.
+
+### Migrations (app/migrations.py)
+- 001–022: schema alignment, logs, schedules, alert instructions, Mem0 dedup, domain info.
+- 023 (CEA): `cea_quality_metadata`, `cea_feedback_events`, indexes (user_id, conversation_id, expires_at).
+- 024 (CEA): `idx_cea_metadata_natural_dedup` (user_id, conversation_id, original_utterance), `idx_cea_events_target_type_id`.
+
+### Query highlights (non-exhaustive but all unique query sites)
+- Message insert/update, embedding updates, memory_extracted flags, summary insert/compaction, HNSW index creation.
+- Search: vector + tsvector + RRF; domain info semantic search; logs query + vector search; knowledge wrapper direct pgvector query on `mem0_memories`.
+- CEA tables: insert metadata with ON CONFLICT DO NOTHING; feedback insert with dedup_key.
+- Alerter: instruction search (vector + text), event/delivery inserts.
+- Log shipper: batch insert to `system_logs`.
+
+## 8. Integration points (cross-module + external services)
+- AE↔TE: `KernelTEContext` injected during `stategraph_registry.scan()`; TE uses `dispatch_tool`, `async_load_config`, `get_pool`.
+- Mem0 (fork) integration: AE uses Mem0 for vector+graph, CEA wrapper uses Mem0 internal tables (`mem0_memories`) and Neo4j elementId usage (graph_memory changes).
+- External services: LLM providers via OpenAI-compatible endpoints, embeddings providers, Neo4j (bolt + HTTP), Docker API (log shipper), HTTP webhooks (alerter notify channels), SMTP, Twilio.
+- CEA: quality wrapper interacts with `cea_quality_metadata` and `cea_feedback_events` (Postgres) and Mem0/Neo4j.
+
+## Coverage gaps (CEA focus)
+- No tests in `tests/claude` explicitly exercise: `quality_wrapper.py`, `cea_extraction_flow.py`, `cea_enrichment_flow.py`, knowledge_* tool paths, or Mem0 fork changes (elementId mapping, side-channel removal).
+- Add unit tests for wrapper dedup, metadata, feedback, expiration cleanup, global search paths; and integration tests verifying CEAc enrichment injection in Imperator.
+
+'"'@ | Set-Content -Encoding UTF8 state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md" in C:\Users\j\projects\Joshua26 exited -1 in 0ms:
+execution error: Io(Os { code: 206, kind: InvalidFilename, message: "The filename or extension is too long." })
+2026-04-04T14:25:47.369488Z ERROR codex_core::exec: exec error: The filename or extension is too long. (os error 206)
+file update
+A C:\Users\j\projects\Joshua26\state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+# CLI Discovery Audit — Context Broker CEA (SDLC-02 Step 8, WPR-103 S1a)
+
+## Scope
+- Codebase: `state_4_development/context_broker_pmad/`
+- Files read: all `.py` in `app/`, `packages/context-broker-ae/src/context_broker_ae/`, `packages/context-broker-te/src/context_broker_te/`, `alerter/`, `log_shipper/`; `packages/mem0-fork/mem0/memory/{main.py,graph_memory.py,quality_gate.py,expiration.py}`; `postgres/init.sql`; all `.md` in `config/prompts/` and `config-test/prompts/`.
+- Tests checked for coverage: `tests/claude/` (unit + live suites as described in `tests/claude/TEST_PLAN.md`).
+
+## 1. Functions (public API surface)
+Format per row: Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage in `tests/claude`
+
+### app/
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage in tests/claude |
+|---|---|---|---|---|---|
+| `app.budget.snap_budget` | Snap requested token budget to nearest bucket (ceil). | in: int requested; out: int bucket. | None. | bucket boundary tests (exact, between, > max). | Covered by `tests/claude/test_config` + live phase H (budget snapping). |
+| `app.config.invalidate_config_cache` | Forces next config read from disk. | no args; out: None. | None. | cache invalidation + subsequent read uses new file. | Covered in `tests/claude/test_config/test_config_gaps.py`. |
+| `app.config.load_config` | Load AE config with mtime+hash cache. | in: none; out: dict. | File missing, YAML parse, bad top-level type. | missing file, bad YAML, cache hit/miss. | Covered in `tests/claude/test_config`. |
+| `app.config.async_load_config` | Async merged AE+TE load with mtime cache. | in: none; out: dict. | file missing, YAML parse, bad type; executor errors. | hot-reload TE, AE cache hit, missing TE. | Covered in `tests/claude/test_config`, live phase H. |
+| `app.config.load_te_config` / `async_load_te_config` | Load TE config with cache. | in: none; out: dict. | file missing, YAML parse. | TE missing, malformed, cache hit/miss. | Covered in `tests/claude/test_config`. |
+| `app.config.load_merged_config` | Merge AE + TE (TE overrides). | in: none; out: dict. | TE missing handled. | TE absent fallback, overlay precedence. | Covered in `tests/claude/test_config`. |
+| `app.config.get_api_key` | Resolve API key via credentials file or env. | in: provider_config; out: str (possibly empty). | credentials file read failures. | precedence test, missing env key. | Covered in `tests/claude/test_config`. |
+| `app.config.get_build_type_config` | Validate build type config and tier allocation. | in: config dict, build type name; out: build type dict. | missing build type, invalid utilization. | error on invalid allocation, valid configs. | Covered in `tests/claude/test_config`. |
+| `app.config.get_tuning` | Read tuning param from tuning/workers/locks. | in: config, key, default; out: Any. | None. | precedence order, default fallback. | Covered in `tests/claude/test_config`. |
+| `app.config.get_log_level` | Return log level. | in: config; out: str. | None. | default INFO, casing. | Covered in `tests/claude/test_logging`. |
+| `app.config.verbose_log` / `verbose_log_auto` | Conditional logging when verbose enabled. | in: config, logger, message. | config load errors (auto). | no-op on disabled; handles bad YAML. | Covered in `tests/claude/test_logging/test_logging_gaps.py`. |
+| `app.config.get_chat_model` | Cache ChatOpenAI clients by role. | in: config, role, streaming; out: ChatOpenAI. | missing provider config, cache eviction. | cache hit/miss, streaming flag, eviction. | Partial in `tests/claude/test_config` (mock), no streaming coverage. |
+| `app.config.get_embeddings_model` | Cache OpenAIEmbeddings by config. | in: config, config_key; out: OpenAIEmbeddings. | bad dims, cache eviction. | dims handling, cache reuse. | Partial in `tests/claude/test_config`. |
+| `app.config.validate_cea_config` | Validate CEA config (REQ-CEA-A05). | in: config; out: None. | invalid ranges / types. | invalid retrieval_scope, thresholds, ceac limits. | **Not covered** in tests/claude. |
+| `app.database.init_postgres` | Initialize asyncpg pool. | in: config; out: pool. | connection failure. | success + reinit closes previous pool. | Covered in `tests/claude/test_database/test_database_gaps.py` + live phase A. |
+| `app.database.get_pg_pool` | Return pool or error. | out: pool. | RuntimeError if not init. | error path and success. | Covered in `tests/claude/test_database`. |
+| `app.database.close_all_connections` | Close pool. | out: None. | OSError from pool close. | close with/without pool. | Covered in `tests/claude/test_lifecycle`. |
+| `app.database.check_postgres_health` | Health probe via SELECT 1. | out: bool. | Postgres errors, pool missing. | failure -> false. | Covered in live phase A. |
+| `app.database.check_neo4j_health` | HTTP probe to Neo4j. | out: bool. | http errors. | auth header, failure -> false. | Covered in live phase A. |
+| `app.logging_setup.JsonFormatter.format` | JSON log formatting. | in: LogRecord; out: str. | None. | JSON fields present. | Covered in `tests/claude/test_logging`. |
+| `app.logging_setup.HealthCheckFilter.filter` | Filter /health logs. | in: LogRecord; out: bool. | None. | log suppression behavior. | Covered in `tests/claude/test_logging`. |
+| `app.logging_setup.setup_logging` / `update_log_level` | Configure logging and apply log level. | in: log level; out: None. | invalid level. | update after config load. | Covered in `tests/claude/test_logging`. |
+| `app.main._postgres_retry_loop` | Background retry for Postgres + Imperator init. | in: app, config; out: None. | asyncpg errors. | retry success/failure, imperator reinit. | Covered in `tests/claude/test_lifecycle`. |
+| `app.main.lifespan` | Startup/shutdown lifecycle. | in: app; out: context manager. | config errors, invalid build types, embedding dims missing. | startup failfast, degraded mode, shutdown cancels tasks. | Covered in `tests/claude/test_lifecycle` + live phase A/H. |
+| `app.main.check_postgres_middleware` | 503 when Postgres down (except /health,/metrics). | in: Request; out: Response. | None. | exempt paths, non-exempt. | Covered in `tests/claude/test_transport`. |
+| `app.main.http_exception_handler` / `validation_exception_handler` / `known_exception_handler` | Structured error responses. | in: Request, exc; out: JSONResponse. | None. | error code mapping. | Covered in `tests/claude/test_transport`. |
+| `app.prompt_loader.load_prompt` / `async_load_prompt` | Prompt loading with cache. | in: name; out: str. | File missing, read errors. | cache hit/miss, file change. | Covered in `tests/claude/test_config` + `test_imperator`. |
+| `app.stategraph_registry.scan` | Discover AE/TE entry points; register flows. | out: dict of packages. | Import/load errors. | hot-reload evict, TE flow registration. | Covered in live phase H; **TE flow scanning not explicitly covered**. |
+| `app.stategraph_registry.get_flow_builder` / `get_imperator_builder` | Return builders from registry. | out: callable/None. | None. | builder lookup. | Covered in `tests/claude/test_imperator`. |
+| `app.stategraph_registry.get_package_metadata` / `is_loaded` | Package metadata and loaded state. | out: dict/bool. | None. | metadata after scan. | Not explicitly covered. |
+| `app.token_budget.resolve_token_budget` | Resolve budget (override, fixed, auto). | in: config, build_type_config, override; out: int. | invalid values. | override precedence, auto fallback. | Covered in `tests/claude/test_config` + live phase H. |
+| `app.token_budget._query_provider_context_length` | Query provider /models for context length. | out: int. | http errors, missing model. | fallback path, 401 handling. | Not covered. |
+| `app.utils.stable_lock_id` | Deterministic advisory lock ID. | in: str; out: int. | None. | determinism, range. | Covered in `tests/claude/test_workers`. |
+| `app.flows.build_type_registry.register_build_type` | Register build type builders. | in: name, builders. | None. | list/register, overwrite. | Covered in `tests/claude/test_assembly`. |
+| `app.flows.build_type_registry.get_assembly_graph` / `get_retrieval_graph` | Compile & cache graphs. | in: build type; out: compiled graph. | missing build type. | lazy compile, cache hit, missing build type. | Covered in `tests/claude/test_assembly`. |
+| `app.flows.build_type_registry.list_build_types` / `clear_compiled_cache` | Inspect/clear registry cache. | out: list/None. | None. | cache cleared. | Not explicitly covered. |
+| `app.flows.imperator_wrapper.invoke_with_metrics` | Invoke Imperator flow with metrics. | in: state; out: state. | flow errors. | increments metrics, error path. | Covered in live phase F + test_imperator. |
+| `app.flows.imperator_wrapper.astream_events_with_metrics` | Stream Imperator events + metrics. | in: state; out: async generator. | streaming errors. | stream + fallback. | Covered in live phase F; streaming fallback in `test_transport`. |
+| `app.flows.install_stategraph.install_stategraph` | pip install package + rescan registry. | in: package, version; out: result. | pip failure, record failure. | install success/fail. | Covered in live phase C. |
+| `app.flows.tool_dispatch.dispatch_tool` | Validate inputs and route to flow. | in: tool, args, config; out: dict. | ValueError, runtime errors. | each tool success/error. | Covered in live phases B/C and mock tests in `tests/claude/test_tools` + `test_search`. |
+| `app.routes.mcp.mcp_sse_session` | SSE session creation for MCP. | in: Request; out: StreamingResponse. | None. | session TTL, queue cap, keepalive. | Covered in `tests/claude/test_transport/test_sse_sessions.py`. |
+| `app.routes.mcp.mcp_tool_call` | MCP JSON-RPC tool calls. | in: Request; out: JSONResponse. | invalid JSON, invalid method, tool errors. | parse errors, session not found, queue full. | Covered in `tests/claude/test_transport` + live phase A/B/C. |
+| `app.routes.mcp._get_tool_list` | Tool list schema. | out: list[dict]. | config load errors tolerated. | schema includes new knowledge_* tools. | Covered in `tests/claude/test_tools/test_operational_tools.py` (partial). |
+| `app.routes.chat.chat_completions` | OpenAI-compatible chat endpoint. | in: Request; out: JSON/SSE. | invalid JSON, validation error, config errors. | streaming + non-streaming. | Covered in `tests/claude/test_transport/test_chat_extras.py` + live phase F. |
+| `app.routes.health.health_check` | Health endpoint (flow-based). | out: JSONResponse. | config load failure returns degraded. | healthy/unhealthy + degraded. | Covered in live phase A. |
+| `app.routes.metrics.get_metrics` | Prometheus metrics endpoint. | out: Response. | flow error -> 500. | metrics success + failure path. | Covered in live phase I. |
+| `app.routes.caller_identity.resolve_caller` | Determine caller identity. | in: Request, user field; out: str. | reverse DNS errors. | user field precedence. | Covered in `tests/claude/test_transport`. |
+| `app.workers.db_worker.start_background_worker` | Start embedding/extraction/assembly/log loops. | in: config; out: None. | loop cancellations, DB errors. | start/stop, backoff, partial failures. | Covered in `tests/claude/test_workers`. |
+| `app.imperator.state_manager.ImperatorStateManager` methods | Manage persistent Imperator convo/window IDs. | in: config; out: ids/None. | file read/write errors, DB missing. | create/read state, missing conversation, file corruption. | Covered in `tests/claude/test_state_manager`. |
+
+### packages/context-broker-ae (selected key public functions)
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `context_broker_ae.register.register` | Register AE build types and flows. | out: dict with build_types, flows. | import errors. | registration contents, missing flow. | Covered in live phase H. |
+| `context_broker_ae.build_types.passthrough.build_passthrough_*` | Build passthrough assembly/retrieval graphs. | in: state; out: state. | DB errors, lock failure. | lock acquire/release, no-op assembly. | Covered in live phase E. |
+| `context_broker_ae.build_types.standard_tiered.*` | Standard tiered assembly/retrieval nodes. | in: state; out: state. | DB errors, LLM errors, lock timeouts. | compaction thresholds, tier transitions, summarization errors. | Covered in live phase E + `tests/claude/test_assembly`. |
+| `context_broker_ae.build_types.knowledge_enriched.*` | Knowledge-enriched retrieval (semantic + KG). | in: state; out: state. | embedding/LLM errors, KG failures. | semantic retrieval, KG injection, distillation. | Covered in live phase E (partial), **CEA additions not covered**. |
+| `context_broker_ae.build_types.tier_scaling.extract_deadband_config` | Read tier allocation config. | in: build type config; out: dict. | None. | correct defaults. | Covered in `tests/claude/test_assembly`. |
+| `context_broker_ae.message_pipeline.store_message` | Insert message and update counters. | in: state; out: state. | DB errors, invalid IDs. | message insert, tool call fields, priority. | Covered in live phase B/C, `tests/claude/test_workers`. |
+| `context_broker_ae.embed_pipeline.build_embed_pipeline` + nodes | Fetch message, embed, store. | in: state; out: state. | OpenAI/httpx errors, null content. | batch embedding, timeouts. | Covered in live phase D + `tests/claude/test_workers`. |
+| `context_broker_ae.search_flow.build_*` + nodes | Conversation/message search + rerank. | in: state; out: results. | embedding errors, rerank API errors. | vector search, BM25, RRF, rerank fallback. | Covered in `tests/claude/test_search` + live phase B. |
+| `context_broker_ae.conversation_ops_flow.build_*` + nodes | CRUD conv/window/history/logs. | in: state; out: records. | DB errors, invalid IDs. | create/rename/delete, list/filter. | Covered in live phase C + `tests/claude/test_database`. |
+| `context_broker_ae.memory_extraction.build_memory_extraction` + nodes | Extract facts via Mem0. | in: state; out: counts. | lock fail, LLM errors, Mem0 errors. | extraction text chunking, redaction. | Covered in live phase D + `tests/claude/test_memory`. |
+| `context_broker_ae.memory_search_flow.build_*` + nodes | Mem0 search + context formatting. | in: state; out: memories/relations. | Mem0 errors. | degraded path, ranking. | Covered in live phase B/C (knowledge search). |
+| `context_broker_ae.memory_admin_flow.build_*` + nodes | Mem0 add/list/delete flows. | in: state; out: results. | Mem0 errors. | add/list/delete. | Covered in live phase C. |
+| `context_broker_ae.memory_scoring.score_memory` / `filter_and_rank_memories` | Apply decay & ranking. | in: memories; out: ranked list. | None. | decay correctness. | Covered in `tests/claude/test_search/test_search_internals.py`. |
+| `context_broker_ae.memory.mem0_client.get_mem0_client` | Initialize Mem0 with config. | out: Memory instance. | missing dims, config errors. | singleton reuse, reset. | Covered in `tests/claude/test_memory/test_memory_integration.py`. |
+| `context_broker_ae.memory.quality_wrapper` (CEA) | Quality wrapper around Mem0. | in: content/query; out: enriched results. | asyncpg errors, Mem0 errors. | dedup, metadata write, feedback, expiration cleanup. | **Not covered** in tests/claude. |
+| `context_broker_ae.cea_extraction_flow.build_cea_extraction_flow` (CEA) | CEAs extraction StateGraph. | in: tier1 content; out: dispatch counts. | JSON parse errors, LLM errors, wrapper errors. | LLM JSON validity, dispatch relationships. | **Not covered** in tests/claude. |
+
+### packages/context-broker-te
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `context_broker_te.register.register` | Register Imperator + CEAc flow. | out: dict. | import errors. | tools_required list includes knowledge_* tools. | Covered in live phase H (partial). |
+| `context_broker_te.imperator_flow.build_imperator_flow` | Build Imperator ReAct graph. | in: config; out: compiled graph. | tool binding errors. | tool loop, max iteration fallback. | Covered in live phase F/G + `tests/claude/test_imperator`. |
+| `context_broker_te.imperator_flow.init_context_node` | Load prompt, get_context, optional CEAc. | in: state; out: state. | prompt load failure, get_context errors. | CEAc integration paths. | Partially covered in live phase F; **CEAc not covered**. |
+| `context_broker_te.imperator_flow.llm_call_node` | LLM call with tools. | in: state; out: state. | OpenAI/httpx errors, empty responses. | tool call vs content, retry on empty. | Covered in live phase F. |
+| `context_broker_te.imperator_flow.store_user_message/store_assistant_message` | Persist messages via tool. | in: state; out: state. | dispatch_tool errors, empty content. | skip duplicate, fallback text behavior. | Covered in live phase F. |
+| `context_broker_te.cea_enrichment_flow.build_ceac_enrichment_flow` (CEA) | CEAc ReAct enrichment subgraph. | in: tiers, query, tool fns; out: enriched_context. | search_fn errors, feedback_fn errors. | ranking logic, exploration, feedback recording. | **Not covered** in tests/claude. |
+| `context_broker_te.domain_mem0.get_domain_mem0` | Domain Mem0 singleton. | out: Memory or None. | config invalid, missing dims. | config hash change, init failure. | Covered in `tests/claude/test_imperator/test_domain_knowledge_seeding.py` (partial). |
+| `context_broker_te.seed_knowledge.seed_domain_knowledge` | Seed domain_information. | out: count. | DB errors, embedding errors. | seed with/without embeddings. | Covered in `tests/claude/test_imperator`. |
+| TE tools (admin/alerting/diagnostic/filesystem/notify/operational/system/web) | Imperator tool functions. | in: tool params; out: str. | DB/HTTP/fs errors. | success + invalid inputs. | Covered in `tests/claude/test_tools` + live phase G. |
+
+### packages/mem0-fork/mem0/memory
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `mem0.memory.main.Memory.add` | Extract/store memory (vector+graph). | in: messages, ids, metadata; out: dict results. | validation, embed, vector/graph errors. | _skip_graph path, dedup, invalid inputs. | **Not covered** in tests/claude (Mem0 treated as black box). |
+| `mem0.memory.main.Memory.search/get/get_all/update/delete/delete_all/history/reset` | Core Mem0 operations. | inputs per method; outputs dict/list. | vector store errors, missing ids. | success/error paths, graph search on/off. | **Not covered** in tests/claude. |
+| `mem0.memory.graph_memory.MemoryGraph.*` | Neo4j entity extraction, search, add, delete. | in: text, filters; out: dict/list. | LLM tool errors, Neo4j query errors. | elementId mapping, threshold behavior. | **Not covered** in tests/claude. |
+| `mem0.memory.quality_gate.*` | Side-channel metadata extraction + rejection. | in: facts/meta; out: filtered lists. | invalid regex, invalid expires_at. | rejects too-short, regex, bad date. | **Not covered** in tests/claude. |
+| `mem0.memory.expiration.*` | Expiration cleanup + filtering. | in: vector_store, db; out: deleted count. | unsupported list filters, DB errors. | cleanup interval, idempotent cleanup. | **Not covered** in tests/claude. |
+
+### alerter/
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `alerter._startup/_shutdown` | Load config, connect Postgres. | none. | asyncpg errors. | retry behavior. | Covered in `tests/claude/test_alerter`. |
+| `alerter.webhook` | CloudEvents webhook → instruction → channel fanout. | in: Request; out: JSONResponse. | invalid JSON, missing type, channel errors. | idempotency, default channels, instruction match. | Covered in `tests/claude/test_alerter`. |
+| `alerter._find_instruction` | Vector or text search over instructions. | in: event; out: dict/None. | embed errors, DB errors. | vector search + fallback. | Covered in `tests/claude/test_alerter_logic`. |
+| `alerter._send_*` | Channel delivery (slack/discord/ntfy/smtp/twilio/webhook). | in: config, message; out: None. | http/smtp errors. | missing config validation. | Covered in `tests/claude/test_alerter_logic`. |
+
+### log_shipper/
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `log_shipper.LogShipper.setup` | Connect Postgres + Docker, discover network. | out: None. | Docker errors, Postgres errors. | network discovery fallback. | Covered in `tests/claude/test_log_shipper`. |
+| `log_shipper.LogShipper.tail_container` | Tail Docker logs into queue. | in: container id; out: None. | parse errors, queue full. | JSON log parsing, timestamp parse. | Covered in `tests/claude/test_log_shipper`. |
+| `log_shipper.LogShipper.postgres_writer_loop` | Batch write logs to DB. | out: None. | DB errors, timeout. | batch flush conditions. | Covered in `tests/claude/test_log_shipper`. |
+| `log_shipper.LogShipper.event_watcher_loop` | Watch Docker network connect/disconnect. | out: None. | Docker errors. | task start/stop on connect/disconnect. | Covered in `tests/claude/test_log_shipper`. |
+
+## 2. MCP endpoints/tools (schema + dispatch + error handling)
+Tools list is defined in `app.routes.mcp._get_tool_list`, dispatched in `app.flows.tool_dispatch._dispatch_tool_inner`.
+
+| Tool | Schema highlights | Dispatch path | Error handling | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `get_context` | build_type (enum), budget (int), conversation_id?, user_prompt?, model?, domain_context? | `tool_dispatch` → flow `get_context` | ValueError on flow error. | new v2 params; domain_context injection. | Covered in live phase B; no explicit domain_context test. |
+| `store_message` | conversation_id, role, sender, content?, tool_calls? | `message_pipeline` flow | validation errors. | tool_calls/tool_call_id persistence. | Covered in live phase B/C. |
+| `search_messages` | query required, conversation_id?, role?, sender? | `message_search` flow | flow error. | rerank optional. | Covered in live phase B + `test_search`. |
+| `conv_create_conversation` | optional conversation_id/title/flow_id/user_id | `create_conversation` flow | flow error. | idempotent create. | Covered live phase C. |
+| `conv_delete_conversation` | conversation_id | `delete_conversation` flow | flow error. | cascade delete. | Covered live phase C. |
+| `conv_rename_conversation` | conversation_id/title | `rename_conversation` flow | flow error. | rename no-op. | Covered live phase C. |
+| `conv_list_conversations` | participant?, limit/offset | direct SQL in `tool_dispatch` | asyncpg errors. | participant filter vs no filter. | Covered live phase C + `tests/claude/test_database`. |
+| `conv_store_message` | context_window_id? or conversation_id? | `message_pipeline` flow | validation error if both missing. | context window resolution path. | Covered live phase C. |
+| `conv_retrieve_context` | context_window_id | build_type lookup → retrieval graph | missing window/build_type. | retrieval warnings surfaced. | Covered live phase C/E. |
+| `conv_create_context_window` | conversation_id, participant_id, build_type, max_tokens? | `create_context_window` flow | flow error. | budget override. | Covered live phase C. |
+| `conv_search` | query?, limit/offset, filters | `conversation_search` flow | flow error. | date range filters. | Covered live phase C. |
+| `conv_search_messages` | query, filters | `message_search` flow | flow error. | filter combinations. | Covered live phase C. |
+| `conv_get_history` | conversation_id, limit? | `get_history` flow | flow error. | ordering, limit. | Covered live phase C. |
+| `conv_search_context_windows` | filters | `search_context_windows` flow | flow error. | filter combos. | Covered live phase C. |
+| `query_logs` | container, level, since/until, keyword | SQL in `tool_dispatch` | asyncpg errors. | filter combinations. | Covered live phase I. |
+| `search_logs` | query required, filters | embed query + SQL vector search | missing log_embeddings config. | semantic search with vector. | Covered live phase I. |
+| `knowledge_search` (CEA) | query, user_id?, limit | quality_wrapper.search | wrapper errors. | global search path + graph fallback. | **Not covered** in tests/claude. |
+| `knowledge_add` (CEA) | content, user_id, conversation_id?, durability?, confidence?, source_type?, original_utterance? | quality_wrapper.add + write_metadata | wrapper rejects; metadata write errors. | dedup, quality gate, metadata. | **Not covered** in tests/claude. |
+| `knowledge_list` (CEA) | user_id?, limit | quality_wrapper.list_facts | wrapper errors. | global list direct pgvector query. | **Not covered** in tests/claude. |
+| `knowledge_feedback` (CEA) | target_type/id, event_type, agent_id, context? | quality_wrapper.record_feedback | asyncpg errors, dedup. | duplicate event idempotency. | **Not covered** in tests/claude. |
+| `imperator_chat` | message, context_window_id? | TE Imperator flow | flow error. | streaming and non-streaming. | Covered live phase F. |
+| `metrics_get` | no args | metrics flow | flow error. | metrics output. | Covered live phase I. |
+| `install_stategraph` | package_name, version? | install_stategraph + cache invalidation | pip errors. | invalid package. | Covered live phase C. |
+
+## 3. Pipeline stages (StateGraph nodes)
+Each node requires tests for success + failure + edge conditions. Coverage references tests/claude (live + mock).
+
+### CEA (new)
+| Flow | Node | What it does | Failure modes | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `cea_extraction_flow` | `search_existing_facts` | query quality wrapper for existing facts by scope | wrapper errors, user_id extraction failure | scope=user/global/conversation; tier2 query logic | **Not covered** |
+| `cea_extraction_flow` | `run_extraction_llm` | call LLM with `cea_vector_extraction` prompt | JSON parse error, invalid schema, LLM error | invalid JSON, missing keys, structured output validity | **Not covered** |
+| `cea_extraction_flow` | `dispatch_results` | add facts to Mem0 via wrapper, write metadata, feedback on supersedes/conflicts | wrapper add failure, metadata insert errors | relationship handling, dedup by utterance | **Not covered** |
+| `cea_extraction_flow` | `handle_error` | logs error and returns counts | none | error path coverage | **Not covered** |
+| `cea_enrichment_flow` | `decide_search` | LLM-driven query selection for CEAc | LLM errors, DONE path | iterative query behavior | **Not covered** |
+| `cea_enrichment_flow` | `execute_search` | call injected search_fn | search errors | user_id propagation, dedup results | **Not covered** |
+| `cea_enrichment_flow` | `evaluate_and_rank` | ranking and budget enforcement | none | trustworthiness threshold, exploration | **Not covered** |
+| `cea_enrichment_flow` | `assemble_context` | format results with template | prompt load failures | output template fallback | **Not covered** |
+| `cea_enrichment_flow` | `record_feedback` | send used/discarded events | feedback errors | idempotency, partial failures | **Not covered** |
+
+### Core AE flows (selected)
+| Flow | Node | What it does | Failure modes | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `message_pipeline` | `store_message` | insert message + update counters | DB errors | tool_calls, sequence_number. | Covered live phase B/C. |
+| `embed_pipeline` | `fetch_message` | load message row | missing message | missing id. | Covered live phase D. |
+| `embed_pipeline` | `generate_embedding` | call embeddings model | timeout, OSError, API errors | timeout path + retry. | Covered live phase D. |
+| `embed_pipeline` | `store_embedding` | update embedding column | DB errors | vector formatting. | Covered live phase D. |
+| `conversation_search` | `embed_conversation_query` | embed query | embed errors | embedding None path. | Covered live phase B. |
+| `conversation_search` | `search_conversations_db` | SQL search | DB errors | filters, ordering. | Covered live phase B/C. |
+| `message_search` | `hybrid_search_messages` | vector + BM25 + RRF | DB errors | tsvector and vector. | Covered live phase B + `test_search`. |
+| `memory_extraction` | `build_extraction_text` | chunk and clean text | invalid input | chunking, redaction. | Covered in `tests/claude/test_memory`. |
+| `memory_extraction` | `run_mem0_extraction` | Mem0 add | Mem0 errors | _skip_graph path, latency. | Covered in `tests/claude/test_memory`. |
+| `metrics_flow` | `collect_metrics` | dump Prometheus registry | registry errors | metrics output. | Covered live phase I. |
+| `health_flow` | `check_dependencies` | postgres+neo4j health | network errors | degraded status. | Covered live phase A. |
+| `build_types.standard_tiered` | `acquire_assembly_lock` | Postgres advisory lock | lock fail | concurrent assembly. | Covered `test_assembly`. |
+| `build_types.standard_tiered` | `calculate_compaction_state` | compute tier boundaries | invalid config | tier allocations. | Covered `test_assembly`. |
+| `build_types.standard_tiered` | `compact_tier1` | summarize tier1 and store tier2 | LLM errors | chunk summaries. | Covered live phase E. |
+| `build_types.standard_tiered` | `run_full_compaction` | consolidate archival | LLM errors | consolidation logic. | Covered live phase E. |
+| `build_types.standard_tiered` | `finalize_assembly` | persist last_assembled_at, metrics | DB errors | last_assembled_at. | Covered live phase E. |
+| `build_types.knowledge_enriched` | `inject_semantic_retrieval` | semantic search for query | embeddings errors | top-k logic. | Partial in live phase E. |
+| `build_types.knowledge_enriched` | `inject_knowledge_graph` | Mem0 graph retrieval | Mem0 errors | graph format. | Partial in live phase E. |
+
+## 4. Worker behaviors
+| Worker loop | Polling logic | Retry behavior | Failure modes | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| DB embedding worker (`_embedding_worker`) | Polls messages with `embedding IS NULL` every `worker_poll_interval_seconds` | timeout on embedding, backoff after failures; poison pill after 5 failures writes zero-vector | embedding model errors, DB errors, HNSW creation failure | timeout + poison pill, HNSW creation, batch size. | Covered in `tests/claude/test_workers/test_db_worker.py` + live phase D. |
+| DB extraction worker (`_extraction_worker`) | Polls messages with `memory_extracted IS NOT TRUE` | per-conversation retries (max 3), then mark extracted true | Mem0 errors, lock failure, timeout | conv retry cap, advisory lock concurrency. | Covered in `tests/claude/test_workers` + live phase D. |
+| DB assembly check (`_check_assembly_needed`) | triggers assembly when new tokens > threshold | no retry; catches timeouts | assembly timeout, graph errors | threshold logic, last_assembled_at. | Covered in `tests/claude/test_workers`. |
+| DB assembly worker (`_assembly_worker`) | poll windows with stale tokens | retries with backoff | graph errors, lock failure | window selection and ordering. | Covered in `tests/claude/test_workers`. |
+| Log embedding worker (`_log_embedding_worker`) | poll system_logs with `embedding IS NULL` | backoff after failures | embedding errors | log embedding path. | Covered in live phase I. |
+| Log shipper (`LogShipper.postgres_writer_loop`) | queue drain with timeout `FLUSH_INTERVAL_SEC` | on DB error sleep 1s | DB errors, queue overflow | batch size/flush, drop policy. | Covered in `tests/claude/test_log_shipper`. |
+
+## 5. Configuration options
+Only options referenced in code; include defaults and invalid handling.
+
+### app/config.py
+- `CONFIG_PATH` (env): default `/config/config.yml`; missing → RuntimeError.
+- `TE_CONFIG_PATH` (env): default `/config/te.yml`; missing TE treated as legacy, unless direct TE load.
+- `CREDENTIALS_PATH`: `/config/credentials/.env`; missing → fallback to env only.
+- CEA validation (`cea.*`):
+  - `retrieval_scope`: default `conversation`; invalid → RuntimeError.
+  - `pre_extraction_fact_limit`: default 20; invalid (<0/non-int) → RuntimeError.
+  - `expiration_cleanup_interval`: default 3600s; invalid (<0) → RuntimeError.
+  - `ranking.exploration_rate`: default 0.1; outside 0-1 → RuntimeError.
+  - `ranking.usefulness_crossover_events`: default 10; <=0 → RuntimeError.
+  - `ranking.trustworthiness_min_threshold`: default 0.1; outside 0-1 → RuntimeError.
+  - `ceac.max_iterations`: default 3; <1 → RuntimeError.
+  - `ceac.max_memories`: default 50; <1 → RuntimeError.
+  - `ceac.max_token_budget`: default 8000; <100 → RuntimeError.
+  - `source_type_weights.*`: each 0-1; invalid → RuntimeError.
+
+### app/main.py + workers
+- `log_level`: default INFO.
+- `workers.worker_poll_interval_seconds`: default 2s.
+- `workers.embedding_batch_size`: default 50.
+- `workers.embedding_timeout_seconds`: default 300.
+- `workers.extraction_timeout_seconds`: default 600.
+- `workers.assembly_timeout_seconds`: default 600.
+- `workers.trigger_threshold_percent`: default 0.1.
+- `workers.postgres_retry_interval_seconds`: default 10.
+- `workers.log_embedding_batch_size`: default 50 (from code, if present).
+
+### Token budgets
+- `build_types.*.max_context_tokens`: int or `auto`; invalid → fallback.
+- `build_types.*.fallback_tokens`: default 8192.
+- `build_types.*` tier allocation: `tier1_floor_pct`, `tier2_chunk_pct`, `tier2_min_chunks`, `tier2_max_chunks`, `tier3_pct`, `semantic_retrieval_pct`, `knowledge_graph_pct`, `effective_utilization`.
+  Invalid total_pct > utilization → ValueError at startup (fail fast).
+
+### MCP session tuning
+- `tuning.mcp_max_sessions`: default 1000.
+- `tuning.mcp_session_ttl_seconds`: default 3600.
+- `tuning.mcp_max_total_queued`: default 10000.
+
+### TE config keys (used in code)
+- `imperator.system_prompt` (default `imperator_identity`).
+- `imperator.build_type` (default `tiered-summary`).
+- `imperator.max_context_tokens` (default 8192).
+- `imperator.max_react_messages` (default 40).
+- `imperator.max_iterations` (default 5).
+- `imperator.user_id` (optional) for CEAc.
+- `imperator.notification_webhook`.
+- `imperator.admin_tools` (bool).
+- `domain_information.enabled` (default true for tools).
+- `domain_knowledge.enabled` (default false for tools).
+- `cea.ceac.enabled` (bool).
+
+### Alerter config (`/config/alerter.yml`)
+- `llm.base_url`, `llm.model`, `llm.api_key_env`.
+- `embeddings.base_url`, `embeddings.model`, `embeddings.api_key_env`.
+- `default_channels` list; missing → fallback to log.
+- `log_context.enabled/level/limit/minutes`.
+- Invalid values handled by returning errors or fallback default channels.
+
+### Log shipper env
+- `POSTGRES_DSN` required; missing → exit(1).
+- `BATCH_SIZE` default 100.
+- `FLUSH_INTERVAL_SEC` default 1.0.
+
+## 6. Error paths / degradation modes (high-signal)
+- Config load failures in MCP/chat/health return 500/503 with structured error.
+- MCP session queue full → 503 with explicit error.
+- Embedding worker poison pill after 5 consecutive failures writes zero-vector and resets failure count.
+- Extraction worker caps retries per conversation; after max retries, marks messages extracted to stop retry storms.
+- Assembly worker catches timeouts and errors and records warnings.
+- CEAs extraction: JSON parse errors mark failure but allow compaction to proceed.
+- Quality wrapper: global graph search errors are caught and logged; returns empty relations.
+- Imperator flow: empty LLM responses trigger retries and fallback message; max iterations fallback to a safe response.
+- Log shipper: queue overflow drops logs; DB errors drop batch and continue.
+- Alerter: per-channel failure recorded; partial success still returns processed.
+
+## 7. Database operations (SQL / schema / constraints)
+### init.sql (base schema)
+- Tables: `schema_migrations`, `conversations`, `conversation_messages`, `context_windows`, `conversation_summaries`, `system_logs`.
+- Key constraints: `idx_messages_conversation_seq_unique`, `idx_context_windows_identity`, `conversation_summaries_tier_check` (tier 2/3), FK constraints to conversations/context_windows.
+
+### Migrations (app/migrations.py)
+- 001–022: schema alignment, logs, schedules, alert instructions, Mem0 dedup, domain info.
+- 023 (CEA): `cea_quality_metadata`, `cea_feedback_events`, indexes (user_id, conversation_id, expires_at).
+- 024 (CEA): `idx_cea_metadata_natural_dedup` (user_id, conversation_id, original_utterance), `idx_cea_events_target_type_id`.
+
+### Query highlights (non-exhaustive but all unique query sites)
+- Message insert/update, embedding updates, memory_extracted flags, summary insert/compaction, HNSW index creation.
+- Search: vector + tsvector + RRF; domain info semantic search; logs query + vector search; knowledge wrapper direct pgvector query on `mem0_memories`.
+- CEA tables: insert metadata with ON CONFLICT DO NOTHING; feedback insert with dedup_key.
+- Alerter: instruction search (vector + text), event/delivery inserts.
+- Log shipper: batch insert to `system_logs`.
+
+## 8. Integration points (cross-module + external services)
+- AE↔TE: `KernelTEContext` injected during `stategraph_registry.scan()`; TE uses `dispatch_tool`, `async_load_config`, `get_pool`.
+- Mem0 (fork) integration: AE uses Mem0 for vector+graph, CEA wrapper uses Mem0 internal tables (`mem0_memories`) and Neo4j elementId usage (graph_memory changes).
+- External services: LLM providers via OpenAI-compatible endpoints, embeddings providers, Neo4j (bolt + HTTP), Docker API (log shipper), HTTP webhooks (alerter notify channels), SMTP, Twilio.
+- CEA: quality wrapper interacts with `cea_quality_metadata` and `cea_feedback_events` (Postgres) and Mem0/Neo4j.
+
+## Coverage gaps (CEA focus)
+- No tests in `tests/claude` explicitly exercise: `quality_wrapper.py`, `cea_extraction_flow.py`, `cea_enrichment_flow.py`, knowledge_* tool paths, or Mem0 fork changes (elementId mapping, side-channel removal).
+- Add unit tests for wrapper dedup, metadata, feedback, expiration cleanup, global search paths; and integration tests verifying CEAc enrichment injection in Imperator.
+apply_patch(auto_approved=true) exited 1 in 2ms:
+execution error: Io(Os { code: 206, kind: InvalidFilename, message: "The filename or extension is too long." })
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+# CLI Discovery Audit — Context Broker CEA (SDLC-02 Step 8, WPR-103 S1a)
+
+## Scope
+- Codebase: "'`state_4_development/context_broker_pmad/`
+- Files read: all `.py` in `app/`, `packages/context-broker-ae/src/context_broker_ae/`, `packages/context-broker-te/src/context_broker_te/`, `alerter/`, `log_shipper/`; `packages/mem0-fork/mem0/memory/{main.py,graph_memory.py,quality_gate.py,expiration.py}`; `postgres/init.sql`; all `.md` in `config/prompts/` and `config-test/prompts/`.
+- Tests checked for coverage: `tests/claude/` (unit + live suites as described in `tests/claude/TEST_PLAN.md`).
+
+'"'@ | Set-Content -Encoding UTF8 state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md" in C:\Users\j\projects\Joshua26 succeeded in 250ms:
+
+file update:
+diff --git a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+index cbbd1b92501e41675dff7651721138986015161c..6e563e49da0394db42d32b72c2d0ec82606329a8
+--- a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
++++ b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+Binary files differ
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+## 1. Functions (public API surface)
+Format per row: Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage in "'`tests/claude`
+
+### app/
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage in tests/claude |
+|---|---|---|---|---|---|
+| `app.budget.snap_budget` | Snap requested token budget to nearest bucket (ceil). | in: int requested; out: int bucket. | None. | bucket boundary tests (exact, between, > max). | Covered by `tests/claude/test_config` + live phase H (budget snapping). |
+| `app.config.invalidate_config_cache` | Forces next config read from disk. | no args; out: None. | None. | cache invalidation + subsequent read uses new file. | Covered in `tests/claude/test_config/test_config_gaps.py`. |
+| `app.config.load_config` | Load AE config with mtime+hash cache. | in: none; out: dict. | File missing, YAML parse, bad top-level type. | missing file, bad YAML, cache hit/miss. | Covered in `tests/claude/test_config`. |
+| `app.config.async_load_config` | Async merged AE+TE load with mtime cache. | in: none; out: dict. | file missing, YAML parse, bad type; executor errors. | hot-reload TE, AE cache hit, missing TE. | Covered in `tests/claude/test_config`, live phase H. |
+| `app.config.load_te_config` / `async_load_te_config` | Load TE config with cache. | in: none; out: dict. | file missing, YAML parse. | TE missing, malformed, cache hit/miss. | Covered in `tests/claude/test_config`. |
+| `app.config.load_merged_config` | Merge AE + TE (TE overrides). | in: none; out: dict. | TE missing handled. | TE absent fallback, overlay precedence. | Covered in `tests/claude/test_config`. |
+| `app.config.get_api_key` | Resolve API key via credentials file or env. | in: provider_config; out: str (possibly empty). | credentials file read failures. | precedence test, missing env key. | Covered in `tests/claude/test_config`. |
+| `app.config.get_build_type_config` | Validate build type config and tier allocation. | in: config dict, build type name; out: build type dict. | missing build type, invalid utilization. | error on invalid allocation, valid configs. | Covered in `tests/claude/test_config`. |
+| `app.config.get_tuning` | Read tuning param from tuning/workers/locks. | in: config, key, default; out: Any. | None. | precedence order, default fallback. | Covered in `tests/claude/test_config`. |
+| `app.config.get_log_level` | Return log level. | in: config; out: str. | None. | default INFO, casing. | Covered in `tests/claude/test_logging`. |
+| `app.config.verbose_log` / `verbose_log_auto` | Conditional logging when verbose enabled. | in: config, logger, message. | config load errors (auto). | no-op on disabled; handles bad YAML. | Covered in `tests/claude/test_logging/test_logging_gaps.py`. |
+| `app.config.get_chat_model` | Cache ChatOpenAI clients by role. | in: config, role, streaming; out: ChatOpenAI. | missing provider config, cache eviction. | cache hit/miss, streaming flag, eviction. | Partial in `tests/claude/test_config` (mock), no streaming coverage. |
+| `app.config.get_embeddings_model` | Cache OpenAIEmbeddings by config. | in: config, config_key; out: OpenAIEmbeddings. | bad dims, cache eviction. | dims handling, cache reuse. | Partial in `tests/claude/test_config`. |
+| `app.config.validate_cea_config` | Validate CEA config (REQ-CEA-A05). | in: config; out: None. | invalid ranges / types. | invalid retrieval_scope, thresholds, ceac limits. | **Not covered** in tests/claude. |
+| `app.database.init_postgres` | Initialize asyncpg pool. | in: config; out: pool. | connection failure. | success + reinit closes previous pool. | Covered in `tests/claude/test_database/test_database_gaps.py` + live phase A. |
+| `app.database.get_pg_pool` | Return pool or error. | out: pool. | RuntimeError if not init. | error path and success. | Covered in `tests/claude/test_database`. |
+| `app.database.close_all_connections` | Close pool. | out: None. | OSError from pool close. | close with/without pool. | Covered in `tests/claude/test_lifecycle`. |
+| `app.database.check_postgres_health` | Health probe via SELECT 1. | out: bool. | Postgres errors, pool missing. | failure -> false. | Covered in live phase A. |
+| `app.database.check_neo4j_health` | HTTP probe to Neo4j. | out: bool. | http errors. | auth header, failure -> false. | Covered in live phase A. |
+| `app.logging_setup.JsonFormatter.format` | JSON log formatting. | in: LogRecord; out: str. | None. | JSON fields present. | Covered in `tests/claude/test_logging`. |
+| `app.logging_setup.HealthCheckFilter.filter` | Filter /health logs. | in: LogRecord; out: bool. | None. | log suppression behavior. | Covered in `tests/claude/test_logging`. |
+| `app.logging_setup.setup_logging` / `update_log_level` | Configure logging and apply log level. | in: log level; out: None. | invalid level. | update after config load. | Covered in `tests/claude/test_logging`. |
+| `app.main._postgres_retry_loop` | Background retry for Postgres + Imperator init. | in: app, config; out: None. | asyncpg errors. | retry success/failure, imperator reinit. | Covered in `tests/claude/test_lifecycle`. |
+| `app.main.lifespan` | Startup/shutdown lifecycle. | in: app; out: context manager. | config errors, invalid build types, embedding dims missing. | startup failfast, degraded mode, shutdown cancels tasks. | Covered in `tests/claude/test_lifecycle` + live phase A/H. |
+| `app.main.check_postgres_middleware` | 503 when Postgres down (except /health,/metrics). | in: Request; out: Response. | None. | exempt paths, non-exempt. | Covered in `tests/claude/test_transport`. |
+| `app.main.http_exception_handler` / `validation_exception_handler` / `known_exception_handler` | Structured error responses. | in: Request, exc; out: JSONResponse. | None. | error code mapping. | Covered in `tests/claude/test_transport`. |
+| `app.prompt_loader.load_prompt` / `async_load_prompt` | Prompt loading with cache. | in: name; out: str. | File missing, read errors. | cache hit/miss, file change. | Covered in `tests/claude/test_config` + `test_imperator`. |
+| `app.stategraph_registry.scan` | Discover AE/TE entry points; register flows. | out: dict of packages. | Import/load errors. | hot-reload evict, TE flow registration. | Covered in live phase H; **TE flow scanning not explicitly covered**. |
+| `app.stategraph_registry.get_flow_builder` / `get_imperator_builder` | Return builders from registry. | out: callable/None. | None. | builder lookup. | Covered in `tests/claude/test_imperator`. |
+| `app.stategraph_registry.get_package_metadata` / `is_loaded` | Package metadata and loaded state. | out: dict/bool. | None. | metadata after scan. | Not explicitly covered. |
+| `app.token_budget.resolve_token_budget` | Resolve budget (override, fixed, auto). | in: config, build_type_config, override; out: int. | invalid values. | override precedence, auto fallback. | Covered in `tests/claude/test_config` + live phase H. |
+| `app.token_budget._query_provider_context_length` | Query provider /models for context length. | out: int. | http errors, missing model. | fallback path, 401 handling. | Not covered. |
+| `app.utils.stable_lock_id` | Deterministic advisory lock ID. | in: str; out: int. | None. | determinism, range. | Covered in `tests/claude/test_workers`. |
+| `app.flows.build_type_registry.register_build_type` | Register build type builders. | in: name, builders. | None. | list/register, overwrite. | Covered in `tests/claude/test_assembly`. |
+| `app.flows.build_type_registry.get_assembly_graph` / `get_retrieval_graph` | Compile & cache graphs. | in: build type; out: compiled graph. | missing build type. | lazy compile, cache hit, missing build type. | Covered in `tests/claude/test_assembly`. |
+| `app.flows.build_type_registry.list_build_types` / `clear_compiled_cache` | Inspect/clear registry cache. | out: list/None. | None. | cache cleared. | Not explicitly covered. |
+| `app.flows.imperator_wrapper.invoke_with_metrics` | Invoke Imperator flow with metrics. | in: state; out: state. | flow errors. | increments metrics, error path. | Covered in live phase F + test_imperator. |
+| `app.flows.imperator_wrapper.astream_events_with_metrics` | Stream Imperator events + metrics. | in: state; out: async generator. | streaming errors. | stream + fallback. | Covered in live phase F; streaming fallback in `test_transport`. |
+| `app.flows.install_stategraph.install_stategraph` | pip install package + rescan registry. | in: package, version; out: result. | pip failure, record failure. | install success/fail. | Covered in live phase C. |
+| `app.flows.tool_dispatch.dispatch_tool` | Validate inputs and route to flow. | in: tool, args, config; out: dict. | ValueError, runtime errors. | each tool success/error. | Covered in live phases B/C and mock tests in `tests/claude/test_tools` + `test_search`. |
+| `app.routes.mcp.mcp_sse_session` | SSE session creation for MCP. | in: Request; out: StreamingResponse. | None. | session TTL, queue cap, keepalive. | Covered in `tests/claude/test_transport/test_sse_sessions.py`. |
+| `app.routes.mcp.mcp_tool_call` | MCP JSON-RPC tool calls. | in: Request; out: JSONResponse. | invalid JSON, invalid method, tool errors. | parse errors, session not found, queue full. | Covered in `tests/claude/test_transport` + live phase A/B/C. |
+| `app.routes.mcp._get_tool_list` | Tool list schema. | out: list[dict]. | config load errors tolerated. | schema includes new knowledge_* tools. | Covered in `tests/claude/test_tools/test_operational_tools.py` (partial). |
+| `app.routes.chat.chat_completions` | OpenAI-compatible chat endpoint. | in: Request; out: JSON/SSE. | invalid JSON, validation error, config errors. | streaming + non-streaming. | Covered in `tests/claude/test_transport/test_chat_extras.py` + live phase F. |
+| `app.routes.health.health_check` | Health endpoint (flow-based). | out: JSONResponse. | config load failure returns degraded. | healthy/unhealthy + degraded. | Covered in live phase A. |
+| `app.routes.metrics.get_metrics` | Prometheus metrics endpoint. | out: Response. | flow error -> 500. | metrics success + failure path. | Covered in live phase I. |
+| `app.routes.caller_identity.resolve_caller` | Determine caller identity. | in: Request, user field; out: str. | reverse DNS errors. | user field precedence. | Covered in `tests/claude/test_transport`. |
+| `app.workers.db_worker.start_background_worker` | Start embedding/extraction/assembly/log loops. | in: config; out: None. | loop cancellations, DB errors. | start/stop, backoff, partial failures. | Covered in `tests/claude/test_workers`. |
+| `app.imperator.state_manager.ImperatorStateManager` methods | Manage persistent Imperator convo/window IDs. | in: config; out: ids/None. | file read/write errors, DB missing. | create/read state, missing conversation, file corruption. | Covered in `tests/claude/test_state_manager`. |
+
+'"'@ | Add-Content -Encoding UTF8 state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md" in C:\Users\j\projects\Joshua26 succeeded in 236ms:
+
+file update:
+diff --git a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+index cbbd1b92501e41675dff7651721138986015161c..829748e651613cfac8455bad3e1e6b3625574551
+--- a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
++++ b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+Binary files differ
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+### packages/context-broker-ae (selected key public functions)
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| "'`context_broker_ae.register.register` | Register AE build types and flows. | out: dict with build_types, flows. | import errors. | registration contents, missing flow. | Covered in live phase H. |
+| `context_broker_ae.build_types.passthrough.build_passthrough_*` | Build passthrough assembly/retrieval graphs. | in: state; out: state. | DB errors, lock failure. | lock acquire/release, no-op assembly. | Covered in live phase E. |
+| `context_broker_ae.build_types.standard_tiered.*` | Standard tiered assembly/retrieval nodes. | in: state; out: state. | DB errors, LLM errors, lock timeouts. | compaction thresholds, tier transitions, summarization errors. | Covered in live phase E + `tests/claude/test_assembly`. |
+| `context_broker_ae.build_types.knowledge_enriched.*` | Knowledge-enriched retrieval (semantic + KG). | in: state; out: state. | embedding/LLM errors, KG failures. | semantic retrieval, KG injection, distillation. | Covered in live phase E (partial), **CEA additions not covered**. |
+| `context_broker_ae.build_types.tier_scaling.extract_deadband_config` | Read tier allocation config. | in: build type config; out: dict. | None. | correct defaults. | Covered in `tests/claude/test_assembly`. |
+| `context_broker_ae.message_pipeline.store_message` | Insert message and update counters. | in: state; out: state. | DB errors, invalid IDs. | message insert, tool call fields, priority. | Covered in live phase B/C, `tests/claude/test_workers`. |
+| `context_broker_ae.embed_pipeline.build_embed_pipeline` + nodes | Fetch message, embed, store. | in: state; out: state. | OpenAI/httpx errors, null content. | batch embedding, timeouts. | Covered in live phase D + `tests/claude/test_workers`. |
+| `context_broker_ae.search_flow.build_*` + nodes | Conversation/message search + rerank. | in: state; out: results. | embedding errors, rerank API errors. | vector search, BM25, RRF, rerank fallback. | Covered in `tests/claude/test_search` + live phase B. |
+| `context_broker_ae.conversation_ops_flow.build_*` + nodes | CRUD conv/window/history/logs. | in: state; out: records. | DB errors, invalid IDs. | create/rename/delete, list/filter. | Covered in live phase C + `tests/claude/test_database`. |
+| `context_broker_ae.memory_extraction.build_memory_extraction` + nodes | Extract facts via Mem0. | in: state; out: counts. | lock fail, LLM errors, Mem0 errors. | extraction text chunking, redaction. | Covered in live phase D + `tests/claude/test_memory`. |
+| `context_broker_ae.memory_search_flow.build_*` + nodes | Mem0 search + context formatting. | in: state; out: memories/relations. | Mem0 errors. | degraded path, ranking. | Covered in live phase B/C (knowledge search). |
+| `context_broker_ae.memory_admin_flow.build_*` + nodes | Mem0 add/list/delete flows. | in: state; out: results. | Mem0 errors. | add/list/delete. | Covered in live phase C. |
+| `context_broker_ae.memory_scoring.score_memory` / `filter_and_rank_memories` | Apply decay & ranking. | in: memories; out: ranked list. | None. | decay correctness. | Covered in `tests/claude/test_search/test_search_internals.py`. |
+| `context_broker_ae.memory.mem0_client.get_mem0_client` | Initialize Mem0 with config. | out: Memory instance. | missing dims, config errors. | singleton reuse, reset. | Covered in `tests/claude/test_memory/test_memory_integration.py`. |
+| `context_broker_ae.memory.quality_wrapper` (CEA) | Quality wrapper around Mem0. | in: content/query; out: enriched results. | asyncpg errors, Mem0 errors. | dedup, metadata write, feedback, expiration cleanup. | **Not covered** in tests/claude. |
+| `context_broker_ae.cea_extraction_flow.build_cea_extraction_flow` (CEA) | CEAs extraction StateGraph. | in: tier1 content; out: dispatch counts. | JSON parse errors, LLM errors, wrapper errors. | LLM JSON validity, dispatch relationships. | **Not covered** in tests/claude. |
+
+### packages/context-broker-te
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `context_broker_te.register.register` | Register Imperator + CEAc flow. | out: dict. | import errors. | tools_required list includes knowledge_* tools. | Covered in live phase H (partial). |
+| `context_broker_te.imperator_flow.build_imperator_flow` | Build Imperator ReAct graph. | in: config; out: compiled graph. | tool binding errors. | tool loop, max iteration fallback. | Covered in live phase F/G + `tests/claude/test_imperator`. |
+| `context_broker_te.imperator_flow.init_context_node` | Load prompt, get_context, optional CEAc. | in: state; out: state. | prompt load failure, get_context errors. | CEAc integration paths. | Partially covered in live phase F; **CEAc not covered**. |
+| `context_broker_te.imperator_flow.llm_call_node` | LLM call with tools. | in: state; out: state. | OpenAI/httpx errors, empty responses. | tool call vs content, retry on empty. | Covered in live phase F. |
+| `context_broker_te.imperator_flow.store_user_message/store_assistant_message` | Persist messages via tool. | in: state; out: state. | dispatch_tool errors, empty content. | skip duplicate, fallback text behavior. | Covered in live phase F. |
+| `context_broker_te.cea_enrichment_flow.build_ceac_enrichment_flow` (CEA) | CEAc ReAct enrichment subgraph. | in: tiers, query, tool fns; out: enriched_context. | search_fn errors, feedback_fn errors. | ranking logic, exploration, feedback recording. | **Not covered** in tests/claude. |
+| `context_broker_te.domain_mem0.get_domain_mem0` | Domain Mem0 singleton. | out: Memory or None. | config invalid, missing dims. | config hash change, init failure. | Covered in `tests/claude/test_imperator/test_domain_knowledge_seeding.py` (partial). |
+| `context_broker_te.seed_knowledge.seed_domain_knowledge` | Seed domain_information. | out: count. | DB errors, embedding errors. | seed with/without embeddings. | Covered in `tests/claude/test_imperator`. |
+| TE tools (admin/alerting/diagnostic/filesystem/notify/operational/system/web) | Imperator tool functions. | in: tool params; out: str. | DB/HTTP/fs errors. | success + invalid inputs. | Covered in `tests/claude/test_tools` + live phase G. |
+
+### packages/mem0-fork/mem0/memory
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `mem0.memory.main.Memory.add` | Extract/store memory (vector+graph). | in: messages, ids, metadata; out: dict results. | validation, embed, vector/graph errors. | _skip_graph path, dedup, invalid inputs. | **Not covered** in tests/claude (Mem0 treated as black box). |
+| `mem0.memory.main.Memory.search/get/get_all/update/delete/delete_all/history/reset` | Core Mem0 operations. | inputs per method; outputs dict/list. | vector store errors, missing ids. | success/error paths, graph search on/off. | **Not covered** in tests/claude. |
+| `mem0.memory.graph_memory.MemoryGraph.*` | Neo4j entity extraction, search, add, delete. | in: text, filters; out: dict/list. | LLM tool errors, Neo4j query errors. | elementId mapping, threshold behavior. | **Not covered** in tests/claude. |
+| `mem0.memory.quality_gate.*` | Side-channel metadata extraction + rejection. | in: facts/meta; out: filtered lists. | invalid regex, invalid expires_at. | rejects too-short, regex, bad date. | **Not covered** in tests/claude. |
+| `mem0.memory.expiration.*` | Expiration cleanup + filtering. | in: vector_store, db; out: deleted count. | unsupported list filters, DB errors. | cleanup interval, idempotent cleanup. | **Not covered** in tests/claude. |
+
+### alerter/
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `alerter._startup/_shutdown` | Load config, connect Postgres. | none. | asyncpg errors. | retry behavior. | Covered in `tests/claude/test_alerter`. |
+| `alerter.webhook` | CloudEvents webhook → instruction → channel fanout. | in: Request; out: JSONResponse. | invalid JSON, missing type, channel errors. | idempotency, default channels, instruction match. | Covered in `tests/claude/test_alerter`. |
+| `alerter._find_instruction` | Vector or text search over instructions. | in: event; out: dict/None. | embed errors, DB errors. | vector search + fallback. | Covered in `tests/claude/test_alerter_logic`. |
+| `alerter._send_*` | Channel delivery (slack/discord/ntfy/smtp/twilio/webhook). | in: config, message; out: None. | http/smtp errors. | missing config validation. | Covered in `tests/claude/test_alerter_logic`. |
+
+### log_shipper/
+| Function | What it does | Inputs/Outputs | Error paths | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `log_shipper.LogShipper.setup` | Connect Postgres + Docker, discover network. | out: None. | Docker errors, Postgres errors. | network discovery fallback. | Covered in `tests/claude/test_log_shipper`. |
+| `log_shipper.LogShipper.tail_container` | Tail Docker logs into queue. | in: container id; out: None. | parse errors, queue full. | JSON log parsing, timestamp parse. | Covered in `tests/claude/test_log_shipper`. |
+| `log_shipper.LogShipper.postgres_writer_loop` | Batch write logs to DB. | out: None. | DB errors, timeout. | batch flush conditions. | Covered in `tests/claude/test_log_shipper`. |
+| `log_shipper.LogShipper.event_watcher_loop` | Watch Docker network connect/disconnect. | out: None. | Docker errors. | task start/stop on connect/disconnect. | Covered in `tests/claude/test_log_shipper`. |
+
+'"'@ | Add-Content -Encoding UTF8 state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md" in C:\Users\j\projects\Joshua26 succeeded in 503ms:
+
+file update:
+diff --git a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+index cbbd1b92501e41675dff7651721138986015161c..e1299d53509d8f71b7e1f5ed13293c12e6530587
+--- a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
++++ b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+Binary files differ
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+## 2. MCP endpoints/tools (schema + dispatch + error handling)
+Tools list is defined in "'`app.routes.mcp._get_tool_list`, dispatched in `app.flows.tool_dispatch._dispatch_tool_inner`.
+
+| Tool | Schema highlights | Dispatch path | Error handling | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `get_context` | build_type (enum), budget (int), conversation_id?, user_prompt?, model?, domain_context? | `tool_dispatch` → flow `get_context` | ValueError on flow error. | new v2 params; domain_context injection. | Covered in live phase B; no explicit domain_context test. |
+| `store_message` | conversation_id, role, sender, content?, tool_calls? | `message_pipeline` flow | validation errors. | tool_calls/tool_call_id persistence. | Covered in live phase B/C. |
+| `search_messages` | query required, conversation_id?, role?, sender? | `message_search` flow | flow error. | rerank optional. | Covered in live phase B + `test_search`. |
+| `conv_create_conversation` | optional conversation_id/title/flow_id/user_id | `create_conversation` flow | flow error. | idempotent create. | Covered live phase C. |
+| `conv_delete_conversation` | conversation_id | `delete_conversation` flow | flow error. | cascade delete. | Covered live phase C. |
+| `conv_rename_conversation` | conversation_id/title | `rename_conversation` flow | flow error. | rename no-op. | Covered live phase C. |
+| `conv_list_conversations` | participant?, limit/offset | direct SQL in `tool_dispatch` | asyncpg errors. | participant filter vs no filter. | Covered live phase C + `tests/claude/test_database`. |
+| `conv_store_message` | context_window_id? or conversation_id? | `message_pipeline` flow | validation error if both missing. | context window resolution path. | Covered live phase C. |
+| `conv_retrieve_context` | context_window_id | build_type lookup → retrieval graph | missing window/build_type. | retrieval warnings surfaced. | Covered live phase C/E. |
+| `conv_create_context_window` | conversation_id, participant_id, build_type, max_tokens? | `create_context_window` flow | flow error. | budget override. | Covered live phase C. |
+| `conv_search` | query?, limit/offset, filters | `conversation_search` flow | flow error. | date range filters. | Covered live phase C. |
+| `conv_search_messages` | query, filters | `message_search` flow | flow error. | filter combinations. | Covered live phase C. |
+| `conv_get_history` | conversation_id, limit? | `get_history` flow | flow error. | ordering, limit. | Covered live phase C. |
+| `conv_search_context_windows` | filters | `search_context_windows` flow | flow error. | filter combos. | Covered live phase C. |
+| `query_logs` | container, level, since/until, keyword | SQL in `tool_dispatch` | asyncpg errors. | filter combinations. | Covered live phase I. |
+| `search_logs` | query required, filters | embed query + SQL vector search | missing log_embeddings config. | semantic search with vector. | Covered live phase I. |
+| `knowledge_search` (CEA) | query, user_id?, limit | quality_wrapper.search | wrapper errors. | global search path + graph fallback. | **Not covered** in tests/claude. |
+| `knowledge_add` (CEA) | content, user_id, conversation_id?, durability?, confidence?, source_type?, original_utterance? | quality_wrapper.add + write_metadata | wrapper rejects; metadata write errors. | dedup, quality gate, metadata. | **Not covered** in tests/claude. |
+| `knowledge_list` (CEA) | user_id?, limit | quality_wrapper.list_facts | wrapper errors. | global list direct pgvector query. | **Not covered** in tests/claude. |
+| `knowledge_feedback` (CEA) | target_type/id, event_type, agent_id, context? | quality_wrapper.record_feedback | asyncpg errors, dedup. | duplicate event idempotency. | **Not covered** in tests/claude. |
+| `imperator_chat` | message, context_window_id? | TE Imperator flow | flow error. | streaming and non-streaming. | Covered live phase F. |
+| `metrics_get` | no args | metrics flow | flow error. | metrics output. | Covered live phase I. |
+| `install_stategraph` | package_name, version? | install_stategraph + cache invalidation | pip errors. | invalid package. | Covered live phase C. |
+
+## 3. Pipeline stages (StateGraph nodes)
+Each node requires tests for success + failure + edge conditions. Coverage references tests/claude (live + mock).
+
+### CEA (new)
+| Flow | Node | What it does | Failure modes | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `cea_extraction_flow` | `search_existing_facts` | query quality wrapper for existing facts by scope | wrapper errors, user_id extraction failure | scope=user/global/conversation; tier2 query logic | **Not covered** |
+| `cea_extraction_flow` | `run_extraction_llm` | call LLM with `cea_vector_extraction` prompt | JSON parse error, invalid schema, LLM error | invalid JSON, missing keys, structured output validity | **Not covered** |
+| `cea_extraction_flow` | `dispatch_results` | add facts to Mem0 via wrapper, write metadata, feedback on supersedes/conflicts | wrapper add failure, metadata insert errors | relationship handling, dedup by utterance | **Not covered** |
+| `cea_extraction_flow` | `handle_error` | logs error and returns counts | none | error path coverage | **Not covered** |
+| `cea_enrichment_flow` | `decide_search` | LLM-driven query selection for CEAc | LLM errors, DONE path | iterative query behavior | **Not covered** |
+| `cea_enrichment_flow` | `execute_search` | call injected search_fn | search errors | user_id propagation, dedup results | **Not covered** |
+| `cea_enrichment_flow` | `evaluate_and_rank` | ranking and budget enforcement | none | trustworthiness threshold, exploration | **Not covered** |
+| `cea_enrichment_flow` | `assemble_context` | format results with template | prompt load failures | output template fallback | **Not covered** |
+| `cea_enrichment_flow` | `record_feedback` | send used/discarded events | feedback errors | idempotency, partial failures | **Not covered** |
+
+### Core AE flows (selected)
+| Flow | Node | What it does | Failure modes | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| `message_pipeline` | `store_message` | insert message + update counters | DB errors | tool_calls, sequence_number. | Covered live phase B/C. |
+| `embed_pipeline` | `fetch_message` | load message row | missing message | missing id. | Covered live phase D. |
+| `embed_pipeline` | `generate_embedding` | call embeddings model | timeout, OSError, API errors | timeout path + retry. | Covered live phase D. |
+| `embed_pipeline` | `store_embedding` | update embedding column | DB errors | vector formatting. | Covered live phase D. |
+| `conversation_search` | `embed_conversation_query` | embed query | embed errors | embedding None path. | Covered live phase B. |
+| `conversation_search` | `search_conversations_db` | SQL search | DB errors | filters, ordering. | Covered live phase B/C. |
+| `message_search` | `hybrid_search_messages` | vector + BM25 + RRF | DB errors | tsvector and vector. | Covered live phase B + `test_search`. |
+| `memory_extraction` | `build_extraction_text` | chunk and clean text | invalid input | chunking, redaction. | Covered in `tests/claude/test_memory`. |
+| `memory_extraction` | `run_mem0_extraction` | Mem0 add | Mem0 errors | _skip_graph path, latency. | Covered in `tests/claude/test_memory`. |
+| `metrics_flow` | `collect_metrics` | dump Prometheus registry | registry errors | metrics output. | Covered live phase I. |
+| `health_flow` | `check_dependencies` | postgres+neo4j health | network errors | degraded status. | Covered live phase A. |
+| `build_types.standard_tiered` | `acquire_assembly_lock` | Postgres advisory lock | lock fail | concurrent assembly. | Covered `test_assembly`. |
+| `build_types.standard_tiered` | `calculate_compaction_state` | compute tier boundaries | invalid config | tier allocations. | Covered `test_assembly`. |
+| `build_types.standard_tiered` | `compact_tier1` | summarize tier1 and store tier2 | LLM errors | chunk summaries. | Covered live phase E. |
+| `build_types.standard_tiered` | `run_full_compaction` | consolidate archival | LLM errors | consolidation logic. | Covered live phase E. |
+| `build_types.standard_tiered` | `finalize_assembly` | persist last_assembled_at, metrics | DB errors | last_assembled_at. | Covered live phase E. |
+| `build_types.knowledge_enriched` | `inject_semantic_retrieval` | semantic search for query | embeddings errors | top-k logic. | Partial in live phase E. |
+| `build_types.knowledge_enriched` | `inject_knowledge_graph` | Mem0 graph retrieval | Mem0 errors | graph format. | Partial in live phase E. |
+
+## 4. Worker behaviors
+| Worker loop | Polling logic | Retry behavior | Failure modes | Tests needed | Coverage |
+|---|---|---|---|---|---|
+| DB embedding worker (`_embedding_worker`) | Polls messages with `embedding IS NULL` every `worker_poll_interval_seconds` | timeout on embedding, backoff after failures; poison pill after 5 failures writes zero-vector | embedding model errors, DB errors, HNSW creation failure | timeout + poison pill, HNSW creation, batch size. | Covered in `tests/claude/test_workers/test_db_worker.py` + live phase D. |
+| DB extraction worker (`_extraction_worker`) | Polls messages with `memory_extracted IS NOT TRUE` | per-conversation retries (max 3), then mark extracted true | Mem0 errors, lock failure, timeout | conv retry cap, advisory lock concurrency. | Covered in `tests/claude/test_workers` + live phase D. |
+| DB assembly check (`_check_assembly_needed`) | triggers assembly when new tokens > threshold | no retry; catches timeouts | assembly timeout, graph errors | threshold logic, last_assembled_at. | Covered in `tests/claude/test_workers`. |
+| DB assembly worker (`_assembly_worker`) | poll windows with stale tokens | retries with backoff | graph errors, lock failure | window selection and ordering. | Covered in `tests/claude/test_workers`. |
+| Log embedding worker (`_log_embedding_worker`) | poll system_logs with `embedding IS NULL` | backoff after failures | embedding errors | log embedding path. | Covered in live phase I. |
+| Log shipper (`LogShipper.postgres_writer_loop`) | queue drain with timeout `FLUSH_INTERVAL_SEC` | on DB error sleep 1s | DB errors, queue overflow | batch size/flush, drop policy. | Covered in `tests/claude/test_log_shipper`. |
+
+## 5. Configuration options
+Only options referenced in code; include defaults and invalid handling.
+
+### app/config.py
+- `CONFIG_PATH` (env): default `/config/config.yml`; missing → RuntimeError.
+- `TE_CONFIG_PATH` (env): default `/config/te.yml`; missing TE treated as legacy, unless direct TE load.
+- `CREDENTIALS_PATH`: `/config/credentials/.env`; missing → fallback to env only.
+- CEA validation (`cea.*`):
+  - `retrieval_scope`: default `conversation`; invalid → RuntimeError.
+  - `pre_extraction_fact_limit`: default 20; invalid (<0/non-int) → RuntimeError.
+  - `expiration_cleanup_interval`: default 3600s; invalid (<0) → RuntimeError.
+  - `ranking.exploration_rate`: default 0.1; outside 0-1 → RuntimeError.
+  - `ranking.usefulness_crossover_events`: default 10; <=0 → RuntimeError.
+  - `ranking.trustworthiness_min_threshold`: default 0.1; outside 0-1 → RuntimeError.
+  - `ceac.max_iterations`: default 3; <1 → RuntimeError.
+  - `ceac.max_memories`: default 50; <1 → RuntimeError.
+  - `ceac.max_token_budget`: default 8000; <100 → RuntimeError.
+  - `source_type_weights.*`: each 0-1; invalid → RuntimeError.
+
+### app/main.py + workers
+- `log_level`: default INFO.
+- `workers.worker_poll_interval_seconds`: default 2s.
+- `workers.embedding_batch_size`: default 50.
+- `workers.embedding_timeout_seconds`: default 300.
+- `workers.extraction_timeout_seconds`: default 600.
+- `workers.assembly_timeout_seconds`: default 600.
+- `workers.trigger_threshold_percent`: default 0.1.
+- `workers.postgres_retry_interval_seconds`: default 10.
+- `workers.log_embedding_batch_size`: default 50 (from code, if present).
+
+### Token budgets
+- `build_types.*.max_context_tokens`: int or `auto`; invalid → fallback.
+- `build_types.*.fallback_tokens`: default 8192.
+- `build_types.*` tier allocation: `tier1_floor_pct`, `tier2_chunk_pct`, `tier2_min_chunks`, `tier2_max_chunks`, `tier3_pct`, `semantic_retrieval_pct`, `knowledge_graph_pct`, `effective_utilization`.
+  Invalid total_pct > utilization → ValueError at startup (fail fast).
+
+### MCP session tuning
+- `tuning.mcp_max_sessions`: default 1000.
+- `tuning.mcp_session_ttl_seconds`: default 3600.
+- `tuning.mcp_max_total_queued`: default 10000.
+
+### TE config keys (used in code)
+- `imperator.system_prompt` (default `imperator_identity`).
+- `imperator.build_type` (default `tiered-summary`).
+- `imperator.max_context_tokens` (default 8192).
+- `imperator.max_react_messages` (default 40).
+- `imperator.max_iterations` (default 5).
+- `imperator.user_id` (optional) for CEAc.
+- `imperator.notification_webhook`.
+- `imperator.admin_tools` (bool).
+- `domain_information.enabled` (default true for tools).
+- `domain_knowledge.enabled` (default false for tools).
+- `cea.ceac.enabled` (bool).
+
+### Alerter config (`/config/alerter.yml`)
+- `llm.base_url`, `llm.model`, `llm.api_key_env`.
+- `embeddings.base_url`, `embeddings.model`, `embeddings.api_key_env`.
+- `default_channels` list; missing → fallback to log.
+- `log_context.enabled/level/limit/minutes`.
+- Invalid values handled by returning errors or fallback default channels.
+
+### Log shipper env
+- `POSTGRES_DSN` required; missing → exit(1).
+- `BATCH_SIZE` default 100.
+- `FLUSH_INTERVAL_SEC` default 1.0.
+
+## 6. Error paths / degradation modes (high-signal)
+- Config load failures in MCP/chat/health return 500/503 with structured error.
+- MCP session queue full → 503 with explicit error.
+- Embedding worker poison pill after 5 consecutive failures writes zero-vector and resets failure count.
+- Extraction worker caps retries per conversation; after max retries, marks messages extracted to stop retry storms.
+- Assembly worker catches timeouts and errors and records warnings.
+- CEAs extraction: JSON parse errors mark failure but allow compaction to proceed.
+- Quality wrapper: global graph search errors are caught and logged; returns empty relations.
+- Imperator flow: empty LLM responses trigger retries and fallback message; max iterations fallback to a safe response.
+- Log shipper: queue overflow drops logs; DB errors drop batch and continue.
+- Alerter: per-channel failure recorded; partial success still returns processed.
+
+## 7. Database operations (SQL / schema / constraints)
+### init.sql (base schema)
+- Tables: `schema_migrations`, `conversations`, `conversation_messages`, `context_windows`, `conversation_summaries`, `system_logs`.
+- Key constraints: `idx_messages_conversation_seq_unique`, `idx_context_windows_identity`, `conversation_summaries_tier_check` (tier 2/3), FK constraints to conversations/context_windows.
+
+### Migrations (app/migrations.py)
+- 001–022: schema alignment, logs, schedules, alert instructions, Mem0 dedup, domain info.
+- 023 (CEA): `cea_quality_metadata`, `cea_feedback_events`, indexes (user_id, conversation_id, expires_at).
+- 024 (CEA): `idx_cea_metadata_natural_dedup` (user_id, conversation_id, original_utterance), `idx_cea_events_target_type_id`.
+
+### Query highlights (non-exhaustive but all unique query sites)
+- Message insert/update, embedding updates, memory_extracted flags, summary insert/compaction, HNSW index creation.
+- Search: vector + tsvector + RRF; domain info semantic search; logs query + vector search; knowledge wrapper direct pgvector query on `mem0_memories`.
+- CEA tables: insert metadata with ON CONFLICT DO NOTHING; feedback insert with dedup_key.
+- Alerter: instruction search (vector + text), event/delivery inserts.
+- Log shipper: batch insert to `system_logs`.
+
+## 8. Integration points (cross-module + external services)
+- AE↔TE: `KernelTEContext` injected during `stategraph_registry.scan()`; TE uses `dispatch_tool`, `async_load_config`, `get_pool`.
+- Mem0 (fork) integration: AE uses Mem0 for vector+graph, CEA wrapper uses Mem0 internal tables (`mem0_memories`) and Neo4j elementId usage (graph_memory changes).
+- External services: LLM providers via OpenAI-compatible endpoints, embeddings providers, Neo4j (bolt + HTTP), Docker API (log shipper), HTTP webhooks (alerter notify channels), SMTP, Twilio.
+- CEA: quality wrapper interacts with `cea_quality_metadata` and `cea_feedback_events` (Postgres) and Mem0/Neo4j.
+
+## Coverage gaps (CEA focus)
+- No tests in `tests/claude` explicitly exercise: `quality_wrapper.py`, `cea_extraction_flow.py`, `cea_enrichment_flow.py`, knowledge_* tool paths, or Mem0 fork changes (elementId mapping, side-channel removal).
+- Add unit tests for wrapper dedup, metadata, feedback, expiration cleanup, global search paths; and integration tests verifying CEAc enrichment injection in Imperator.
+
+'"'@ | Add-Content -Encoding UTF8 state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md" in C:\Users\j\projects\Joshua26 succeeded in 564ms:
+
+file update:
+diff --git a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+index cbbd1b92501e41675dff7651721138986015161c..a2a47a51891f8d6c14ce42dd2b20d023317ffd7f
+--- a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
++++ b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+Binary files differ
+
+Plan update
+Audit report written to docs/designs/cli-discovery-audit-codex.md.
+  ✓ Inventory required files and extract target code paths (CEA, MCP tools, migrations, mem0 fork) plus test coverage in tests/claude.
+  ✓ Read required code/prompt/sql files and build capability list by category.
+  ✓ Map capabilities to existing tests and write audit report to docs/designs/cli-discovery-audit-codex.md.
+file update:
+diff --git a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+index cbbd1b92501e41675dff7651721138986015161c..a2a47a51891f8d6c14ce42dd2b20d023317ffd7f
+--- a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
++++ b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+Binary files differ
+
+codex
+Wrote the discovery audit to `state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md`, covering functions, MCP tools, pipeline stages, workers, config, error paths, DB ops, and integration points with CEA focus and tests/claude coverage notes.
+
+No tests were run.
+
+If you want, I can:
+1) Expand the function list to a fully exhaustive per-function inventory (including every public method in Mem0 fork and all AE/TE flow helpers).
+2) Add a dedicated section enumerating every SQL statement by file and line reference.
+file update:
+diff --git a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+index cbbd1b92501e41675dff7651721138986015161c..a2a47a51891f8d6c14ce42dd2b20d023317ffd7f
+--- a/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
++++ b/state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md
+Binary files differ
+
+tokens used
+499,717
+Wrote the discovery audit to `state_4_development/context_broker_pmad/docs/designs/cli-discovery-audit-codex.md`, covering functions, MCP tools, pipeline stages, workers, config, error paths, DB ops, and integration points with CEA focus and tests/claude coverage notes.
+
+No tests were run.
+
+If you want, I can:
+1) Expand the function list to a fully exhaustive per-function inventory (including every public method in Mem0 fork and all AE/TE flow helpers).
+2) Add a dedicated section enumerating every SQL statement by file and line reference.
