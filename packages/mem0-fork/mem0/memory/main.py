@@ -531,12 +531,6 @@ class Memory(MemoryBase):
         # strips them to plain strings. Metadata travels in a parallel array
         # indexed by position. The core pipeline (normalize_facts, update
         # prompt, embeddings) sees plain strings as before — we chose not to
-        # modify Mem0's internal pipeline to minimize fork divergence and
-        # avoid cascading changes through the LLM interaction patterns.
-        # Metadata is reattached at the final write step only.
-        # See Joshua26 #422, #429 for design rationale and 3-CLI review.
-        _fact_metadata = []
-
         try:
             response = remove_code_blocks(response)
             if not response.strip():
@@ -551,7 +545,6 @@ class Memory(MemoryBase):
                 # Fork: side-channel metadata extraction and quality gate removed.
                 # Quality gating is now handled by the CEA quality wrapper.
                 new_retrieved_facts = normalize_facts(raw_facts)
-                _fact_metadata = [{} for _ in new_retrieved_facts]
         except Exception as e:
             logger.error(f"Error in new_retrieved_facts: {e}")
             new_retrieved_facts = []
@@ -632,16 +625,12 @@ class Memory(MemoryBase):
                         logger.info("Skipping memory entry because of empty `text` field.")
                         continue
 
-                    # Fork: side-channel metadata reattachment removed — CEA quality wrapper handles metadata.
-                    fact_meta = {}
-
                     event_type = resp.get("event")
                     if event_type == "ADD":
                         # 1.0.8: Cache embedding for rewritten text to avoid redundant API calls
                         if action_text not in new_message_embeddings:
                             new_message_embeddings[action_text] = self.embedding_model.embed(action_text, "add")
                         write_metadata = deepcopy(metadata)
-                        write_metadata.update(fact_meta)
                         memory_id = self._create_memory(
                             data=action_text,
                             existing_embeddings=new_message_embeddings,
@@ -653,7 +642,6 @@ class Memory(MemoryBase):
                         if action_text not in new_message_embeddings:
                             new_message_embeddings[action_text] = self.embedding_model.embed(action_text, "update")
                         write_metadata = deepcopy(metadata)
-                        write_metadata.update(fact_meta)
                         self._update_memory(
                             memory_id=temp_uuid_mapping[resp.get("id")],
                             data=action_text,
