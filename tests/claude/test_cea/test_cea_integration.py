@@ -160,19 +160,19 @@ class TestKnowledgeEnrichedBudget:
 
 
 class TestRetrievalFlowShim:
-    """Tests for F-01: retrieval_flow.py imports removed functions."""
+    """Tests for F-01: retrieval_flow.py was deleted (dead code)."""
 
-    def test_retrieval_flow_import_fails(self):
-        """Importing retrieval_flow.py should fail because ke_inject_* were removed.
+    def test_retrieval_flow_module_deleted(self):
+        """retrieval_flow.py should no longer exist — it was dead code.
 
-        This test documents F-01: the backward-compat shim imports
-        ke_inject_semantic_retrieval and ke_inject_knowledge_graph which
-        no longer exist in knowledge_enriched.py.
+        F-01: The backward-compat shim imported ke_inject_semantic_retrieval
+        and ke_inject_knowledge_graph which were removed during CEA refactor.
+        No production code imported the shim, so it was deleted entirely.
         """
-        with pytest.raises(ImportError):
-            # Force fresh import to catch the broken import
-            import context_broker_ae.retrieval_flow
-            importlib.reload(context_broker_ae.retrieval_flow)
+        import importlib.util
+
+        spec = importlib.util.find_spec("context_broker_ae.retrieval_flow")
+        assert spec is None, "retrieval_flow.py should have been deleted"
 
 
 # ---------------------------------------------------------------------------
