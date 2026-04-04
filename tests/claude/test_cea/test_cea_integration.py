@@ -7,8 +7,6 @@ budget change, backward-compat shim findings (F-01, F-02).
 Discovery audit: cli-discovery-audit-claude.md §5.
 """
 
-import importlib
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -181,16 +179,16 @@ class TestRetrievalFlowShim:
 
 
 class TestContextAssemblyShim:
-    """Tests for F-02: context_assembly.py imports renamed functions."""
+    """Tests for F-02: context_assembly.py was deleted (dead code)."""
 
-    def test_context_assembly_import_fails(self):
-        """Importing context_assembly.py should fail because functions were renamed.
+    def test_context_assembly_module_deleted(self):
+        """context_assembly.py should no longer exist — it was dead code.
 
-        This test documents F-02: the backward-compat shim imports
-        calculate_tier_boundaries, consolidate_archival_summary,
-        summarize_message_chunks which were renamed to
-        calculate_compaction_state, run_full_compaction, compact_tier1.
+        F-02: The backward-compat shim imported calculate_tier_boundaries,
+        consolidate_archival_summary, summarize_message_chunks which were
+        renamed during compaction v2. No production code imported the shim.
         """
-        with pytest.raises(ImportError):
-            import context_broker_ae.context_assembly
-            importlib.reload(context_broker_ae.context_assembly)
+        import importlib.util
+
+        spec = importlib.util.find_spec("context_broker_ae.context_assembly")
+        assert spec is None, "context_assembly.py should have been deleted"
