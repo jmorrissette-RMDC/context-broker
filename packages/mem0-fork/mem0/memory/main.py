@@ -2400,25 +2400,25 @@ class AsyncMemory(MemoryBase):
 
         prev_value = existing_memory.payload.get("data")
 
-        new_metadata = deepcopy(metadata) if metadata is not None else {}
+        # --- FORK: Preserve ALL existing payload keys (same as sync path) ---
+        # Stock Mem0 only preserved session IDs here, dropping custom metadata
+        # (expires_at, durability, etc.) on UPDATE. See #469.
+        new_metadata = deepcopy(existing_memory.payload) if existing_memory.payload else {}
 
+        # Merge caller-provided metadata (overrides existing)
+        if metadata:
+            for k, v in metadata.items():
+                if v is None:
+                    # Explicit null clears the field (e.g., expires_at=None → permanent)
+                    new_metadata.pop(k, None)
+                else:
+                    new_metadata[k] = v
+
+        # Always update these core fields
         new_metadata["data"] = data
         new_metadata["hash"] = hashlib.md5(data.encode()).hexdigest()
         new_metadata["created_at"] = _normalize_iso_timestamp_to_utc(existing_memory.payload.get("created_at"))
         new_metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-        # Preserve session identifiers from existing memory only if not provided in new metadata
-        if "user_id" not in new_metadata and "user_id" in existing_memory.payload:
-            new_metadata["user_id"] = existing_memory.payload["user_id"]
-        if "agent_id" not in new_metadata and "agent_id" in existing_memory.payload:
-            new_metadata["agent_id"] = existing_memory.payload["agent_id"]
-        if "run_id" not in new_metadata and "run_id" in existing_memory.payload:
-            new_metadata["run_id"] = existing_memory.payload["run_id"]
-
-        if "actor_id" not in new_metadata and "actor_id" in existing_memory.payload:
-            new_metadata["actor_id"] = existing_memory.payload["actor_id"]
-        if "role" not in new_metadata and "role" in existing_memory.payload:
-            new_metadata["role"] = existing_memory.payload["role"]
 
         if data in existing_embeddings:
             embeddings = existing_embeddings[data]

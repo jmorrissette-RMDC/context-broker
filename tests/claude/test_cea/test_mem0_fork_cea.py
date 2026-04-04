@@ -123,21 +123,20 @@ class TestPayloadPreservation:
         assert new_metadata["agent_id"] == "bot1"
         assert new_metadata["run_id"] == "run-123"
 
-    def test_async_path_only_preserves_session_ids(self):
-        """F-03: Document that AsyncMemory._update_memory only preserves session IDs.
+    def test_async_path_preserves_all_payload_keys(self):
+        """F-03: Async _update_memory now matches sync — preserves ALL payload keys.
 
-        This is a known asymmetry between sync and async paths.
-        The sync path (fork) preserves ALL payload keys.
-        The async path (stock) only preserves user_id, agent_id, run_id, actor_id, role.
+        Both sync and async paths use deepcopy(existing_memory.payload) + merge.
+        Custom metadata (durability, expires_at, etc.) survives UPDATE in both.
         """
-        # Stock Mem0 async behavior: only these keys are explicitly preserved
-        stock_preserved_keys = {"user_id", "agent_id", "run_id", "actor_id", "role"}
+        import inspect
+        from mem0.memory.main import AsyncMemory
 
-        # Custom metadata NOT in stock preserved keys
-        custom_keys = {"durability", "expires_at", "x_category", "confidence"}
-
-        # Verify no overlap — custom keys would be dropped in async path
-        assert stock_preserved_keys.isdisjoint(custom_keys)
+        source = inspect.getsource(AsyncMemory._update_memory)
+        # Verify the fork pattern is present in async path
+        assert "deepcopy(existing_memory.payload)" in source
+        # Verify explicit-null-clears pattern
+        assert "v is None" in source or "pop(k, None)" in source
 
 
 # ---------------------------------------------------------------------------
