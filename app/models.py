@@ -243,7 +243,7 @@ class KnowledgeAddInput(BaseModel):
     conversation_id: Optional[str] = Field(None, max_length=255)
     durability: Optional[float] = Field(None, ge=0.0, le=1.0)
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
-    source_type: Optional[str] = Field(None, max_length=50)
+    source_type: Optional[str] = Field(None, pattern="^(decision|observation|speculation|preference|instruction)$")
     original_utterance: Optional[str] = Field(None, max_length=10000)
 
 

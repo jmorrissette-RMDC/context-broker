@@ -21,6 +21,7 @@ def register() -> dict:
     """
     from context_broker_te._ctx import initialize
     from context_broker_te.imperator_flow import build_imperator_flow
+    from context_broker_te.cea_enrichment_flow import build_ceac_enrichment_flow
 
     return {
         "identity": "Context Broker Imperator",
@@ -31,6 +32,10 @@ def register() -> dict:
             "get_context",
             "store_message",
             "search_messages",
-            "search_knowledge",
+            "knowledge_search",
+            "knowledge_feedback",
         ],
+        "flows": {
+            "ceac_enrichment": build_ceac_enrichment_flow,
+        },
     }

@@ -435,8 +435,9 @@ def _should_iterate(state: CEAcEnrichmentState) -> str:
     if not state.get("query"):
         return "assemble_context"
 
-    # If we have results and iteration > 0, go back for refinement
-    if iteration > 0 and state.get("search_results"):
+    # After first search, always give the LLM a chance to refine —
+    # especially valuable when zero results were found.
+    if iteration > 0:
         return "decide_search"
 
     return "assemble_context"

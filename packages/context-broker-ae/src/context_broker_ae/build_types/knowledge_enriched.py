@@ -713,14 +713,16 @@ def ke_route_after_semantic(state: KnowledgeEnrichedRetrievalState) -> str:
 
 def build_knowledge_enriched_retrieval():
     """Build and compile the knowledge-enriched retrieval StateGraph."""
+    # CEA: Server-side semantic/KG injection removed. The enriched build type
+    # now returns tiered context only (same as standard-tiered). Enrichment
+    # happens client-side via the CEAc subgraph. The ke_inject_semantic_retrieval
+    # and ke_inject_knowledge_graph nodes are removed from the graph.
     workflow = StateGraph(KnowledgeEnrichedRetrievalState)
 
     workflow.add_node("ke_load_window", ke_load_window)
     workflow.add_node("ke_wait_for_assembly", ke_wait_for_assembly)
     workflow.add_node("ke_load_summaries", ke_load_summaries)
     workflow.add_node("ke_load_recent_messages", ke_load_recent_messages)
-    workflow.add_node("ke_inject_semantic_retrieval", ke_inject_semantic_retrieval)
-    workflow.add_node("ke_inject_knowledge_graph", ke_inject_knowledge_graph)
     workflow.add_node("ke_assemble_context", ke_assemble_context)
     workflow.add_node("ke_distill_context", ke_distill_context)
 
@@ -737,27 +739,7 @@ def build_knowledge_enriched_retrieval():
         {"ke_load_summaries": "ke_load_summaries"},
     )
     workflow.add_edge("ke_load_summaries", "ke_load_recent_messages")
-
-    workflow.add_conditional_edges(
-        "ke_load_recent_messages",
-        ke_route_after_load_messages,
-        {
-            "ke_inject_semantic_retrieval": "ke_inject_semantic_retrieval",
-            "ke_inject_knowledge_graph": "ke_inject_knowledge_graph",
-            "ke_assemble_context": "ke_assemble_context",
-        },
-    )
-
-    workflow.add_conditional_edges(
-        "ke_inject_semantic_retrieval",
-        ke_route_after_semantic,
-        {
-            "ke_inject_knowledge_graph": "ke_inject_knowledge_graph",
-            "ke_assemble_context": "ke_assemble_context",
-        },
-    )
-
-    workflow.add_edge("ke_inject_knowledge_graph", "ke_assemble_context")
+    workflow.add_edge("ke_load_recent_messages", "ke_assemble_context")
 
     workflow.add_conditional_edges(
         "ke_assemble_context",

@@ -132,9 +132,13 @@ async def run_extraction_llm(state: CEAsExtractionState) -> dict:
     verbose_log(config, _log, "CEAs.run_extraction_llm ENTER conv=%s", state["conversation_id"])
 
     try:
-        # Load both prompt templates (fix #4)
+        # Load vector fact extraction prompt template (REQ-CEA-I06).
+        # Graph extraction is handled by Mem0 internally when skip_graph=False.
+        # The cea_graph_extraction.md template exists as documentation of the
+        # intended graph schema but is not sent to the LLM — Mem0's own entity
+        # extraction prompts handle Neo4j writes. This avoids duplicate token
+        # cost for graph triples that Mem0 extracts anyway.
         vector_prompt_template = await async_load_prompt("cea_vector_extraction")
-        graph_prompt_template = await async_load_prompt("cea_graph_extraction")
 
         existing_facts_text = ""
         for fact in state.get("existing_facts", []):
@@ -146,8 +150,7 @@ async def run_extraction_llm(state: CEAsExtractionState) -> dict:
 
         current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-        # Build combined prompt (single LLM call with two output sections)
-        vector_prompt = vector_prompt_template.format(
+        prompt = vector_prompt_template.format(
             current_date=current_date,
             existing_facts=existing_facts_text,
             content=state["content"],
@@ -155,23 +158,9 @@ async def run_extraction_llm(state: CEAsExtractionState) -> dict:
             tier3_context=state.get("tier3_context", "(none)"),
         )
 
-        graph_prompt = graph_prompt_template.format(
-            current_date=current_date,
-            content=state["content"],
-        )
-
-        combined_prompt = (
-            f"{vector_prompt}\n\n"
-            f"---\n\n"
-            f"ADDITIONALLY, extract graph triples:\n\n"
-            f"{graph_prompt}\n\n"
-            f"Combine both outputs into a single JSON response with both "
-            f'"facts" and "graph_triples" arrays.'
-        )
-
         llm = get_chat_model(config, role="extraction")
         response = await llm.ainvoke(
-            [{"role": "user", "content": combined_prompt}],
+            [{"role": "user", "content": prompt}],
         )
 
         response_text = response.content if hasattr(response, "content") else str(response)
@@ -185,8 +174,7 @@ async def run_extraction_llm(state: CEAsExtractionState) -> dict:
 
         elapsed = time.monotonic() - t0
         n_facts = len(extraction_output.get("facts", []))
-        n_triples = len(extraction_output.get("graph_triples", []))
-        verbose_log(config, _log, "CEAs.run_extraction_llm EXIT facts=%d triples=%d (%.2fs)", n_facts, n_triples, elapsed)
+        verbose_log(config, _log, "CEAs.run_extraction_llm EXIT facts=%d (%.2fs)", n_facts, elapsed)
 
         return {"extraction_output": extraction_output}
 
@@ -230,7 +218,7 @@ async def dispatch_results(state: CEAsExtractionState) -> dict:
     extraction_model = extraction_config.get("model", "unknown")
     extraction_date = datetime.now(timezone.utc)
 
-    counts = {"new": 0, "duplicate": 0, "supersedes": 0, "conflicts": 0, "graph_triples": 0}
+    counts = {"new": 0, "duplicate": 0, "supersedes": 0, "conflicts": 0}
     facts = extraction.get("facts", [])
 
     for fact in facts:
@@ -315,21 +303,16 @@ async def dispatch_results(state: CEAsExtractionState) -> dict:
             if CEA_FACTS_EXTRACTED:
                 CEA_FACTS_EXTRACTED.labels(relationship="CONFLICTS").inc()
 
-    # Graph triples are handled by Mem0 when skip_graph=False (the add() call
-    # passes content to Mem0's internal graph extraction pipeline). The custom
-    # graph extraction template is used in the combined prompt to guide the LLM,
-    # but the actual Neo4j writes are Mem0's responsibility.
-    # The triples in extraction_output["graph_triples"] serve as guidance for
-    # Mem0's entity extraction — they're not written separately.
-    graph_triples = extraction.get("graph_triples", [])
-    counts["graph_triples"] = len(graph_triples)
+    # Graph triples are handled by Mem0 internally when skip_graph=False.
+    # The wrapper.add() call passes content to Mem0, which runs its own entity
+    # extraction pipeline and writes triples to Neo4j.
 
     elapsed = time.monotonic() - t0
     verbose_log(
         config, _log,
-        "CEAs.dispatch_results EXIT new=%d dup=%d sup=%d con=%d triples=%d (%.2fs)",
+        "CEAs.dispatch_results EXIT new=%d dup=%d sup=%d con=%d (%.2fs)",
         counts["new"], counts["duplicate"], counts["supersedes"],
-        counts["conflicts"], counts["graph_triples"], elapsed,
+        counts["conflicts"], elapsed,
     )
 
     if CEA_EXTRACTION_EVENTS:

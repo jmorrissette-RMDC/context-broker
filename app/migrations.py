@@ -612,6 +612,29 @@ async def _migration_023(conn) -> None:
     _log.info("Migration 023 complete — CEA quality metadata and feedback event tables")
 
 
+async def _migration_024(conn) -> None:
+    """Migration 24: CEA post-review fixes.
+
+    1. Composite unique index for fact dedup on natural keys (replaces hash-based dedup).
+    2. Composite index on feedback events for target_type-aware usefulness aggregation.
+    """
+    # Natural-key dedup: same user saying the same thing in the same conversation
+    # should not produce duplicate facts regardless of how many times compaction runs.
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cea_metadata_natural_dedup
+        ON cea_quality_metadata (user_id, conversation_id, original_utterance)
+        WHERE original_utterance != ''
+    """)
+
+    # Target_type-aware usefulness aggregation
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cea_events_target_type_id
+        ON cea_feedback_events (target_type, target_id, event_type)
+    """)
+
+    _log.info("Migration 024 complete — CEA natural-key dedup index and usefulness index")
+
+
 # Migration registry: version -> (description, migration_function)
 # Add new migrations here. Never modify existing entries.
 # IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
@@ -694,6 +717,11 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
         23,
         "CEA: quality metadata and feedback event tables",
         _migration_023,
+    ),
+    (
+        24,
+        "CEA: natural-key dedup index and usefulness aggregation index",
+        _migration_024,
     ),
 ]
 

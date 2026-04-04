@@ -143,15 +143,27 @@ class QualityWrapper:
         if self._apply_rejection_rules(content):
             return None
 
-        # Idempotency check: dedup by content + conversation_id + user_id + utterance (fix #10)
-        dedup = _fact_dedup_key(content, conversation_id, user_id, dedup_utterance)
-        existing = await self.pool.fetchval(
-            "SELECT target_id FROM cea_quality_metadata WHERE target_id = $1",
-            dedup,
-        )
-        if existing:
-            _log.debug("Duplicate fact detected (dedup key match): %s", content[:50])
-            return None
+        # Idempotency: check if this exact fact already exists by its natural key.
+        # The composite unique index on (user_id, conversation_id, original_utterance)
+        # in cea_quality_metadata enforces this at the DB level too, but checking
+        # here avoids the Mem0 add() call for known duplicates.
+        import uuid as _uuid
+        try:
+            conv_uuid = _uuid.UUID(conversation_id) if conversation_id else None
+        except ValueError:
+            conv_uuid = None
+
+        if conv_uuid and dedup_utterance:
+            existing = await self.pool.fetchval(
+                """
+                SELECT target_id FROM cea_quality_metadata
+                WHERE user_id = $1 AND conversation_id = $2 AND original_utterance = $3
+                """,
+                user_id, conv_uuid, dedup_utterance,
+            )
+            if existing:
+                _log.debug("Duplicate fact detected (natural key match): %s", content[:50])
+                return None
 
         await self._maybe_cleanup()
 
@@ -303,7 +315,10 @@ class QualityWrapper:
         user_id: Optional[str] = None,
         limit: int = 100,
     ) -> list:
-        """List facts via Mem0, enriched with metadata."""
+        """List facts via Mem0, enriched with metadata.
+
+        When user_id is None, lists all facts globally via direct pgvector query.
+        """
         if user_id:
             loop = asyncio.get_running_loop()
             raw = await loop.run_in_executor(
@@ -311,7 +326,23 @@ class QualityWrapper:
                 lambda: self.mem0.get_all(user_id=user_id, limit=limit),
             )
         else:
-            raw = {"results": []}
+            # Global list: query pgvector directly (Mem0 requires user_id)
+            rows = await self.pool.fetch(
+                """
+                SELECT id, (payload->>'data') AS memory,
+                       payload->>'user_id' AS user_id,
+                       payload->>'created_at' AS created_at
+                FROM mem0_memories
+                ORDER BY created_at DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+            raw = {"results": [
+                {"id": str(r["id"]), "memory": r["memory"],
+                 "user_id": r["user_id"], "created_at": r["created_at"]}
+                for r in rows
+            ]}
 
         facts = raw.get("results", []) if isinstance(raw, dict) else raw
         fact_ids = [("fact", f.get("id")) for f in facts if f.get("id")]
@@ -446,19 +477,27 @@ class QualityWrapper:
         return result
 
     async def _get_usefulness_batch(self, id_pairs: list[tuple[str, str]]) -> dict:
-        """Compute usefulness aggregates from the feedback event log."""
+        """Compute usefulness aggregates from the feedback event log.
+
+        Filters by both target_type and target_id to prevent cross-contamination
+        between facts and relations that share the same ID string.
+        """
         if not id_pairs:
             return {}
 
+        types = [p[0] for p in id_pairs]
         ids = [p[1] for p in id_pairs]
 
         rows = await self.pool.fetch(
             """
             SELECT target_type, target_id, event_type, COUNT(*) as cnt
             FROM cea_feedback_events
-            WHERE target_id = ANY($1)
+            WHERE (target_type, target_id) IN (
+                SELECT unnest($1::text[]), unnest($2::text[])
+            )
             GROUP BY target_type, target_id, event_type
             """,
+            types,
             ids,
         )
 
