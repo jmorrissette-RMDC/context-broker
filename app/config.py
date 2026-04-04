@@ -466,7 +466,7 @@ _embeddings_cache: dict[str, Any] = {}
 _MAX_CACHE_ENTRIES = 10
 
 
-def get_chat_model(config: dict, role: str = "imperator") -> Any:
+def get_chat_model(config: dict, role: str = "imperator", *, streaming: bool = False) -> Any:
     """Return a cached ChatOpenAI instance for the given role.
 
     Role determines where to look for the LLM config in the merged config:
@@ -478,6 +478,12 @@ def get_chat_model(config: dict, role: str = "imperator") -> Any:
     All providers use ChatOpenAI — the OpenAI-compatible wire protocol is
     universal (OpenAI, Anthropic, Google, xAI, Together, Ollama all support it).
 
+    Args:
+        streaming: If True, returns a streaming-enabled LLM instance.
+            Required for astream_events to emit on_chat_model_stream events.
+            Non-streaming (default) avoids "No generations found in stream"
+            errors from providers when tool-call-only turns produce no content.
+
     R5-M12: Uses _cache_lock around the full check-and-set.
     """
     from langchain_openai import ChatOpenAI
@@ -488,7 +494,8 @@ def get_chat_model(config: dict, role: str = "imperator") -> Any:
         llm_config = config.get("llm", {})
 
     api_key = get_api_key(llm_config)
-    cache_key = f"{role}:{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256((api_key or 'none').encode()).hexdigest()[:16]}"
+    stream_suffix = ":stream" if streaming else ""
+    cache_key = f"{role}:{llm_config.get('base_url')}:{llm_config.get('model')}:{hashlib.sha256((api_key or 'none').encode()).hexdigest()[:16]}{stream_suffix}"
 
     with _cache_lock:
         if cache_key not in _llm_cache:
@@ -501,6 +508,7 @@ def get_chat_model(config: dict, role: str = "imperator") -> Any:
                 "model": llm_config.get("model", "gpt-4o-mini"),
                 "api_key": api_key or "not-needed",
                 "timeout": get_tuning(config, "llm_timeout_seconds", 1800),
+                "streaming": streaming,
             }
             _llm_cache[cache_key] = ChatOpenAI(**kwargs)
         return _llm_cache[cache_key]
@@ -545,3 +553,70 @@ def get_embeddings_model(config: dict, config_key: str = "embeddings") -> Any:
                 kwargs["dimensions"] = int(dims)
             _embeddings_cache[cache_key] = OpenAIEmbeddings(**kwargs)
         return _embeddings_cache[cache_key]
+
+
+# ------------------------------------------------------------------
+# CEA Configuration Validation (REQ-CEA-A05)
+# ------------------------------------------------------------------
+
+def validate_cea_config(config: dict) -> None:
+    """Validate CEA configuration parameters at startup (REQ-CEA-A05).
+
+    Raises RuntimeError if any parameter is invalid. Called from app startup.
+
+    Configuration classification (REQ-CEA-A04):
+    - Hot-reloadable: ranking weights, exploration rate, prompt templates,
+      trustworthiness weights, CEAc iteration/token limits
+    - Startup-only: retrieval_scope, rejection_rules, expiration_cleanup_interval,
+      Mem0 connection config
+    """
+    cea = config.get("cea", {})
+
+    # AE-side (startup-only)
+    scope = cea.get("retrieval_scope", "conversation")
+    if scope not in ("conversation", "user", "global"):
+        raise RuntimeError(
+            f"Invalid cea.retrieval_scope: '{scope}'. Must be 'conversation', 'user', or 'global'."
+        )
+
+    fact_limit = cea.get("pre_extraction_fact_limit", 20)
+    if not isinstance(fact_limit, int) or fact_limit < 0:
+        raise RuntimeError(f"Invalid cea.pre_extraction_fact_limit: {fact_limit}. Must be non-negative integer.")
+
+    cleanup = cea.get("expiration_cleanup_interval", 3600)
+    if not isinstance(cleanup, (int, float)) or cleanup < 0:
+        raise RuntimeError(f"Invalid cea.expiration_cleanup_interval: {cleanup}. Must be non-negative number.")
+
+    # TE-side (hot-reloadable, but validated at startup too)
+    ranking = cea.get("ranking", {})
+
+    exploration_rate = ranking.get("exploration_rate", 0.1)
+    if not isinstance(exploration_rate, (int, float)) or not 0.0 <= exploration_rate <= 1.0:
+        raise RuntimeError(f"Invalid cea.ranking.exploration_rate: {exploration_rate}. Must be 0.0-1.0.")
+
+    crossover = ranking.get("usefulness_crossover_events", 10)
+    if not isinstance(crossover, (int, float)) or crossover <= 0:
+        raise RuntimeError(f"Invalid cea.ranking.usefulness_crossover_events: {crossover}. Must be positive.")
+
+    trust_min = ranking.get("trustworthiness_min_threshold", 0.1)
+    if not isinstance(trust_min, (int, float)) or not 0.0 <= trust_min <= 1.0:
+        raise RuntimeError(f"Invalid cea.ranking.trustworthiness_min_threshold: {trust_min}. Must be 0.0-1.0.")
+
+    ceac = cea.get("ceac", {})
+    max_iter = ceac.get("max_iterations", 3)
+    if not isinstance(max_iter, int) or max_iter < 1:
+        raise RuntimeError(f"Invalid cea.ceac.max_iterations: {max_iter}. Must be positive integer.")
+
+    max_mem = ceac.get("max_memories", 50)
+    if not isinstance(max_mem, int) or max_mem < 1:
+        raise RuntimeError(f"Invalid cea.ceac.max_memories: {max_mem}. Must be positive integer.")
+
+    max_budget = ceac.get("max_token_budget", 8000)
+    if not isinstance(max_budget, int) or max_budget < 100:
+        raise RuntimeError(f"Invalid cea.ceac.max_token_budget: {max_budget}. Must be >= 100.")
+
+    # Validate source_type_weights keys
+    weights = cea.get("source_type_weights", {})
+    for key, val in weights.items():
+        if not isinstance(val, (int, float)) or not 0.0 <= val <= 1.0:
+            raise RuntimeError(f"Invalid cea.source_type_weights.{key}: {val}. Must be 0.0-1.0.")

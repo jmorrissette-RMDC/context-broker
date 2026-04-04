@@ -693,19 +693,17 @@ def ke_route_after_wait(state: KnowledgeEnrichedRetrievalState) -> str:
 
 
 def ke_route_after_load_messages(state: KnowledgeEnrichedRetrievalState) -> str:
-    """Route: check if build type needs semantic/KG retrieval."""
-    build_type_config = state.get("build_type_config", {})
-    needs_semantic = build_type_config.get("semantic_retrieval_pct", 0) > 0
-    needs_kg = build_type_config.get("knowledge_graph_pct", 0) > 0
+    """Route: skip server-side semantic/KG injection (CEA: enrichment is client-side via CEAc).
 
-    if needs_semantic:
-        return "ke_inject_semantic_retrieval"
-    if needs_kg:
-        return "ke_inject_knowledge_graph"
+    The deprecated knowledge_graph_pct and semantic_retrieval_pct config params
+    are ignored. All enrichment now happens in the CEAc subgraph.
+    """
     return "ke_assemble_context"
 
 
 def ke_route_after_semantic(state: KnowledgeEnrichedRetrievalState) -> str:
+    # CEA: This path is no longer reached since ke_route_after_load_messages
+    # always routes to ke_assemble_context. Kept for graph compilation.
     build_type_config = state.get("build_type_config", {})
     needs_kg = build_type_config.get("knowledge_graph_pct", 0) > 0
     if needs_kg:

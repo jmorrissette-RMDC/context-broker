@@ -32,7 +32,8 @@ def register() -> dict:
     # Flow builders
     from context_broker_ae.message_pipeline import build_message_pipeline
     from context_broker_ae.embed_pipeline import build_embed_pipeline
-    from context_broker_ae.memory_extraction import build_memory_extraction
+    # CEA: Old per-message memory_extraction flow deregistered.
+    # clean_for_compaction() still used from memory_extraction.py as a utility.
     from context_broker_ae.search_flow import (
         build_conversation_search_flow,
         build_message_search_flow,
@@ -49,15 +50,13 @@ def register() -> dict:
         build_search_context_windows_flow,
         build_search_logs_flow,
     )
-    from context_broker_ae.memory_search_flow import (
-        build_memory_search_flow,
-        build_memory_context_flow,
-    )
+    # CEA: memory_search_flow and memory_context_flow replaced by quality wrapper.
+    # memory_admin_flow: knowledge_delete removed (facts are CR-only).
     from context_broker_ae.memory_admin_flow import (
         build_mem_add_flow,
-        build_mem_delete_flow,
         build_mem_list_flow,
     )
+    from context_broker_ae.cea_extraction_flow import build_cea_extraction_flow
     from context_broker_ae.health_flow import build_health_check_flow
     from context_broker_ae.metrics_flow import build_metrics_flow
 
@@ -81,7 +80,7 @@ def register() -> dict:
         "flows": {
             "message_pipeline": build_message_pipeline,
             "embed_pipeline": build_embed_pipeline,
-            "memory_extraction": build_memory_extraction,
+            # "memory_extraction" deregistered — replaced by cea_extraction (CEAs).
             "conversation_search": build_conversation_search_flow,
             "message_search": build_message_search_flow,
             "create_conversation": build_create_conversation_flow,
@@ -94,11 +93,11 @@ def register() -> dict:
             "rename_conversation": build_rename_conversation_flow,
             "search_context_windows": build_search_context_windows_flow,
             "search_logs": build_search_logs_flow,
-            "memory_search": build_memory_search_flow,
-            "memory_context": build_memory_context_flow,
+            # CEA: memory_search and memory_context deregistered — replaced by quality wrapper.
+            # knowledge_delete deregistered — facts are CR-only (REQ-CEA-I03).
             "knowledge_add": build_mem_add_flow,
-            "knowledge_delete": build_mem_delete_flow,
             "knowledge_list": build_mem_list_flow,
+            "cea_extraction": build_cea_extraction_flow,
             "health_check": build_health_check_flow,
             "metrics": build_metrics_flow,
         },

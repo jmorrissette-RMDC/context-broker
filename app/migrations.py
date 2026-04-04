@@ -551,6 +551,67 @@ async def _migration_022(conn) -> None:
     _log.info("Migration 022 complete — alert_instructions table")
 
 
+async def _migration_023(conn) -> None:
+    """Migration 23: CEA quality metadata and feedback event tables.
+
+    The Context Engineering Architecture stores quality metadata for all
+    extracted facts (pgvector) and graph relations (Neo4j) in a central
+    Postgres table. An append-only feedback event log tracks usage,
+    conflicts, supersession, and other quality signals.
+
+    See PRD-context-engineering-architecture.md REQ-CEA-Q01, REQ-CEA-C05.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS cea_quality_metadata (
+            id                  SERIAL PRIMARY KEY,
+            target_type         TEXT NOT NULL,
+            target_id           TEXT NOT NULL,
+            durability          DOUBLE PRECISION NOT NULL,
+            confidence          DOUBLE PRECISION NOT NULL,
+            source_type         TEXT NOT NULL,
+            original_utterance  TEXT NOT NULL,
+            extraction_model    TEXT NOT NULL,
+            expires_at          TIMESTAMP WITH TIME ZONE,
+            extracted_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            user_id             TEXT NOT NULL,
+            conversation_id     UUID NOT NULL REFERENCES conversations(id),
+            UNIQUE (target_type, target_id)
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cea_metadata_user
+        ON cea_quality_metadata (user_id)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cea_metadata_conversation
+        ON cea_quality_metadata (conversation_id)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cea_metadata_expires
+        ON cea_quality_metadata (expires_at)
+        WHERE expires_at IS NOT NULL
+    """)
+
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS cea_feedback_events (
+            id              SERIAL PRIMARY KEY,
+            target_type     TEXT NOT NULL,
+            target_id       TEXT NOT NULL,
+            event_type      TEXT NOT NULL,
+            agent_id        TEXT NOT NULL,
+            context         JSONB,
+            created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            dedup_key       TEXT NOT NULL UNIQUE
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cea_events_target
+        ON cea_feedback_events (target_type, target_id)
+    """)
+
+    _log.info("Migration 023 complete — CEA quality metadata and feedback event tables")
+
+
 # Migration registry: version -> (description, migration_function)
 # Add new migrations here. Never modify existing entries.
 # IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
@@ -628,6 +689,11 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
         22,
         "Create alert_instructions table for alerter sidecar tools",
         _migration_022,
+    ),
+    (
+        23,
+        "CEA: quality metadata and feedback event tables",
+        _migration_023,
     ),
 ]
 

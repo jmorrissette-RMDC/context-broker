@@ -1,0 +1,825 @@
+2026-04-04T04:58:09.734437Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(reqwest::Error { kind: Status(404, None), url: "http://192.168.1.120:9222/" })
+OpenAI Codex v0.93.0 (research preview)
+--------
+workdir: C:\Users\j\projects\Joshua26
+model: gpt-5.2-codex
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: auto
+session id: 019d56db-0d9e-79c3-a62c-abd1c460f7a8
+--------
+user
+Review the Context Engineering Architecture (CEA) implementation plan for the Context Broker.
+
+Read these documents in order:
+1. state_4_development/context_broker_pmad/docs/PRD-context-engineering-architecture.md -- the PRD (Active v1.0)
+2. state_4_development/context_broker_pmad/docs/HLD-context-engineering-architecture.md -- the HLD (Active v1.0)
+3. .gemini-temp/cea-implementation-plan.md -- the implementation plan (scroll to "## Implementation Phase -- Context Engineering Architecture" near the bottom)
+
+Then read the key source files the plan references:
+4. state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py -- the Mem0 fork being reduced
+5. state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/quality_gate.py -- moving to wrapper
+6. state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py -- elementId shim
+7. state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py -- current extraction pipeline
+8. state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py -- compaction pipeline
+9. state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_admin_flow.py -- memory admin flows
+10. state_4_development/context_broker_pmad/app/routes/mcp.py -- MCP tool schemas
+11. state_4_development/context_broker_pmad/app/flows/tool_dispatch.py -- tool dispatch
+12. state_4_development/context_broker_pmad/postgres/init.sql -- database schema
+
+Review the implementation plan against the PRD, HLD, and actual code. Assess:
+
+1. **Completeness** -- Does every PRD requirement (S01-S10, C01-C06, Q01-Q03, I01-I08, A01-A06) have a corresponding implementation chunk? Is anything missing?
+
+2. **Correctness** -- Does the plan correctly identify the integration points in the code? Are the line numbers and function names accurate? Does the plan match what the code actually does?
+
+3. **Ordering** -- Is the chunk execution order correct? Are there dependency issues (e.g., a chunk that needs something from a later chunk)?
+
+4. **Risks** -- What are the biggest implementation risks? What could go wrong? Where are the tricky integration points?
+
+5. **Gaps** -- Are there code changes needed that the plan doesn't mention? Files that need updating but aren't listed? Edge cases in the existing code that the plan doesn't account for?
+
+6. **ERQ Compliance** -- Does the plan follow ERQ-001 (base), ERQ-002 (MAD/StateGraph), and ERQ-003 (pMAD) requirements? Are all new flows StateGraphs? Is config properly classified?
+
+Write your review. Be specific -- cite file paths, line numbers, and PRD requirement IDs. Flag blockers vs observations.
+
+Do NOT create, modify, or delete any files except the output file specified below. Do NOT run any commands that modify the filesystem.
+
+Write your review to state_4_development/context_broker_pmad/docs/designs/cli-implementation-review-codex.md using the write tool.
+mcp: malory starting
+mcp: malory failed: MCP client for `malory` failed to start: MCP startup failed: handshaking with MCP server failed: Send message error Transport [rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<reqwest::async_impl::client::Client>>] error: Client error: HTTP status client error (404 Not Found) for url (http://192.168.1.120:9222/), when send initialize request
+mcp startup: failed: malory
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Path state_4_development/context_broker_pmad/docs/PRD-context-engineering-architecture.md' in C:\Users\j\projects\Joshua26 succeeded in 274ms:
+# Context Engineering Architecture -- Product Requirements Document
+
+**Version:** 1.0 **Date:** 2026-04-03 **Status:** Active
+
+**Supersedes:** REQ-context-broker.md S3.5.4 (memory confidence scoring), S5.3 build type retrieval model (build types no longer include retrieval graphs -- retrieval moves to client-side CEAc), S5.3 retrieval configuration parameters (knowledge_graph_pct, semantic_retrieval_pct are deprecated). The four-dimension memory model and client-side enrichment replace the previous single-score confidence decay and server-side RAG injection.
+
+**Implements:** REQ-context-broker.md S5.8 (Conversation Memories). The CEAs compaction-time extraction is the implementation of the conversation memories concept described in S5.8.
+
+**Subject to:** ERQ-001 (base engineering requirements), ERQ-002 (MAD engineering requirements), ERQ-003 (pMAD requirements). REQ-context-broker.md S4.6 tool inventory requires amendment to reflect CEA tool changes.
+
+---
+
+## Purpose and Scope
+
+This document defines the requirements for the Context Engineering Architecture (CEA) -- the system responsible for compacting conversation context, extracting durable knowledge into vector and graph stores, and providing intelligent context enrichment for calling agents.
+
+The CEA replaces the current per-message extraction pipeline with a compaction-time extraction model and moves context enrichment from the server to the client. It operates as two components of a single architecture:
+
+- **CEAs (server-side):** A deterministic StateGraph flow within the Context Broker that runs at compaction time. Executes tiered summarization (tier 1 to tier 2 to tier 3), extracts durable facts and graph triples via Mem0, manages the memory store's integrity (deduplication, supersession, conflict detection), and sets immutable quality metadata on each extracted fact and graph relation.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Path state_4_development/context_broker_pmad/docs/HLD-context-engineering-architecture.md' in C:\Users\j\projects\Joshua26 succeeded in 224ms:
+# Context Engineering Architecture -- High-Level Design
+
+**Version:** 1.0 **Date:** 2026-04-03 **Status:** Active
+**Implements:** PRD-context-engineering-architecture.md v1.0
+
+---
+
+## 1. System Overview
+
+The Context Engineering Architecture (CEA) is the knowledge management subsystem of the Context Broker. It extracts durable knowledge from conversations during compaction, stores it in vector and graph form, and provides intelligent retrieval and ranking for calling agents.
+
+The CEA addresses a fundamental problem: the current per-message extraction pipeline extracts facts from small windows of raw messages without conversation context, producing decontextualized, redundant, low-quality knowledge. The CEA moves extraction to compaction time where the full conversation context is available, and introduces a feedback-driven quality model that learns from actual usage which knowledge is valuable.
+
+The architecture follows a write-side / read-side separation:
+
+- **CEAs (server-side)** runs at compaction time within the Context Broker. It is a deterministic StateGraph flow that produces structured extraction output, which a dispatch process writes to the stores.
+- **CEAc (client-side)** runs at query time within the calling agent (e.g., the Imperator). It is an agentic StateGraph subgraph that searches, ranks, assembles enriched context, and records feedback.
+
+Both components interact through a quality wrapper that sits around Mem0, adding quality metadata, feedback tracking, and enriched search results without modifying Mem0's internal pipeline.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Path .gemini-temp/cea-implementation-plan.md' in C:\Users\j\projects\Joshua26 succeeded in 291ms:
+# Context Broker â€” Compaction Redesign Implementation Plan
+
+**Date:** 2026-03-31
+**Scope:** Phases 2-5 from SESSION-HANDOFF.md
+
+---
+
+## Context
+
+The Context Broker completed Gate 2 with 377 issues found and fixed across 7 review rounds. 482 tests pass (299 mock + 183 live). Two issues were deferred to the compaction redesign: RB-27 (inline assembly on new window) and RB-32d (dedup logic rewrite). The compaction redesign is fully specified in `DESIGN-compaction-v2.md`, validated by 3 CLIs. This plan implements that design.
+
+**Reading list for context recovery (read in this order after compaction or new session):**
+1. Component memory reading list first â€” check `~/.claude/projects/C--Users-j-projects-Joshua26-state-4-development-context-broker-pmad/memory/MEMORY.md`
+2. This plan file â€” current state, what's done, what's next
+3. Open GitHub Issues: `gh issue list --repo rmdevpro/Joshua26 --label component:context-broker --state open`
+4. `docs/guides/sdlc/SDLC-00-required-reading.md` â€” master reading list (all SDLC guides, ERQs, WPRs)
+5. `state_4_development/context_broker_pmad/docs/designs/DESIGN-compaction-v2.md` â€” the design
+6. Gate 2 reviews at `state_4_development/context_broker_pmad/docs/Review/gate-2-review-2026-04-01-{claude,gemini,codex}.md`
+
+**CRITICAL: Follow the guides at all times.** Guides are at `C:\Users\j\projects\Joshua26\docs\guides`. The SDLC subfolder is critical. Read and follow `SDLC-06-debugging-guide.md` for every bug. Get output from all 3 CLIs. Never skip, dismiss, or defer findings.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$i=0; Get-Content state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py | ForEach-Object { $i++; "{0,5}: {1}" -f $i, $_ }' in C:\Users\j\projects\Joshua26 exited -1 in 0ms:
+`"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$i=0; Get-Content state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py | ForEach-Object { $i++; "{0,5}: {1}" -f $i, $_ }'` rejected: blocked by policy
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -TotalCount 200 state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py' in C:\Users\j\projects\Joshua26 succeeded in 223ms:
+import asyncio
+import concurrent
+import gc
+import hashlib
+import json
+import logging
+import os
+import uuid
+import warnings
+from copy import deepcopy
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Union
+
+from pydantic import ValidationError
+
+from mem0.configs.base import MemoryConfig, MemoryItem
+from mem0.configs.enums import MemoryType
+from mem0.configs.prompts import (
+    PROCEDURAL_MEMORY_SYSTEM_PROMPT,
+    get_update_memory_messages,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "def add|def search|quality_gate|expiration|apply_quality_gate|filter_expired" state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py' in C:\Users\j\projects\Joshua26 succeeded in 451ms:
+45:# Fork additions: quality gate, metadata side-channel, expiration
+46:from mem0.memory.quality_gate import (
+48:    apply_quality_gate,
+51:from mem0.memory.expiration import (
+52:    filter_expired_from_results,
+364:    def add(
+418:        expiration_config = getattr(self.config, "expiration", None) or {}
+419:        if expiration_config.get("enabled"):
+420:            maybe_run_cleanup(self.vector_store, self.db, expiration_config)
+592:                gate_config = getattr(self.config, "quality_gate", None) or {}
+594:                    new_retrieved_facts, _fact_metadata, _ = apply_quality_gate(
+685:        gate_config = getattr(self.config, "quality_gate", None) or {}
+721:                        # Configurable — disable via quality_gate.fuzzy_metadata_match: false
+838:        expiration_config = getattr(self.config, "expiration", None) or {}
+839:        if expiration_config.get("enabled"):
+840:            from mem0.memory.expiration import _is_expired
+948:        expiration_config = getattr(self.config, "expiration", None) or {}
+949:        if expiration_config.get("enabled"):
+950:            actual_memories = filter_expired_from_results(actual_memories)
+983:    def search(
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py | Select-Object -Skip 350 -First 120' in C:\Users\j\projects\Joshua26 succeeded in 275ms:
+            
+        Returns:
+            bool: True if should use agent memory extraction, False for user memory extraction
+        """
+        # Check if agent_id is present in metadata
+        has_agent_id = metadata.get("agent_id") is not None
+        
+        # Check if there are assistant role messages
+        has_assistant_messages = any(msg.get("role") == "assistant" for msg in messages)
+        
+        # Use agent memory extraction if agent_id is present and there are assistant messages
+        return has_agent_id and has_assistant_messages
+
+    def add(
+        self,
+        messages,
+        *,
+        user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        run_id: Optional[str] = None,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py | Select-Object -Skip 560 -First 120' in C:\Users\j\projects\Joshua26 succeeded in 269ms:
+                    extracted_json = extract_json(response)
+                    raw_facts = json.loads(extracted_json, strict=False)["facts"]
+
+                # Extract metadata into side channel before normalization.
+                # IMPORTANT: normalize_facts can drop items (invalid dicts,
+                # empty strings), which would misalign the metadata array.
+                # We extract metadata first, then normalize, then rebuild
+                # the metadata array to match only surviving facts.
+                raw_facts, raw_metadata = extract_metadata_from_facts(raw_facts)
+                normalized = normalize_facts(raw_facts)
+
+                # Rebuild aligned metadata: normalize_facts preserves order
+                # of surviving items but drops some. Match by building a
+                # textâ†’metadata map from pre-normalization, then look up
+                # each normalized fact. This handles drops correctly.
+                _pre_norm_text_to_meta = {}
+                for i, item in enumerate(raw_facts):
+                    text = item
+                    if isinstance(item, dict):
+                        text = item.get("fact") or item.get("text") or ""
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py | Select-Object -Skip 660 -First 90' in C:\Users\j\projects\Joshua26 succeeded in 271ms:
+                    response_format={"type": "json_object"},
+                )
+            except Exception as e:
+                logger.error(f"Error in new memory actions response: {e}")
+                response = ""
+
+            try:
+                if not response or not response.strip():
+                    logger.warning("Empty response from LLM, no memories to extract")
+                    new_memories_with_actions = {}
+                else:
+                    response = remove_code_blocks(response)
+                    new_memories_with_actions = json.loads(response, strict=False)
+            except Exception as e:
+                logger.error(f"Invalid JSON response: {e}")
+                new_memories_with_actions = {}
+        else:
+            new_memories_with_actions = {}
+
+        # --- FORK: Quality gate checkpoint 2 (post-update-decision) ---
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py | Select-Object -Skip 920 -First 120' in C:\Users\j\projects\Joshua26 succeeded in 281ms:
+            )
+
+            all_memories_result = future_memories.result()
+            graph_entities_result = future_graph_entities.result() if future_graph_entities else None
+
+        if self.enable_graph:
+            return {"results": all_memories_result, "relations": graph_entities_result}
+
+        return {"results": all_memories_result}
+
+    def _get_all_from_vector_store(self, filters, limit):
+        memories_result = self.vector_store.list(filters=filters, limit=limit)
+
+        # Handle different vector store return formats by inspecting first element
+        if isinstance(memories_result, (tuple, list)) and len(memories_result) > 0:
+            first_element = memories_result[0]
+
+            # If first element is a container, unwrap one level
+            if isinstance(first_element, (list, tuple)):
+                actual_memories = first_element
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py | Select-Object -Skip 1160 -First 80' in C:\Users\j\projects\Joshua26 succeeded in 305ms:
+        """
+        if not isinstance(filters, dict):
+            return False
+            
+        for key, value in filters.items():
+            # Check for platform-style logical operators
+            if key in ["AND", "OR", "NOT"]:
+                return True
+            # Check for comparison operators (without $ prefix for universal compatibility)
+            if isinstance(value, dict):
+                for op in value.keys():
+                    if op in ["eq", "ne", "gt", "gte", "lt", "lte", "in", "nin", "contains", "icontains"]:
+                        return True
+            # Check for wildcard values
+            if value == "*":
+                return True
+        return False
+
+    def _search_vector_store(self, query, filters, limit, threshold: Optional[float] = None):
+        embeddings = self.embedding_model.embed(query, "search")
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -TotalCount 220 state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py' in C:\Users\j\projects\Joshua26 succeeded in 266ms:
+import logging
+
+from mem0.memory.utils import format_entities, sanitize_relationship_for_cypher
+
+try:
+    from langchain_neo4j import Neo4jGraph
+except ImportError:
+    raise ImportError("langchain_neo4j is not installed. Please install it using pip install langchain-neo4j")
+
+try:
+    from rank_bm25 import BM25Okapi
+except ImportError:
+    raise ImportError("rank_bm25 is not installed. Please install it using pip install rank-bm25")
+
+from mem0.graphs.tools import (
+    DELETE_MEMORY_STRUCT_TOOL_GRAPH,
+    DELETE_MEMORY_TOOL_GRAPH,
+    EXTRACT_ENTITIES_STRUCT_TOOL,
+    EXTRACT_ENTITIES_TOOL,
+    RELATIONS_STRUCT_TOOL,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "def search|bm25|reranked_results|search_results" state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py' in C:\Users\j\projects\Joshua26 succeeded in 202ms:
+11:    from rank_bm25 import BM25Okapi
+13:    raise ImportError("rank_bm25 is not installed. Please install it using pip install rank-bm25")
+96:    def search(self, query, filters, limit=100):
+119:        bm25 = BM25Okapi(search_outputs_sequence)
+122:        reranked_results = bm25.get_top_n(tokenized_query, search_outputs_sequence, n=5)
+124:        search_results = []
+125:        for item in reranked_results:
+126:            search_results.append({"source": item[0], "relationship": item[1], "destination": item[2]})
+128:        logger.info(f"Returned {len(search_results)} search results")
+130:        return search_results
+224:        search_results = self.llm.generate_response(
+238:            for tool_call in search_results["tool_calls"]:
+245:                f"Error in search tool: {e}, llm_provider={self.llm_provider}, search_results={search_results}"
+249:        logger.debug(f"Entity type map: {entity_type_map}\n search_results={search_results}")
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -TotalCount 220 state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/quality_gate.py' in C:\Users\j\projects\Joshua26 succeeded in 223ms:
+"""
+Quality gate for Mem0 memory extraction.
+
+Provides configurable rejection rules that filter extracted facts before they
+reach the vector store. Two checkpoints:
+  1. Post-extraction: after LLM extracts facts, before normalize_facts
+  2. Post-update-decision: after update LLM returns ADD/UPDATE, before write
+
+DESIGN NOTE (side-channel approach):
+  We chose NOT to modify Mem0's core pipeline (normalize_facts, update prompt,
+  _create_memory, _update_memory). The upstream pipeline normalizes facts to
+  plain strings and the update LLM expects plain strings â€” modifying this
+  would cascade through the entire extraction/dedup flow and risk breaking
+  Mem0's carefully tested LLM interaction patterns.
+
+  Instead, metadata (expires_at, custom fields) travels in a parallel array
+  indexed by position. The core pipeline sees plain strings as before.
+  Metadata is merged into payloads only at the final write step
+  (_create_memory / _update_memory), keeping the fork's diff minimal and
+  the upstream pipeline untouched.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "_skip_graph|_clean_for_extraction|extract" state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py' in C:\Users\j\projects\Joshua26 succeeded in 202ms:
+7:  acquire_lock -> fetch_unextracted -> build_extraction_text
+8:  -> run_mem0_extraction -> mark_extracted -> release_lock
+10:Triggered by ARQ worker consuming from memory_extraction_jobs queue.
+25:_log = logging.getLogger("context_broker.flows.memory_extraction")
+61:    """State for the memory extraction pipeline."""
+70:    extraction_text: str
+72:    fully_extracted_ids: list[str]
+78:    extracted_count: int
+82:async def acquire_extraction_lock(state: MemoryExtractionState) -> dict:
+83:    """Acquire a Postgres advisory lock for extraction of this conversation."""
+87:        "memory_extraction.acquire_lock ENTER conv=%s",
+98:            "Memory extraction: lock not acquired for conv=%s — skipping",
+110:async def fetch_unextracted_messages(state: MemoryExtractionState) -> dict:
+111:    """Fetch messages that have not yet been memory-extracted."""
+119:          AND (memory_extracted IS NOT TRUE)
+127:        return {"messages": [], "extracted_count": 0}
+140:# Patterns for stripping noise from extraction text
+153:def _clean_for_extraction(text: str) -> str:
+157:    knowledge extraction. Removes noise that confuses the LLM and
+182:    Unlike _clean_for_extraction which replaces paths with [path], this function
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py | Select-Object -Skip 130 -First 120' in C:\Users\j\projects\Joshua26 succeeded in 262ms:
+    window = await pool.fetchrow(
+        "SELECT participant_id FROM context_windows WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT 1",
+        uuid.UUID(state["conversation_id"]),
+    )
+    user_id = window["participant_id"] if window else "default"
+
+    return {"messages": [dict(r) for r in rows], "user_id": user_id}
+
+
+# Patterns for stripping noise from extraction text
+_CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```", re.MULTILINE)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]{10,}`")
+_FILE_PATH_RE = re.compile(
+    r"(?:[A-Z]:\\|/(?:mnt|home|usr|storage|app|tmp)/)[\w/\\._-]{10,}"
+)
+_URL_RE = re.compile(r"https?://\S{20,}")
+_MARKDOWN_HEADER_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+_MARKDOWN_HR_RE = re.compile(r"^\*{3,}$|^-{3,}$|^_{3,}$", re.MULTILINE)
+_MARKDOWN_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
+_MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py | Select-Object -Skip 300 -First 120' in C:\Users\j\projects\Joshua26 succeeded in 267ms:
+    extraction_text = "\n".join(selected_lines)
+    extraction_text = _redact_secrets(extraction_text)
+
+    return {
+        "extraction_text": extraction_text,
+        "selected_message_ids": selected_ids,
+        "fully_extracted_ids": fully_extracted_ids,
+    }
+
+
+async def run_mem0_extraction(state: MemoryExtractionState) -> dict:
+    """Call Mem0 to extract knowledge from the conversation text.
+
+    Mem0 operations are synchronous â€” run in thread pool executor.
+    """
+    config = state["config"]
+
+    try:
+        from context_broker_ae.memory.mem0_client import get_mem0_client
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "compact_tier1|extraction|create_task|clean_for_compaction|tier" state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py' in C:\Users\j\projects\Joshua26 succeeded in 192ms:
+2:Standard-tiered build type (ARCH-18).
+4:Three-tier progressive compression context assembly with deadband compaction:
+10:  1. Tier 1 fills from floor (20%) toward ceiling (85% - tier2 - tier3).
+11:  2. When tier 1 hits ceiling: oldest content above floor summarized to a 2% chunk,
+12:     appended to tier 2. Tier 1 resets to floor.
+13:  3. When tier 2 reaches max_chunks (6): full compaction consolidates 4 oldest
+14:     tier 2 chunks into tier 3, keeping 2 newest + new chunk = 3 chunks.
+21:F-06: Reads its own LLM config from config["build_types"]["standard-tiered"]["llm"],
+44:from context_broker_ae.build_types.tier_scaling import (
+46:    calculate_tier1_ceiling,
+48:from context_broker_ae.memory_extraction import clean_for_compaction
+52:_log = logging.getLogger("context_broker.flows.build_types.standard_tiered")
+73:# _deadband_config and _tier1_ceiling are imported from tier_scaling.py
+74:# as extract_deadband_config and calculate_tier1_ceiling
+83:    """State for the standard-tiered assembly pipeline."""
+95:    tier1_messages: list[dict]
+98:    tier2_summaries: list[str]
+99:    tier3_summary: Optional[str]
+100:    tier2_at_max: bool
+128:        "standard_tiered.acquire_lock ENTER window=%s",
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py | Select-Object -Skip 500 -First 90' in C:\Users\j\projects\Joshua26 succeeded in 266ms:
+
+        # R5-M14: Catch UniqueViolationError in case a concurrent assembler
+        # already inserted a summary for this range between our pre-check
+        # and this INSERT.
+        try:
+            await pool.execute(
+                """
+                INSERT INTO conversation_summaries
+                    (conversation_id, context_window_id, summary_text, tier,
+                     summarizes_from_seq, summarizes_to_seq, message_count,
+                     original_token_count, summary_token_count, summarized_by_model)
+                VALUES ($1, $2, $3, 2, $4, $5, $6, $7, $8, $9)
+                """,
+                uuid.UUID(state["conversation_id"]),
+                uuid.UUID(state["context_window_id"]),
+                summary_text,
+                chunk[0]["sequence_number"],
+                chunk[-1]["sequence_number"],
+                len(chunk),
+                chunk_tokens,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -TotalCount 260 state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_admin_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 238ms:
+"""
+Memory Admin Flows â€” LangGraph StateGraph flows for knowledge_add, knowledge_list, knowledge_delete.
+
+M-18: These flows wrap Mem0 calls in StateGraphs to comply with the
+LangGraph mandate. Previously these operations were called directly
+via run_in_executor in tool_dispatch.
+"""
+
+import asyncio
+import logging
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+_log = logging.getLogger("context_broker.flows.memory_admin")
+
+
+# ============================================================
+# knowledge_add flow
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "knowledge_|mem_" state_4_development/context_broker_pmad/app/routes/mcp.py' in C:\Users\j\projects\Joshua26 succeeded in 215ms:
+373:    Management tools (conv_*, knowledge_*, imperator_chat, metrics_get) follow.
+814:            "name": "knowledge_search",
+827:            "name": "knowledge_get_context",
+840:            "name": "knowledge_add",
+852:            "name": "knowledge_list",
+864:            "name": "knowledge_delete",
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/app/routes/mcp.py | Select-Object -Skip 780 -First 120' in C:\Users\j\projects\Joshua26 succeeded in 277ms:
+        {
+            "name": "search_logs",
+            "description": "Semantic search over system logs using vector similarity. Requires log_embeddings to be configured.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language search query",
+                    },
+                    "container_name": {
+                        "type": "string",
+                        "description": "Filter by container name (substring match)",
+                    },
+                    "level": {
+                        "type": "string",
+                        "enum": ["DEBUG", "INFO", "WARN", "WARNING", "ERROR"],
+                        "description": "Filter by log level",
+                    },
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "knowledge_|mem_" state_4_development/context_broker_pmad/app/flows/tool_dispatch.py' in C:\Users\j\projects\Joshua26 succeeded in 201ms:
+414:                "knowledge_graph_facts": [],
+688:    elif tool_name == "knowledge_search":
+710:    elif tool_name == "knowledge_get_context":
+762:    elif tool_name == "knowledge_add":
+765:        result = await _get_flow("knowledge_add").ainvoke(
+779:    elif tool_name == "knowledge_list":
+782:        result = await _get_flow("knowledge_list").ainvoke(
+796:    elif tool_name == "knowledge_delete":
+799:        result = await _get_flow("knowledge_delete").ainvoke(
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/app/flows/tool_dispatch.py | Select-Object -Skip 660 -First 160' in C:\Users\j\projects\Joshua26 succeeded in 302ms:
+            SELECT container_name, log_timestamp, message, data,
+                   1 - (embedding <=> $1::vector) AS similarity
+            FROM system_logs
+            WHERE {where}
+            ORDER BY embedding <=> $1::vector
+            LIMIT ${idx_s}
+            """,
+            *args_search,
+        )
+        entries = []
+        for row in rows:
+            data = row["data"] if isinstance(row["data"], dict) else {}
+            entries.append(
+                {
+                    "timestamp": (
+                        row["log_timestamp"].isoformat()
+                        if row["log_timestamp"]
+                        else None
+                    ),
+                    "container_name": row["container_name"],
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -TotalCount 240 state_4_development/context_broker_pmad/postgres/init.sql' in C:\Users\j\projects\Joshua26 succeeded in 245ms:
+-- Context Broker â€” PostgreSQL schema
+-- Loaded automatically by postgres entrypoint on first run.
+-- Requires: pgvector extension (pre-installed in pgvector/pgvector:pg16 image)
+
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- ============================================================
+-- Schema versioning
+-- Applied and checked at application startup.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TIMESTAMP DEFAULT NOW(),
+    description TEXT
+);
+
+INSERT INTO schema_migrations (version, description)
+VALUES (1, 'Initial schema')
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "Implementation Phase -- Context Engineering Architecture" .gemini-temp/cea-implementation-plan.md' in C:\Users\j\projects\Joshua26 exited 1 in 195ms:
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "Implementation Phase" .gemini-temp/cea-implementation-plan.md' in C:\Users\j\projects\Joshua26 succeeded in 216ms:
+540:## Implementation Phase — Context Engineering Architecture
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content .gemini-temp/cea-implementation-plan.md | Select-Object -Skip 520 -First 220' in C:\Users\j\projects\Joshua26 succeeded in 282ms:
+These are the settled architecture decisions from 14 rounds of 3-CLI research. Full rationale is in GitHub issue #454 comments.
+
+1. **Two-component architecture: CEAs + CEAc** â€” server-side deterministic flow + client-side agentic subgraph
+2. **CEAs is a flow, CEAc is an agent** â€” CEAs produces JSON, dispatch writes to stores. CEAc has a tool loop.
+3. **Four dimensions of memory quality** â€” usefulness (observed), durability (LLM prior, immutable), expiration (hard gate), trustworthiness (multiplier)
+4. **Ranking: score = relevance x trustworthiness x memory_quality** â€” memory_quality blends durability + usefulness
+5. **Facts are CR only** â€” immutable records, never updated, never deleted. All post-creation activity is feedback events.
+6. **Append-only feedback event log** â€” replaces mutable counters. 6 event types: used, discarded, contradicted, superseded, invalidated, conflicted. All proportional except expiration.
+7. **Quality wrapper around near-stock Mem0** â€” side-channel pattern is dead. Wrapper intercepts before add, after search. Fork reduced to elementId shim.
+8. **Graph via Mem0-first** â€” re-enable _skip_graph, no reinvention of graph layer. Graph metadata in Postgres, not Neo4j edges.
+9. **Client-side enrichment** â€” get_context returns tiers only. CEAc enriches via MCP tools. knowledge-enriched build type's server-side RAG is removed.
+10. **MCP tools: add, search, list, feedback** â€” knowledge_get_context, knowledge_update, knowledge_delete removed. knowledge_search returns both vector + graph results.
+11. **user_id = plain text string from message sender** â€” not conversation ownership, not context window participant
+12. **Configurable extraction prompt templates** â€” two templates (vector facts, graph triples) in config directory
+13. **Store-enriched single-pass extraction** â€” search existing facts before LLM call, inject as context, LLM labels NEW/DUPLICATE/SUPERSEDES/CONFLICTS
+14. **Parent REQ alignment deferred** â€” Part 7 of PRD lists all parent sections needing update. Full alignment pass after implementation.
+
+---
+
+## Implementation Phase â€” Context Engineering Architecture
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py | Select-Object -Skip 1140 -First 100' in C:\Users\j\projects\Joshua26 succeeded in 270ms:
+    for msg in all_messages:
+        msg_tokens = msg["token_count"] or max(1, len(msg.get("content") or "") // 4)
+        if tokens_used + msg_tokens <= remaining_budget:
+            recent.insert(0, dict(msg))
+            tokens_used += msg_tokens
+        else:
+            break
+
+    return {
+        "recent_messages": recent,
+        "total_tokens_used": summary_tokens + tokens_used,
+    }
+
+
+async def ret_assemble_context(state: StandardTieredRetrievalState) -> dict:
+    """Assemble the final context messages array from all tiers.
+
+    ARCH-03: Produces a structured messages array matching the OpenAI format.
+    ARCH-15: Summaries are inserted as system messages.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "elementId|relation_id|source_id|destination_id" state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py' in C:\Users\j\projects\Joshua26 succeeded in 214ms:
+318:                RETURN n.name AS source, elementId(n) AS source_id, type(r) AS relationship, elementId(r) AS relation_id, m.name AS destination, elementId(m) AS destination_id
+323:                RETURN m.name AS source, elementId(m) AS source_id, type(r) AS relationship, elementId(r) AS relation_id, n.name AS destination, elementId(n) AS destination_id
+325:            WITH distinct source, source_id, relationship, relation_id, destination, destination_id, similarity
+326:            RETURN source, source_id, relationship, relation_id, destination, destination_id, similarity
+480:                WHERE elementId(source) = $source_id
+508:                    "source_id": source_node_search_result[0]["elementId(source_candidate)"],
+529:                WHERE elementId(destination) = $destination_id
+557:                    "destination_id": destination_node_search_result[0]["elementId(destination_candidate)"],
+570:                WHERE elementId(source) = $source_id
+574:                WHERE elementId(destination) = $destination_id
+591:                    "source_id": source_node_search_result[0]["elementId(source_candidate)"],
+592:                    "destination_id": destination_node_search_result[0]["elementId(destination_candidate)"],
+688:            RETURN elementId(source_candidate)
+726:            RETURN elementId(destination_candidate)
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "clean_for_compaction" state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py' in C:\Users\j\projects\Joshua26 succeeded in 210ms:
+179:def clean_for_compaction(text: str) -> str:
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "MemDeleteState|knowledge_delete" state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_admin_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 194ms:
+2:Memory Admin Flows — LangGraph StateGraph flows for knowledge_add, knowledge_list, knowledge_delete.
+141:# knowledge_delete flow
+145:class MemDeleteState(TypedDict):
+146:    """State for the knowledge_delete flow."""
+156:async def delete_memory(state: MemDeleteState) -> dict:
+183:        _log.warning("knowledge_delete failed: %s", exc)
+188:    """Build and compile the knowledge_delete StateGraph."""
+189:    workflow = StateGraph(MemDeleteState)
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n \"At least one of 'user_id'\" state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py" in C:\Users\j\projects\Joshua26 succeeded in 201ms:
+237:            message="At least one of 'user_id', 'agent_id', or 'run_id' must be provided.",
+906:            raise ValueError("At least one of 'user_id', 'agent_id', or 'run_id' must be specified.")
+1032:            raise ValueError("At least one of 'user_id', 'agent_id', or 'run_id' must be specified.")
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "participant_id" state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py' in C:\Users\j\projects\Joshua26 succeeded in 187ms:
+129:    # Get user_id from conversation (use participant_id from first context window)
+132:        "SELECT participant_id FROM context_windows WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT 1",
+135:    user_id = window["participant_id"] if window else "default"
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "clean_for_compaction" state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py' in C:\Users\j\projects\Joshua26 succeeded in 198ms:
+48:from context_broker_ae.memory_extraction import clean_for_compaction
+417:        chunk_text = clean_for_compaction(chunk_text)
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+# CEA Implementation Plan Review (Codex)
+
+**Scope reviewed**: PRD v1.0, HLD v1.0, CEA implementation plan section (from \"Implementation Phase -- Context Engineering Architecture\"), and referenced code files.
+
+**Blockers**
+- REQ-CEA-I03 / REQ-CEA-C02 / REQ-CEA-S04: Plan makes "'`knowledge_search` user_id optional, but Mem0 `search()` hard-requires one of user_id/agent_id/run_id and throws otherwise. Wrapper must implement scoped/global search without calling Mem0 search with empty scope. Current Mem0 guard is still present. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py:906` `state_4_development/context_broker_pmad/app/routes/mcp.py:814` `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:688`
+- REQ-CEA-S10 / REQ-CEA-I08: Current extraction pipeline derives user_id from context_windows.participant_id, not message sender. Plan mentions user_id attribution only in prompt text, but does not list concrete code changes that guarantee sender attribution. If legacy per-message extraction remains enabled, it will violate S10/I08. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:129` `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:135`
+- REQ-CEA-S08 / REQ-CEA-I04: Plan mentions resolving relative temporal references to absolute UTC, but no implementation chunk specifies where this parsing happens or how the current UTC date is injected/used. Existing Mem0 fork normalization only handles ISO timestamps. This is a hard gate requirement. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/quality_gate.py:46`
+- REQ-CEA-A02 / REQ-CEA-A06: Plan does not include work items for verbose stage logging toggles or Prometheus metrics for extraction/feedback/search/enrichment. These are explicit engineering requirements. (No CEA instrumentation exists in the reviewed files.)
+
+**Completeness (requirements coverage gaps)**
+- REQ-CEA-S07: Durability calibration requirement (distribution bias, 70% > 0.7) is not addressed in plan (no calibration checks, tests, or prompt guidance beyond schema). 
+- REQ-CEA-S08 / I04: Temporal resolution implementation missing (see blocker). 
+- REQ-CEA-S09: Original utterance is listed in schema, but plan does not address how it is populated for graph relations (not just vector facts). 
+- REQ-CEA-I02: Plan does not call out removal of deprecated retrieval params (`knowledge_graph_pct`, `semantic_retrieval_pct`) from config/build type models. 
+- REQ-CEA-I05: Extraction model metadata is in schema, but plan does not specify where it is set (dispatch needs to inject model id). 
+- REQ-CEA-A05: Config validation at startup is not specified (no concrete validation steps or schema checks). 
+
+**Correctness (plan vs code)**
+- The plan’s line references are off in several places (non-blocking but confusing for implementers). Example: `_skip_graph` is set in `run_mem0_extraction`, but at ~line 350, not 311. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:350`
+- The plan calls for adding “identifier preservation” to cleaning; this is already implemented via `clean_for_compaction()` and already used in compaction. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:179` `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py:417`
+- Graph elementId gap: Cypher queries already return elementId fields, but `search()` drops them during BM25 reranking and returns only source/relationship/destination. Fix must carry IDs through reranking, not just query. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:96` `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:126` `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:318`
+- Tool schemas still require user_id and expose knowledge_get_context/knowledge_delete. Plan correctly identifies updates, but these are not reflected in current code and must be updated in tandem with dispatch + Pydantic models. `state_4_development/context_broker_pmad/app/routes/mcp.py:814` `state_4_development/context_broker_pmad/app/routes/mcp.py:827` `state_4_development/context_broker_pmad/app/routes/mcp.py:864`
+
+**Ordering / dependency issues**
+- Chunk 4 (CEAs flow) depends on prompt templates, but prompt template creation is deferred to Chunk 9. Templates should be created/registered before the CEAs flow is exercised. 
+- Chunk 6 (config loading/classification) is listed after MCP and CEAs, but those components depend on config values (retrieval scope, prompt paths, ranking weights). Consider moving config earlier or at least adding temporary defaults. 
+
+**Risks (highest first)**
+- Graph relation identifiers: If elementId fields are not preserved through reranking, the wrapper cannot join metadata for graph results, breaking REQ-CEA-S02/Q01/Q03. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:119` `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:126`
+- Global or cross-user search: Wrapper must support conversation/user/global scopes without violating Mem0 search guardrails. Without a clear strategy (separate vector/graph queries or bypassing Mem0 search), REQ-CEA-S04/I03 will fail. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py:906`
+- Legacy per-message extraction still active: If not disabled, it will keep writing memories with incorrect user_id attribution and without CEA metadata, causing mixed-quality store contents. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:129`
+- Idempotency: Plan mentions dedup keys but does not specify how compaction events are deduped when LLM labels differ (NEW vs DUPLICATE). Need a deterministic dedup key in wrapper and enforcement in DB to meet REQ-CEA-A03.
+
+**Gaps (code updates not mentioned in plan)**
+- Disable or remove legacy memory_extraction worker/queue and any scheduling so extraction is exclusively compaction-time per REQ-CEA-S01. (Current pipeline still exists and is invoked in standard_tiered.) `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py:547`
+- Update Pydantic input models used in tool dispatch (e.g., MemSearchInput) to make user_id optional and add knowledge_feedback schema. Dispatch currently assumes user_id required. `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:688`
+- Add CEA tables to DB bootstrap/migrations. `postgres/init.sql` has no CEA tables. `state_4_development/context_broker_pmad/postgres/init.sql:1`
+- Add metrics and verbose logging toggles for CEAs/CEAc stages (REQ-CEA-A02/A06).
+
+**ERQ Compliance**
+- ERQ-001: Tool input schemas must validate all new fields. Plan mentions schema changes but does not call out corresponding Pydantic model updates or validation failures. 
+- ERQ-002: Plan correctly makes CEAs/CEAc StateGraphs. Ensure knowledge_feedback and wrapper interactions are exposed via StateGraph flows, not direct DB calls, to keep tool handling consistent with existing flows. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_admin_flow.py:189`
+- ERQ-003: Config classification (hot-reloadable vs startup-only) is noted in plan, but no explicit implementation steps or documentation updates are listed. This should be concrete in `app/config.py` and documented alongside new params.
+
+**Summary**
+The plan captures the major architecture changes but misses several mandatory requirements (temporal resolution, observability/metrics, config validation/classification specifics) and has a few correctness/ordering issues. The biggest blockers are global search handling against Mem0’s scope guardrails and sender-based user_id attribution. Address those early to avoid violating S04/S10/I08 and to prevent incorrect memory store contents.
+'"'@ | Set-Content -Path state_4_development/context_broker_pmad/docs/designs/cli-implementation-review-codex.md" in C:\Users\j\projects\Joshua26 exited -1 in 0ms:
+`"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+# CEA Implementation Plan Review (Codex)
+
+**Scope reviewed**: PRD v1.0, HLD v1.0, CEA implementation plan section (from \"Implementation Phase -- Context Engineering Architecture\"), and referenced code files.
+
+**Blockers**
+- REQ-CEA-I03 / REQ-CEA-C02 / REQ-CEA-S04: Plan makes "'`knowledge_search` user_id optional, but Mem0 `search()` hard-requires one of user_id/agent_id/run_id and throws otherwise. Wrapper must implement scoped/global search without calling Mem0 search with empty scope. Current Mem0 guard is still present. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py:906` `state_4_development/context_broker_pmad/app/routes/mcp.py:814` `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:688`
+- REQ-CEA-S10 / REQ-CEA-I08: Current extraction pipeline derives user_id from context_windows.participant_id, not message sender. Plan mentions user_id attribution only in prompt text, but does not list concrete code changes that guarantee sender attribution. If legacy per-message extraction remains enabled, it will violate S10/I08. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:129` `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:135`
+- REQ-CEA-S08 / REQ-CEA-I04: Plan mentions resolving relative temporal references to absolute UTC, but no implementation chunk specifies where this parsing happens or how the current UTC date is injected/used. Existing Mem0 fork normalization only handles ISO timestamps. This is a hard gate requirement. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/quality_gate.py:46`
+- REQ-CEA-A02 / REQ-CEA-A06: Plan does not include work items for verbose stage logging toggles or Prometheus metrics for extraction/feedback/search/enrichment. These are explicit engineering requirements. (No CEA instrumentation exists in the reviewed files.)
+
+**Completeness (requirements coverage gaps)**
+- REQ-CEA-S07: Durability calibration requirement (distribution bias, 70% > 0.7) is not addressed in plan (no calibration checks, tests, or prompt guidance beyond schema). 
+- REQ-CEA-S08 / I04: Temporal resolution implementation missing (see blocker). 
+- REQ-CEA-S09: Original utterance is listed in schema, but plan does not address how it is populated for graph relations (not just vector facts). 
+- REQ-CEA-I02: Plan does not call out removal of deprecated retrieval params (`knowledge_graph_pct`, `semantic_retrieval_pct`) from config/build type models. 
+- REQ-CEA-I05: Extraction model metadata is in schema, but plan does not specify where it is set (dispatch needs to inject model id). 
+- REQ-CEA-A05: Config validation at startup is not specified (no concrete validation steps or schema checks). 
+
+**Correctness (plan vs code)**
+codex
+I couldn’t write `state_4_development/context_broker_pmad/docs/designs/cli-implementation-review-codex.md` because filesystem writes are blocked in this environment. Below is the full review content so you can paste it into that file.
+
+```markdown
+# CEA Implementation Plan Review (Codex)
+
+**Scope reviewed**: PRD v1.0, HLD v1.0, CEA implementation plan section (from "Implementation Phase -- Context Engineering Architecture"), and referenced code files.
+
+**Blockers**
+- REQ-CEA-I03 / REQ-CEA-C02 / REQ-CEA-S04: Plan makes `knowledge_search` user_id optional, but Mem0 `search()` hard-requires one of user_id/agent_id/run_id and throws otherwise. Wrapper must implement scoped/global search without calling Mem0 search with empty scope. Current Mem0 guard is still present. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py:906` `state_4_development/context_broker_pmad/app/routes/mcp.py:814` `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:688`
+- REQ-CEA-S10 / REQ-CEA-I08: Current extraction pipeline derives user_id from context_windows.participant_id, not message sender. Plan mentions user_id attribution only in prompt text, but does not list concrete code changes that guarantee sender attribution. If legacy per-message extraction remains enabled, it will violate S10/I08. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:129` `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:135`
+- REQ-CEA-S08 / REQ-CEA-I04: Plan mentions resolving relative temporal references to absolute UTC, but no implementation chunk specifies where this parsing happens or how the current UTC date is injected/used. Existing Mem0 fork normalization only handles ISO timestamps. This is a hard gate requirement. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/quality_gate.py:46`
+- REQ-CEA-A02 / REQ-CEA-A06: Plan does not include work items for verbose stage logging toggles or Prometheus metrics for extraction/feedback/search/enrichment. These are explicit engineering requirements. (No CEA instrumentation exists in the reviewed files.)
+
+**Completeness (requirements coverage gaps)**
+- REQ-CEA-S07: Durability calibration requirement (distribution bias, 70% > 0.7) is not addressed in plan (no calibration checks, tests, or prompt guidance beyond schema).
+- REQ-CEA-S08 / I04: Temporal resolution implementation missing (see blocker).
+- REQ-CEA-S09: Original utterance is listed in schema, but plan does not address how it is populated for graph relations (not just vector facts).
+- REQ-CEA-I02: Plan does not call out removal of deprecated retrieval params (`knowledge_graph_pct`, `semantic_retrieval_pct`) from config/build type models.
+- REQ-CEA-I05: Extraction model metadata is in schema, but plan does not specify where it is set (dispatch needs to inject model id).
+- REQ-CEA-A05: Config validation at startup is not specified (no concrete validation steps or schema checks).
+
+**Correctness (plan vs code)**
+- The plan's line references are off in several places (non-blocking but confusing for implementers). Example: `_skip_graph` is set in `run_mem0_extraction`, but at ~line 350, not 311. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:350`
+- The plan calls for adding "identifier preservation" to cleaning; this is already implemented via `clean_for_compaction()` and already used in compaction. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:179` `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py:417`
+- Graph elementId gap: Cypher queries already return elementId fields, but `search()` drops them during BM25 reranking and returns only source/relationship/destination. Fix must carry IDs through reranking, not just query. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:96` `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:126` `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:318`
+- Tool schemas still require user_id and expose knowledge_get_context/knowledge_delete. Plan correctly identifies updates, but these are not reflected in current code and must be updated in tandem with dispatch + Pydantic models. `state_4_development/context_broker_pmad/app/routes/mcp.py:814` `state_4_development/context_broker_pmad/app/routes/mcp.py:827` `state_4_development/context_broker_pmad/app/routes/mcp.py:864`
+
+**Ordering / dependency issues**
+- Chunk 4 (CEAs flow) depends on prompt templates, but prompt template creation is deferred to Chunk 9. Templates should be created/registered before the CEAs flow is exercised.
+- Chunk 6 (config loading/classification) is listed after MCP and CEAs, but those components depend on config values (retrieval scope, prompt paths, ranking weights). Consider moving config earlier or at least adding temporary defaults.
+
+**Risks (highest first)**
+- Graph relation identifiers: If elementId fields are not preserved through reranking, the wrapper cannot join metadata for graph results, breaking REQ-CEA-S02/Q01/Q03. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:119` `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:126`
+- Global or cross-user search: Wrapper must support conversation/user/global scopes without violating Mem0 search guardrails. Without a clear strategy (separate vector/graph queries or bypassing Mem0 search), REQ-CEA-S04/I03 will fail. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py:906`
+- Legacy per-message extraction still active: If not disabled, it will keep writing memories with incorrect user_id attribution and without CEA metadata, causing mixed-quality store contents. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:129`
+- Idempotency: Plan mentions dedup keys but does not specify how compaction events are deduped when LLM labels differ (NEW vs DUPLICATE). Need a deterministic dedup key in wrapper and enforcement in DB to meet REQ-CEA-A03.
+
+**Gaps (code updates not mentioned in plan)**
+- Disable or remove legacy memory_extraction worker/queue and any scheduling so extraction is exclusively compaction-time per REQ-CEA-S01. (Current pipeline still exists and is invoked in standard_tiered.) `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py:547`
+- Update Pydantic input models used in tool dispatch (e.g., MemSearchInput) to make user_id optional and add knowledge_feedback schema. Dispatch currently assumes user_id required. `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:688`
+- Add CEA tables to DB bootstrap/migrations. `postgres/init.sql` has no CEA tables. `state_4_development/context_broker_pmad/postgres/init.sql:1`
+- Add metrics and verbose logging toggles for CEAs/CEAc stages (REQ-CEA-A02/A06).
+
+**ERQ Compliance**
+- ERQ-001: Tool input schemas must validate all new fields. Plan mentions schema changes but does not call out corresponding Pydantic model updates or validation failures.
+- ERQ-002: Plan correctly makes CEAs/CEAc StateGraphs. Ensure knowledge_feedback and wrapper interactions are exposed via StateGraph flows, not direct DB calls, to keep tool handling consistent with existing flows. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_admin_flow.py:189`
+- ERQ-003: Config classification (hot-reloadable vs startup-only) is noted in plan, but no explicit implementation steps or documentation updates are listed. This should be concrete in `app/config.py` and documented alongside new params.
+
+**Summary**
+The plan captures the major architecture changes but misses several mandatory requirements (temporal resolution, observability/metrics, config validation/classification specifics) and has a few correctness/ordering issues. The biggest blockers are global search handling against Mem0's scope guardrails and sender-based user_id attribution. Address those early to avoid violating S04/S10/I08 and to prevent incorrect memory store contents.
+```
+
+If you want, I can try again using a different file-writing method.
+tokens used
+138,764
+I couldn’t write `state_4_development/context_broker_pmad/docs/designs/cli-implementation-review-codex.md` because filesystem writes are blocked in this environment. Below is the full review content so you can paste it into that file.
+
+```markdown
+# CEA Implementation Plan Review (Codex)
+
+**Scope reviewed**: PRD v1.0, HLD v1.0, CEA implementation plan section (from "Implementation Phase -- Context Engineering Architecture"), and referenced code files.
+
+**Blockers**
+- REQ-CEA-I03 / REQ-CEA-C02 / REQ-CEA-S04: Plan makes `knowledge_search` user_id optional, but Mem0 `search()` hard-requires one of user_id/agent_id/run_id and throws otherwise. Wrapper must implement scoped/global search without calling Mem0 search with empty scope. Current Mem0 guard is still present. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py:906` `state_4_development/context_broker_pmad/app/routes/mcp.py:814` `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:688`
+- REQ-CEA-S10 / REQ-CEA-I08: Current extraction pipeline derives user_id from context_windows.participant_id, not message sender. Plan mentions user_id attribution only in prompt text, but does not list concrete code changes that guarantee sender attribution. If legacy per-message extraction remains enabled, it will violate S10/I08. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:129` `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:135`
+- REQ-CEA-S08 / REQ-CEA-I04: Plan mentions resolving relative temporal references to absolute UTC, but no implementation chunk specifies where this parsing happens or how the current UTC date is injected/used. Existing Mem0 fork normalization only handles ISO timestamps. This is a hard gate requirement. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/quality_gate.py:46`
+- REQ-CEA-A02 / REQ-CEA-A06: Plan does not include work items for verbose stage logging toggles or Prometheus metrics for extraction/feedback/search/enrichment. These are explicit engineering requirements. (No CEA instrumentation exists in the reviewed files.)
+
+**Completeness (requirements coverage gaps)**
+- REQ-CEA-S07: Durability calibration requirement (distribution bias, 70% > 0.7) is not addressed in plan (no calibration checks, tests, or prompt guidance beyond schema).
+- REQ-CEA-S08 / I04: Temporal resolution implementation missing (see blocker).
+- REQ-CEA-S09: Original utterance is listed in schema, but plan does not address how it is populated for graph relations (not just vector facts).
+- REQ-CEA-I02: Plan does not call out removal of deprecated retrieval params (`knowledge_graph_pct`, `semantic_retrieval_pct`) from config/build type models.
+- REQ-CEA-I05: Extraction model metadata is in schema, but plan does not specify where it is set (dispatch needs to inject model id).
+- REQ-CEA-A05: Config validation at startup is not specified (no concrete validation steps or schema checks).
+
+**Correctness (plan vs code)**
+- The plan's line references are off in several places (non-blocking but confusing for implementers). Example: `_skip_graph` is set in `run_mem0_extraction`, but at ~line 350, not 311. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:350`
+- The plan calls for adding "identifier preservation" to cleaning; this is already implemented via `clean_for_compaction()` and already used in compaction. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:179` `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py:417`
+- Graph elementId gap: Cypher queries already return elementId fields, but `search()` drops them during BM25 reranking and returns only source/relationship/destination. Fix must carry IDs through reranking, not just query. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:96` `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:126` `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:318`
+- Tool schemas still require user_id and expose knowledge_get_context/knowledge_delete. Plan correctly identifies updates, but these are not reflected in current code and must be updated in tandem with dispatch + Pydantic models. `state_4_development/context_broker_pmad/app/routes/mcp.py:814` `state_4_development/context_broker_pmad/app/routes/mcp.py:827` `state_4_development/context_broker_pmad/app/routes/mcp.py:864`
+
+**Ordering / dependency issues**
+- Chunk 4 (CEAs flow) depends on prompt templates, but prompt template creation is deferred to Chunk 9. Templates should be created/registered before the CEAs flow is exercised.
+- Chunk 6 (config loading/classification) is listed after MCP and CEAs, but those components depend on config values (retrieval scope, prompt paths, ranking weights). Consider moving config earlier or at least adding temporary defaults.
+
+**Risks (highest first)**
+- Graph relation identifiers: If elementId fields are not preserved through reranking, the wrapper cannot join metadata for graph results, breaking REQ-CEA-S02/Q01/Q03. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:119` `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py:126`
+- Global or cross-user search: Wrapper must support conversation/user/global scopes without violating Mem0 search guardrails. Without a clear strategy (separate vector/graph queries or bypassing Mem0 search), REQ-CEA-S04/I03 will fail. `state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py:906`
+- Legacy per-message extraction still active: If not disabled, it will keep writing memories with incorrect user_id attribution and without CEA metadata, causing mixed-quality store contents. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_extraction.py:129`
+- Idempotency: Plan mentions dedup keys but does not specify how compaction events are deduped when LLM labels differ (NEW vs DUPLICATE). Need a deterministic dedup key in wrapper and enforcement in DB to meet REQ-CEA-A03.
+
+**Gaps (code updates not mentioned in plan)**
+- Disable or remove legacy memory_extraction worker/queue and any scheduling so extraction is exclusively compaction-time per REQ-CEA-S01. (Current pipeline still exists and is invoked in standard_tiered.) `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py:547`
+- Update Pydantic input models used in tool dispatch (e.g., MemSearchInput) to make user_id optional and add knowledge_feedback schema. Dispatch currently assumes user_id required. `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:688`
+- Add CEA tables to DB bootstrap/migrations. `postgres/init.sql` has no CEA tables. `state_4_development/context_broker_pmad/postgres/init.sql:1`
+- Add metrics and verbose logging toggles for CEAs/CEAc stages (REQ-CEA-A02/A06).
+
+**ERQ Compliance**
+- ERQ-001: Tool input schemas must validate all new fields. Plan mentions schema changes but does not call out corresponding Pydantic model updates or validation failures.
+- ERQ-002: Plan correctly makes CEAs/CEAc StateGraphs. Ensure knowledge_feedback and wrapper interactions are exposed via StateGraph flows, not direct DB calls, to keep tool handling consistent with existing flows. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory_admin_flow.py:189`
+- ERQ-003: Config classification (hot-reloadable vs startup-only) is noted in plan, but no explicit implementation steps or documentation updates are listed. This should be concrete in `app/config.py` and documented alongside new params.
+
+**Summary**
+The plan captures the major architecture changes but misses several mandatory requirements (temporal resolution, observability/metrics, config validation/classification specifics) and has a few correctness/ordering issues. The biggest blockers are global search handling against Mem0's scope guardrails and sender-based user_id attribution. Address those early to avoid violating S04/S10/I08 and to prevent incorrect memory store contents.
+```
+
+If you want, I can try again using a different file-writing method.

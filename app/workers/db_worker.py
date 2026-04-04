@@ -354,6 +354,14 @@ async def _extraction_worker(config: dict) -> None:
                 finally:
                     await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
 
+            # CEA: Periodic expiration cleanup (REQ-CEA-Q03, fix #28)
+            try:
+                from context_broker_ae.memory.quality_wrapper import get_quality_wrapper
+                wrapper = await get_quality_wrapper(config)
+                await wrapper._maybe_cleanup()
+            except (ImportError, RuntimeError, asyncpg.PostgresError) as cleanup_exc:
+                _log.debug("CEA expiration cleanup skipped: %s", cleanup_exc)
+
             consecutive_failures = 0
             await asyncio.sleep(poll_interval)
 
