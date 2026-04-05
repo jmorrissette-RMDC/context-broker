@@ -1,5 +1,5 @@
 """
-Memory Admin Flows — LangGraph StateGraph flows for knowledge_add, knowledge_list, knowledge_delete.
+Memory Admin Flows — LangGraph StateGraph flows for knowledge_add and knowledge_list.
 
 M-18: These flows wrap Mem0 calls in StateGraphs to comply with the
 LangGraph mandate. Previously these operations were called directly
@@ -137,57 +137,4 @@ def build_mem_list_flow() -> StateGraph:
     return workflow.compile()
 
 
-# ============================================================
-# knowledge_delete flow
-# ============================================================
-
-
-class MemDeleteState(TypedDict):
-    """State for the knowledge_delete flow."""
-
-    memory_id: str
-    config: dict
-
-    deleted: bool
-    degraded: bool  # R6-M7: Needed so dispatch can distinguish degraded vs hard error
-    error: Optional[str]
-
-
-async def delete_memory(state: MemDeleteState) -> dict:
-    """Delete a memory from the Mem0 knowledge graph."""
-    config = state["config"]
-
-    try:
-        from context_broker_ae.memory.mem0_client import get_mem0_client
-
-        mem0 = await get_mem0_client(config)
-        if mem0 is None:
-            return {"error": "Mem0 client not available", "degraded": True}
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: mem0.delete(state["memory_id"]),
-        )
-
-        return {"deleted": True, "degraded": False}
-
-    except (
-        ConnectionError,
-        RuntimeError,
-        ValueError,
-        ImportError,
-        OSError,
-    ) as exc:
-        # G5-18: Broad exception handling for Mem0/Neo4j failures.
-        _log.warning("knowledge_delete failed: %s", exc)
-        return {"deleted": False, "error": str(exc), "degraded": True}
-
-
-def build_mem_delete_flow() -> StateGraph:
-    """Build and compile the knowledge_delete StateGraph."""
-    workflow = StateGraph(MemDeleteState)
-    workflow.add_node("delete_memory", delete_memory)
-    workflow.set_entry_point("delete_memory")
-    workflow.add_edge("delete_memory", END)
-    return workflow.compile()
+# knowledge_delete removed — facts are CR-only per REQ-CEA-I03 (#494)
