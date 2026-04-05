@@ -32,7 +32,7 @@ def register() -> dict:
     # Flow builders
     from context_broker_ae.message_pipeline import build_message_pipeline
     from context_broker_ae.embed_pipeline import build_embed_pipeline
-    from context_broker_ae.memory_extraction import build_memory_extraction
+    # CEA: build_memory_extraction removed — replaced by cea_extraction (#492)
     from context_broker_ae.search_flow import (
         build_conversation_search_flow,
         build_message_search_flow,
@@ -81,7 +81,7 @@ def register() -> dict:
         "flows": {
             "message_pipeline": build_message_pipeline,
             "embed_pipeline": build_embed_pipeline,
-            "memory_extraction": build_memory_extraction,
+            # "memory_extraction" removed — replaced by cea_extraction (#492)
             "conversation_search": build_conversation_search_flow,
             "message_search": build_message_search_flow,
             "create_conversation": build_create_conversation_flow,
