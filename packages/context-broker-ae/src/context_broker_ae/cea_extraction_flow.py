@@ -9,6 +9,7 @@ See PRD REQ-CEA-S01 through S10.
 See HLD S3 Flow A: Extraction (Write Side).
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -109,6 +110,8 @@ async def search_existing_facts(state: CEAsExtractionState) -> dict:
                 if f.get("_metadata", {}).get("conversation_id") and
                 str(f["_metadata"]["conversation_id"]) == conv_id
             ]
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         _log.warning("CEAs: failed to search existing facts: %s", exc)
         facts = []
@@ -183,6 +186,8 @@ async def run_extraction_llm(state: CEAsExtractionState) -> dict:
         if CEA_EXTRACTION_EVENTS:
             CEA_EXTRACTION_EVENTS.labels(status="failure").inc()
         return {"extraction_output": None, "error": f"Invalid extraction output: {exc}"}
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         _log.error("CEAs: extraction LLM call failed: %s", exc)
         if CEA_EXTRACTION_EVENTS:

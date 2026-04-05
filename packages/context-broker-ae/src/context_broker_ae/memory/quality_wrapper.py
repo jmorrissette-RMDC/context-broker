@@ -433,6 +433,8 @@ class QualityWrapper:
                         lambda mid=row["target_id"]: self.mem0.delete(mid),
                     )
                     count += 1
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     _log.warning("Failed to delete expired fact %s: %s", row["target_id"], exc)
 
@@ -623,6 +625,8 @@ class QualityWrapper:
                 ),
             )
             return results or []
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             _log.warning("Global graph search failed: %s", exc)
             return []
