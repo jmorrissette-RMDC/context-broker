@@ -750,8 +750,8 @@ async def _dispatch_tool_inner(
             await wrapper.write_metadata(
                 target_type="fact",
                 target_id=memory_id,
-                durability=validated.durability or 0.5,
-                confidence=validated.confidence or 0.5,
+                durability=validated.durability if validated.durability is not None else 0.5,
+                confidence=validated.confidence if validated.confidence is not None else 0.5,
                 source_type=validated.source_type or "observation",
                 original_utterance=utterance,
                 extraction_model="manual",
