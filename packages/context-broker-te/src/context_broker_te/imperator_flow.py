@@ -349,6 +349,7 @@ async def init_context_node(state: ImperatorState) -> dict:
 
     # D-07: Load context via get_context with V2 parameters
     history_messages = []
+    context_messages = []
     conversation_id = state.get("context_window_id")
     if conversation_id:
         try:
