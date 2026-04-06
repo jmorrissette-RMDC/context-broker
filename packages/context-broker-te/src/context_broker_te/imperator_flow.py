@@ -424,6 +424,13 @@ async def init_context_node(state: ImperatorState) -> dict:
                 )
                 return result.get("status") == "recorded"
 
+            # Build LLM callable for CEAc query refinement using AE's get_chat_model
+            async def _llm_fn(prompt, **kwargs):
+                from app.config import get_chat_model
+                llm = get_chat_model(config, "imperator")
+                response = await llm.ainvoke([{"role": "user", "content": prompt}])
+                return response.content
+
             ceac_flow = build_ceac_enrichment_flow()
             ceac_result = await ceac_flow.ainvoke({
                 "tiers": context_messages,
@@ -431,6 +438,7 @@ async def init_context_node(state: ImperatorState) -> dict:
                 "user_id": imperator_cfg.get("user_id"),
                 "search_fn": _search_fn,
                 "feedback_fn": _feedback_fn,
+                "llm_fn": _llm_fn,
                 "search_results": [],
                 "search_queries": [],
                 "ranked_results": [],

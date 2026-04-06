@@ -51,6 +51,7 @@ except ImportError:
 # Type aliases for the injected tool callables
 SearchFn = Callable[..., Coroutine[Any, Any, dict]]
 FeedbackFn = Callable[..., Coroutine[Any, Any, bool]]
+LlmFn = Callable[..., Coroutine[Any, Any, str]]  # async (prompt) -> response text
 
 
 class CEAcEnrichmentState(TypedDict):
@@ -59,6 +60,7 @@ class CEAcEnrichmentState(TypedDict):
     user_id: Optional[str]  # user_id for scoped search (fix #22)
     search_fn: SearchFn  # injected: async (query, user_id, limit) -> dict
     feedback_fn: FeedbackFn  # injected: async (target_type, target_id, event_type, agent_id, context) -> bool
+    llm_fn: Optional[LlmFn]  # injected: async (prompt) -> response text. For query refinement.
     search_results: list[dict]  # accumulated raw results from all iterations
     search_queries: list[str]  # queries tried so far (for agentic loop)
     ranked_results: list[dict]  # after ranking
@@ -199,18 +201,12 @@ async def decide_search(state: CEAcEnrichmentState) -> dict:
                     break
     else:
         # Subsequent iterations: LLM decides next query based on what was found.
-        # Build a summary of prior results to inform the next search.
+        llm_fn = state.get("llm_fn")
+        if not llm_fn:
+            # No LLM callable provided — skip refinement, go to assembly
+            return {"query": "", "search_queries": prior_queries}
+
         try:
-            from langchain_openai import ChatOpenAI
-
-            llm_config = config.get("imperator", config.get("llm", {}))
-            llm = ChatOpenAI(
-                base_url=llm_config.get("base_url"),
-                model=llm_config.get("model", "gpt-4o-mini"),
-                api_key=llm_config.get("api_key", "not-needed"),
-                timeout=60,
-            )
-
             prior_summary = "\n".join(
                 f"- {r.get('memory', r.get('source', ''))[:100]}"
                 for r in prior_results[:10]
@@ -226,8 +222,7 @@ async def decide_search(state: CEAcEnrichmentState) -> dict:
                 f"nothing else. If the existing results are sufficient, return DONE."
             )
 
-            response = await llm.ainvoke([{"role": "user", "content": prompt}])
-            new_query = response.content.strip().strip('"')
+            new_query = (await llm_fn(prompt)).strip().strip('"')
 
             if new_query.upper() == "DONE" or not new_query:
                 # LLM says results are sufficient — skip to assembly
