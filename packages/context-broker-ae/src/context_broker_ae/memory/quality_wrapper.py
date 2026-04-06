@@ -266,8 +266,11 @@ class QualityWrapper:
                 conv_uuid,
                 content_hash,
             )
-        # Note: ON CONFLICT DO NOTHING handles natural-key collisions silently.
-        # No UniqueViolationError will be raised.
+        except asyncpg.UniqueViolationError:
+            # Natural-key dedup index collision (same user/conversation/utterance/content).
+            # ON CONFLICT only covers (target_type, target_id); the natural-key index
+            # can still fire under concurrent extraction. Safe to ignore.
+            _log.debug("Metadata natural-key collision: %s/%s", target_type, target_id)
 
     # ------------------------------------------------------------------
     # Read side

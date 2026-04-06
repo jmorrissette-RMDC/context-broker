@@ -652,7 +652,7 @@ async def _migration_025(conn) -> None:
     await conn.execute("DROP INDEX IF EXISTS idx_cea_metadata_natural_dedup")
     await conn.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_cea_metadata_natural_dedup
-        ON cea_quality_metadata (user_id, conversation_id, original_utterance, content_hash)
+        ON cea_quality_metadata (target_type, user_id, conversation_id, original_utterance, content_hash)
         WHERE original_utterance != '' AND content_hash IS NOT NULL
     """)
 
