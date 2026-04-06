@@ -43,7 +43,9 @@ try:
         "Total facts extracted by CEAs",
         ["relationship"],
     )
-except ImportError:
+except (ImportError, ValueError):
+    # ImportError: prometheus_client not installed
+    # ValueError: duplicate registration on install_stategraph re-import
     CEA_EXTRACTION_EVENTS = None
     CEA_EXTRACTION_DURATION = None
     CEA_FACTS_EXTRACTED = None
