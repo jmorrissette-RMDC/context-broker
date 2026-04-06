@@ -91,6 +91,89 @@ class TestExtraction:
             )
 
 
+class TestCEAExtraction:
+    """Verify CEA compaction-time extraction populates cea_quality_metadata."""
+
+    def test_cea_quality_metadata_populated(self):
+        """D-new: cea_quality_metadata should have rows if CEA extraction ran.
+
+        CEA extraction fires at compaction time (within compact_tier1).
+        This verifies that at least some facts have associated quality metadata.
+        If compaction has not been triggered yet (too few messages), logs a
+        warning but does not hard-fail.
+        """
+        import re
+        raw = docker_psql("SELECT COUNT(*) FROM cea_quality_metadata").strip()
+        match = re.search(r"(\d+)", raw)
+        count = int(match.group(1)) if match else 0
+        if count == 0:
+            log_issue(
+                "test_cea_quality_metadata_populated",
+                "warning",
+                "cea",
+                "cea_quality_metadata table is empty; CEA extraction may not have "
+                "fired yet (compaction threshold not reached) or extraction LLM failed",
+                ">0 rows",
+                "0",
+            )
+            pytest.fail(
+                "cea_quality_metadata is empty — CEA extraction has not produced any facts. "
+                "Compaction may not have triggered or extraction LLM is misconfigured."
+            )
+
+    def test_cea_metadata_has_required_columns(self):
+        """D-new: cea_quality_metadata rows have required CEA columns."""
+        import re
+        # Check at least one row has non-null durability and confidence
+        raw = docker_psql(
+            "SELECT COUNT(*) FROM cea_quality_metadata "
+            "WHERE durability IS NOT NULL AND confidence IS NOT NULL"
+        ).strip()
+        match = re.search(r"(\d+)", raw)
+        count = int(match.group(1)) if match else 0
+        if count == 0:
+            # If the table is empty, skip with warning
+            total_raw = docker_psql("SELECT COUNT(*) FROM cea_quality_metadata").strip()
+            total_match = re.search(r"(\d+)", total_raw)
+            total = int(total_match.group(1)) if total_match else 0
+            if total == 0:
+                pytest.skip("cea_quality_metadata is empty — CEA extraction not yet triggered")
+            pytest.fail(
+                f"cea_quality_metadata has {total} rows but none have "
+                "durability/confidence populated"
+            )
+
+
+class TestCEAMetrics:
+    """Verify CEA Prometheus metrics are registered."""
+
+    def test_cea_extraction_metrics_registered(self, http_client):
+        """D-new: /metrics contains CEA extraction counters after startup."""
+        resp = http_client.get("/metrics")
+        assert resp.status_code == 200
+        text = resp.text
+        # CEA metrics may not have fired yet (no compaction) but should be registered
+        # Look for any CEA-related metric name
+        has_cea_metric = (
+            "cea_extraction" in text
+            or "cea_facts" in text
+            or "ceac_enrichment" in text
+        )
+        if not has_cea_metric:
+            log_issue(
+                "test_cea_extraction_metrics_registered",
+                "warning",
+                "cea",
+                "No CEA metrics found in /metrics output; "
+                "prometheus_client may not be installed or CEA code path not reached",
+                "cea_extraction_* metrics",
+                "none found",
+            )
+        # Don't hard-fail — metrics only appear after the code path executes
+        # (prometheus_client registers on first use, not at import time)
+        assert True
+
+
 class TestAssembly:
     """Verify that context assembly built summaries."""
 

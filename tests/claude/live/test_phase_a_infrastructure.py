@@ -300,6 +300,73 @@ class TestAEPackageDiscovery:
         assert not missing, f"AE tools missing from tools/list: {missing}"
 
 
+class TestKnowledgeToolsPresent:
+    """A-new: CEA knowledge tools appear correctly in tools/list."""
+
+    def test_knowledge_feedback_present(self, http_client):
+        """A-new-a: knowledge_feedback is registered (added by CEA)."""
+        resp = mcp_call_raw(
+            http_client,
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+        tools = resp.json()["result"]["tools"]
+        tool_names = {t["name"] for t in tools}
+        assert "knowledge_feedback" in tool_names, (
+            f"knowledge_feedback missing from tools/list. Available: {sorted(tool_names)}"
+        )
+
+    def test_knowledge_delete_absent(self, http_client):
+        """A-new-b: knowledge_delete is NOT registered (removed by CEA — facts are CR-only)."""
+        resp = mcp_call_raw(
+            http_client,
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+        tools = resp.json()["result"]["tools"]
+        tool_names = {t["name"] for t in tools}
+        assert "knowledge_delete" not in tool_names, (
+            "knowledge_delete should have been removed from tools/list (CEA: facts are CR-only)"
+        )
+
+    def test_knowledge_core_tools_present(self, http_client):
+        """A-new-c: knowledge_search, knowledge_add, knowledge_list are registered."""
+        resp = mcp_call_raw(
+            http_client,
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+        tools = resp.json()["result"]["tools"]
+        tool_names = {t["name"] for t in tools}
+        required = {"knowledge_search", "knowledge_add", "knowledge_list", "knowledge_feedback"}
+        missing = required - tool_names
+        assert not missing, f"CEA knowledge tools missing from tools/list: {missing}"
+
+
+# ===================================================================
+# A-new: CEA table health check
+# ===================================================================
+
+
+class TestCEATableHealth:
+    """A-new: CEA database tables exist after migrations."""
+
+    def test_cea_quality_metadata_table_exists(self):
+        """A-new: cea_quality_metadata table exists (migration 023)."""
+        result = docker_psql(
+            "SELECT to_regclass('public.cea_quality_metadata')::text"
+        ).strip()
+        assert "cea_quality_metadata" in result, (
+            f"cea_quality_metadata table not found: {result!r}"
+        )
+
+    def test_cea_feedback_events_table_exists(self):
+        """A-new: cea_feedback_events table exists (migration 023)."""
+        result = docker_psql(
+            "SELECT to_regclass('public.cea_feedback_events')::text"
+        ).strip()
+        assert "cea_feedback_events" in result, (
+            f"cea_feedback_events table not found: {result!r}"
+        )
+
+
 # ===================================================================
 # A-10: Package discovery — TE tools
 # ===================================================================

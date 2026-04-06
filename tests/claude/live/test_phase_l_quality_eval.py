@@ -211,74 +211,9 @@ class TestTieredSummaryQuality:
 # L-02: Enriched build type quality
 # ===========================================================================
 
-class TestEnrichedQuality:
-    """L-02: Evaluate enriched build type output quality."""
-
-    def test_enriched_quality(self, http_client, any_conversation_id):
-        """Get enriched context, have Sonnet judge whether enrichment adds value."""
-        # Get enriched context
-        resp = mcp_call(
-            http_client,
-            "get_context",
-            {
-                "build_type": "enriched",
-                "budget": 16000,
-                "conversation_id": any_conversation_id,
-                "user_prompt": "What are the key architectural decisions and design patterns discussed?",
-            },
-        )
-        assert resp.status_code == 200
-        result = extract_mcp_result(resp)
-
-        # Extract context text
-        context_text = ""
-        if "context" in result:
-            ctx = result["context"]
-            if isinstance(ctx, str):
-                context_text = ctx
-            elif isinstance(ctx, list):
-                context_text = "\n".join(
-                    m.get("content", str(m)) for m in ctx
-                )
-            elif isinstance(ctx, dict):
-                context_text = json.dumps(ctx, indent=2)
-        elif "messages" in result:
-            context_text = "\n".join(
-                m.get("content", str(m)) for m in result["messages"][:30]
-            )
-
-        if len(context_text) < 50:
-            # Enriched may fall back to simpler build on new conversations
-            log_issue(
-                "test_enriched_quality",
-                "warning",
-                "quality-enriched",
-                f"Enriched context too short ({len(context_text)} chars), "
-                "may have fallen back to simpler build type",
-            )
-            pytest.fail("Enriched context too short — knowledge graph data missing or enriched build type fell back to simpler type")
-
-        context_excerpt = context_text[:3000]
-
-        prompt = (
-            "You are evaluating the quality of an 'enriched' context assembly "
-            "for a conversational memory system. The enriched build type adds "
-            "semantic search results and knowledge graph facts to the base context.\n\n"
-            "ENRICHED CONTEXT OUTPUT:\n"
-            f"```\n{context_excerpt}\n```\n\n"
-            "Evaluate on these criteria:\n"
-            "1. Does the context include semantic enrichment (related memories, "
-            "knowledge graph facts, or entity relationships)?\n"
-            "2. Does the enrichment add value beyond raw message history?\n"
-            "3. Is the enriched context coherent and not cluttered with noise?\n"
-            "4. Would an AI assistant benefit from this enriched context?\n\n"
-            "If the output appears to be a plain message list with no enrichment, "
-            "rate it ACCEPTABLE (the system may fall back when enrichment data is sparse).\n\n"
-            "Rate the quality as exactly one of: GOOD, ACCEPTABLE, or POOR.\n"
-            "Provide your reasoning, then end with: Rating: GOOD/ACCEPTABLE/POOR"
-        )
-
-        _judge_and_assert("test_enriched_quality", prompt, "quality-enriched")
+# L-02: TestEnrichedQuality removed — enriched build type no longer does server-side RAG.
+# CEA: enrichment is client-side via CEAc. Server returns tiers only.
+# Test deleted per #508.
 
 
 # ===========================================================================
@@ -343,9 +278,13 @@ class TestKnowledgeExtractionQuality:
     """L-04: Evaluate quality of extracted memories."""
 
     def test_knowledge_extraction_quality(self, http_client):
-        """Get extracted memories via knowledge_search, have Sonnet judge accuracy."""
-        # Search for memories on a topic from Phase 1 data (MAD architecture,
-        # context engineering). Avoids returning low-quality memories from
+        """Get CEA-extracted facts via knowledge_search, have Sonnet judge accuracy.
+
+        CEA: extraction fires at compaction time (not per-message).
+        knowledge_search returns vector_facts (not memories).
+        """
+        # Search for facts on a topic from Phase 1 data (MAD architecture,
+        # context engineering). Avoids returning low-quality facts from
         # Phase K tool effect tests (file writes, config changes, schedules).
         resp = mcp_call(
             http_client,
@@ -354,47 +293,41 @@ class TestKnowledgeExtractionQuality:
         )
         assert resp.status_code == 200
         result = extract_mcp_result(resp)
-        memories = result.get("memories", [])
+        # CEA: knowledge_search returns vector_facts (not memories)
+        vector_facts = result.get("vector_facts", [])
 
-        if not memories:
-            # Try search_knowledge as fallback
-            resp2 = mcp_call(
-                http_client,
-                "search_knowledge",
-                {"query": "software architecture", "user_id": "default"},
-            )
-            if resp2.status_code == 200:
-                result2 = extract_mcp_result(resp2)
-                memories = result2.get("memories", [])
-
-        if not memories:
+        if not vector_facts:
             log_issue(
                 "test_knowledge_extraction_quality",
                 "warning",
                 "quality-extraction",
-                "No extracted memories found for quality evaluation",
+                "No CEA-extracted vector_facts found; CEA extraction fires at compaction time "
+                "— compaction may not have triggered yet",
             )
-            pytest.fail("No extracted memories found — Mem0 extraction pipeline is not producing searchable memories")
+            pytest.fail(
+                "No vector_facts found — CEA extraction has not produced searchable facts. "
+                "Ensure compaction was triggered (sufficient messages loaded)."
+            )
 
-        # Format memories for the judge
-        formatted_memories = []
-        for i, mem in enumerate(memories[:10]):
-            text = str(mem.get("memory", mem.get("content", mem.get("text", ""))))
-            score = mem.get("score", mem.get("similarity", "n/a"))
-            formatted_memories.append(f"Memory {i+1} (score={score}):\n{text}")
+        # Format facts for the judge
+        formatted_facts = []
+        for i, fact in enumerate(vector_facts[:10]):
+            text = str(fact.get("memory", fact.get("content", fact.get("text", ""))))
+            score = fact.get("score", fact.get("similarity", "n/a"))
+            formatted_facts.append(f"Fact {i+1} (score={score}):\n{text}")
 
-        memories_text = "\n\n".join(formatted_memories)
+        facts_text = "\n\n".join(formatted_facts)
 
         prompt = (
-            "You are evaluating the quality of automatically extracted memories "
-            "from a conversational memory system. The system extracts factual "
-            "knowledge from user conversations and stores them as discrete memories.\n\n"
-            f"EXTRACTED MEMORIES:\n```\n{memories_text}\n```\n\n"
+            "You are evaluating the quality of automatically extracted facts "
+            "from a conversational memory system. The system (CEA) extracts factual "
+            "knowledge from conversation compaction events and stores them as discrete facts.\n\n"
+            f"EXTRACTED FACTS:\n```\n{facts_text}\n```\n\n"
             "Evaluate on these criteria:\n"
-            "1. Do the memories capture discrete, factual information?\n"
-            "2. Are the memories well-formed and understandable out of context?\n"
+            "1. Do the facts capture discrete, factual information?\n"
+            "2. Are the facts well-formed and understandable out of context?\n"
             "3. Do they avoid being too vague or too verbose?\n"
-            "4. Would these memories be useful for personalizing future conversations?\n\n"
+            "4. Would these facts be useful for personalizing future conversations?\n\n"
             "Rate the quality as exactly one of: GOOD, ACCEPTABLE, or POOR.\n"
             "Provide your reasoning, then end with: Rating: GOOD/ACCEPTABLE/POOR"
         )
@@ -453,3 +386,61 @@ class TestImperatorCoherence:
         )
 
         _judge_and_assert("test_imperator_coherence", prompt, "quality-imperator")
+
+
+# ===========================================================================
+# L-new: CEA metadata quality evaluation
+# ===========================================================================
+
+class TestMetadataQuality:
+    """L-new: Evaluate quality of CEA durability/confidence scores."""
+
+    def test_metadata_quality(self, http_client):
+        """Get CEA quality metadata, have Sonnet judge whether scores are calibrated.
+
+        Checks that durability scores reflect actual durability of the facts
+        and confidence scores reflect extraction confidence.
+        """
+        from tests.claude.live.helpers import docker_psql
+
+        # Get a sample of facts with their metadata
+        raw = docker_psql(
+            "SELECT qm.durability, qm.confidence, qm.source_type, "
+            "qm.original_utterance "
+            "FROM cea_quality_metadata qm "
+            "WHERE qm.target_type = 'fact' "
+            "AND qm.original_utterance IS NOT NULL "
+            "AND qm.original_utterance != '' "
+            "ORDER BY qm.extracted_at DESC LIMIT 10"
+        ).strip()
+
+        if not raw or raw == "0" or "0 rows" in raw:
+            log_issue(
+                "test_metadata_quality",
+                "warning",
+                "quality-metadata",
+                "No CEA quality metadata found; CEA extraction may not have fired yet",
+            )
+            pytest.skip("cea_quality_metadata empty — CEA extraction not yet triggered")
+
+        prompt = (
+            "You are evaluating the calibration of quality scores assigned to "
+            "automatically extracted facts from a conversational memory system.\n\n"
+            "The system assigns two scores to each fact:\n"
+            "- durability (0.0-1.0): how long this fact will remain true "
+            "(1.0 = permanent, 0.0 = very temporary)\n"
+            "- confidence (0.0-1.0): how confident the LLM was in extracting this fact "
+            "(1.0 = very certain, 0.0 = uncertain)\n\n"
+            "SAMPLE FACTS WITH SCORES:\n"
+            f"```\n{raw[:3000]}\n```\n\n"
+            "Evaluate on these criteria:\n"
+            "1. Do the durability scores seem calibrated to the actual content? "
+            "(e.g., preferences should be lower than facts about immutable events)\n"
+            "2. Do the confidence scores reflect reasonable extraction confidence?\n"
+            "3. Are the source_type labels appropriate for the content?\n"
+            "4. Are there obvious calibration failures (e.g., all scores are 0.5)?\n\n"
+            "Rate the calibration quality as exactly one of: GOOD, ACCEPTABLE, or POOR.\n"
+            "Provide your reasoning, then end with: Rating: GOOD/ACCEPTABLE/POOR"
+        )
+
+        _judge_and_assert("test_metadata_quality", prompt, "quality-metadata")

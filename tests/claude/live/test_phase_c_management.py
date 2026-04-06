@@ -457,11 +457,10 @@ class TestMemAdd:
         assert isinstance(result, dict)
 
     def test_knowledge_add_embedding_persisted(self, http_client):
-        """C-15b: After knowledge_add, verify the row count in mem0_memories increases.
+        """C-15b: After knowledge_add, verify memory_id returned and row count increases.
 
-        Proves Mem0 actually persisted data, not just accepted the call.
-        Uses count-before/count-after to avoid SSH quoting issues with
-        payload JSONB queries.
+        CEA: knowledge_add returns {"status": "added", "memory_id": <id>}.
+        Proves Mem0 actually persisted data via row count before/after.
         """
         import re
         import time
@@ -486,14 +485,13 @@ class TestMemAdd:
         assert resp.status_code == 200
         result = extract_mcp_result(resp)
 
-        # Verify knowledge_add returned actual results (not None or empty)
-        mem_result = result.get("result")
-        assert mem_result is not None, f"knowledge_add returned null result: {result}"
-        if isinstance(mem_result, dict):
-            added = mem_result.get("results", [])
-            assert len(added) >= 1, (
-                f"knowledge_add extracted 0 facts from clear factual content: {mem_result}"
-            )
+        # CEA: knowledge_add returns {"status": "added", "memory_id": ...}
+        assert result.get("status") == "added", (
+            f"knowledge_add did not return status=added: {result}"
+        )
+        assert result.get("memory_id") is not None, (
+            f"knowledge_add returned null memory_id: {result}"
+        )
 
         # Count after — should have increased
         time.sleep(3)
@@ -510,7 +508,7 @@ class TestMemSearch:
     """C-16: knowledge_search finds previously added memories."""
 
     def test_knowledge_search_finds_added_memory(self, http_client):
-        """C-16: Add a memory, then search for it."""
+        """C-16: Add a memory, then search for it via knowledge_search."""
         user_id = f"live-test-search-{uuid.uuid4().hex[:8]}"
 
         # Add a distinctive memory
@@ -534,8 +532,11 @@ class TestMemSearch:
             )
             assert resp.status_code == 200
             result = extract_mcp_result(resp)
-            assert "memories" in result
-            if len(result["memories"]) > 0:
+            # CEA: knowledge_search returns vector_facts (not memories)
+            assert "vector_facts" in result, (
+                f"Missing 'vector_facts' key in knowledge_search response: {result}"
+            )
+            if len(result["vector_facts"]) > 0:
                 found = True
                 break
 
@@ -544,39 +545,15 @@ class TestMemSearch:
                 "test_knowledge_search_finds_added_memory",
                 "warning",
                 "mem0",
-                "knowledge_search returned no results for a just-added memory after retries; "
+                "knowledge_search returned no vector_facts for a just-added memory after retries; "
                 "Mem0 may not be fully functional (table schema mismatch)",
             )
-            assert False, "knowledge_search returned no results — Mem0 not functional"
+            assert False, "knowledge_search returned no vector_facts — Mem0 not functional"
 
 
-class TestKnowledgeGetContext:
-    """C-17: knowledge_get_context returns formatted text."""
-
-    def test_knowledge_get_context_returns_text(self, http_client):
-        """C-17: knowledge_get_context returns context and memories keys."""
-        user_id = f"live-test-ctx-{uuid.uuid4().hex[:8]}"
-
-        # Add a memory first
-        mcp_call(
-            http_client,
-            "knowledge_add",
-            {
-                "content": "The user works on distributed systems.",
-                "user_id": user_id,
-            },
-        )
-        time.sleep(1)
-
-        resp = mcp_call(
-            http_client,
-            "knowledge_get_context",
-            {"query": "distributed systems", "user_id": user_id},
-        )
-        assert resp.status_code == 200
-        result = extract_mcp_result(resp)
-        assert "context" in result
-        assert "memories" in result
+# C-17: knowledge_get_context removed — tool deleted in CEA implementation.
+# Server-side context enrichment is now handled by CEAc (client-side).
+# Test deleted per #508.
 
 
 class TestMemList:
@@ -625,57 +602,145 @@ class TestMemList:
             assert False, "knowledge_list returned no memories — Mem0 not functional"
 
 
-class TestKnowledgeDelete:
-    """C-19: knowledge_delete removes a memory."""
+# C-19: knowledge_delete removed — tool deleted in CEA implementation.
+# Facts are CR-only (create-read); post-creation activity uses feedback events.
+# Test deleted per #508.
 
-    def test_knowledge_delete_removes_memory(self, http_client):
-        """C-19: Add a memory, delete it, verify it's gone from knowledge_list."""
-        user_id = f"live-test-del-{uuid.uuid4().hex[:8]}"
 
-        # Add a memory with extractable facts
+# ===================================================================
+# C-new: knowledge_feedback — CEA feedback events
+# ===================================================================
+
+
+class TestKnowledgeFeedback:
+    """C-new: knowledge_feedback records feedback events."""
+
+    def test_knowledge_feedback_records_event(self, http_client):
+        """C-new-a: knowledge_feedback returns status=recorded for a valid event."""
+        # First add a memory to get a real target_id
+        user_id = f"live-test-fb-{uuid.uuid4().hex[:8]}"
         add_resp = mcp_call(
             http_client,
             "knowledge_add",
             {
-                "content": f"User {user_id} drives a Tesla and lives in Boston.",
+                "content": f"User {user_id} prefers functional programming.",
                 "user_id": user_id,
             },
         )
         assert add_resp.status_code == 200
         add_result = extract_mcp_result(add_resp)
-
-        # Get memory ID from Mem0 1.0 result: result.results[0].id
-        memory_id = None
-        mem_result = add_result.get("result")
-        if isinstance(mem_result, dict):
-            results_list = mem_result.get("results", [])
-            if results_list:
-                memory_id = results_list[0].get("id")
-
+        memory_id = add_result.get("memory_id")
         assert memory_id is not None, (
-            f"knowledge_add did not return a memory ID. Result: {add_result}"
+            f"knowledge_add did not return memory_id: {add_result}"
         )
 
-        # Delete
-        del_resp = mcp_call(
+        # Record a feedback event
+        resp = mcp_call(
             http_client,
-            "knowledge_delete",
-            {"memory_id": str(memory_id)},
+            "knowledge_feedback",
+            {
+                "target_type": "fact",
+                "target_id": str(memory_id),
+                "event_type": "used",
+                "agent_id": "live-test-c-new",
+            },
         )
-        assert del_resp.status_code == 200
+        assert resp.status_code == 200
+        result = extract_mcp_result(resp)
+        assert result.get("status") in ("recorded", "duplicate"), (
+            f"knowledge_feedback returned unexpected status: {result}"
+        )
 
-        # Verify gone
-        time.sleep(2)
-        list_resp = mcp_call(
-            http_client, "knowledge_list", {"user_id": user_id}
+    def test_knowledge_feedback_deduplicates(self, http_client):
+        """C-new-b: Duplicate feedback event within same time bucket returns status=duplicate."""
+        user_id = f"live-test-fb-dedup-{uuid.uuid4().hex[:8]}"
+        add_resp = mcp_call(
+            http_client,
+            "knowledge_add",
+            {"content": f"User {user_id} uses Emacs.", "user_id": user_id},
         )
-        list_result = extract_mcp_result(list_resp)
-        remaining_ids = [
-            m.get("id") or m.get("memory_id")
-            for m in list_result.get("memories", [])
-        ]
-        assert str(memory_id) not in [str(mid) for mid in remaining_ids], (
-            f"Memory {memory_id} still present after deletion"
+        assert add_resp.status_code == 200
+        memory_id = extract_mcp_result(add_resp).get("memory_id")
+        assert memory_id is not None
+
+        fb_args = {
+            "target_type": "fact",
+            "target_id": str(memory_id),
+            "event_type": "discarded",
+            "agent_id": "live-test-dedup",
+        }
+        # First call — should record
+        resp1 = mcp_call(http_client, "knowledge_feedback", fb_args)
+        assert resp1.status_code == 200
+        result1 = extract_mcp_result(resp1)
+
+        # Second identical call in the same minute — should deduplicate
+        resp2 = mcp_call(http_client, "knowledge_feedback", fb_args)
+        assert resp2.status_code == 200
+        result2 = extract_mcp_result(resp2)
+
+        # At least one of the two should be duplicate (within the same minute bucket)
+        statuses = {result1.get("status"), result2.get("status")}
+        assert "duplicate" in statuses or "recorded" in statuses, (
+            f"Expected one recorded and one duplicate, got: {result1}, {result2}"
+        )
+
+    def test_knowledge_feedback_invalid_event_type_rejected(self, http_client):
+        """C-new-c: Invalid event_type returns validation error."""
+        resp = mcp_call(
+            http_client,
+            "knowledge_feedback",
+            {
+                "target_type": "fact",
+                "target_id": "fake-id",
+                "event_type": "invalid_event_type",
+                "agent_id": "test",
+            },
+        )
+        # Should return 400 validation error
+        assert resp.status_code in (400, 422, 500), (
+            f"Expected validation error for invalid event_type, got {resp.status_code}"
+        )
+
+    def test_knowledge_feedback_persisted_in_db(self, http_client):
+        """C-new-d: feedback event appears in cea_feedback_events table."""
+        import re as _re
+        from tests.claude.live.helpers import docker_psql
+
+        user_id = f"live-test-fb-db-{uuid.uuid4().hex[:8]}"
+        add_resp = mcp_call(
+            http_client,
+            "knowledge_add",
+            {"content": f"User {user_id} reads technical books.", "user_id": user_id},
+        )
+        assert add_resp.status_code == 200
+        memory_id = extract_mcp_result(add_resp).get("memory_id")
+        assert memory_id is not None
+
+        # Count before
+        before_raw = docker_psql("SELECT COUNT(*) FROM cea_feedback_events").strip()
+        before_match = _re.search(r"(\d+)", before_raw)
+        before = int(before_match.group(1)) if before_match else 0
+
+        mcp_call(
+            http_client,
+            "knowledge_feedback",
+            {
+                "target_type": "fact",
+                "target_id": str(memory_id),
+                "event_type": "used",
+                "agent_id": "live-test-db-check",
+                "context": {"query": "technical reading"},
+            },
+        )
+        time.sleep(1)
+
+        after_raw = docker_psql("SELECT COUNT(*) FROM cea_feedback_events").strip()
+        after_match = _re.search(r"(\d+)", after_raw)
+        after = int(after_match.group(1)) if after_match else 0
+
+        assert after > before, (
+            f"cea_feedback_events count did not increase: before={before}, after={after}"
         )
 
 

@@ -353,18 +353,21 @@ class TestSearchMessages:
 
 
 class TestSearchKnowledge:
-    """B-08: search_knowledge returns extracted knowledge."""
+    """B-08: knowledge_search returns extracted knowledge."""
 
     def test_search_knowledge_returns_results(self, http_client):
-        """B-08: search_knowledge with a broad query returns memories from extraction."""
+        """B-08: knowledge_search with a broad query returns vector_facts and graph_relations."""
         resp = mcp_call(
             http_client,
-            "search_knowledge",
+            "knowledge_search",
             {"query": "context engineering", "user_id": "test-runner"},
         )
         assert resp.status_code == 200
         result = extract_mcp_result(resp)
-        assert "memories" in result, f"Missing 'memories' key in result: {result}"
+        # CEA: knowledge_search returns vector_facts and graph_relations (not memories)
+        assert "vector_facts" in result, f"Missing 'vector_facts' key in result: {result}"
+        assert "graph_relations" in result, f"Missing 'graph_relations' key in result: {result}"
         # Knowledge extraction may or may not have completed, so we just
         # verify the tool returns the correct structure
-        assert isinstance(result["memories"], list)
+        assert isinstance(result["vector_facts"], list)
+        assert isinstance(result["graph_relations"], list)
