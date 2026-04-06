@@ -34,6 +34,8 @@ def _compute_config_hash(config: dict) -> str:
         "embeddings": config.get("embeddings", {}),
         "graph_store": config.get("graph_store", {}),
         "vector_store": config.get("vector_store", {}),
+        "extraction": config.get("extraction", {}),
+        "memory_extraction": config.get("memory_extraction", {}),
     }
     config_str = json.dumps(relevant, sort_keys=True, default=str)
     return hashlib.sha256(config_str.encode()).hexdigest()
@@ -49,6 +51,14 @@ def reset_mem0_client() -> None:
     _mem0_instance = None
     _mem0_config_hash = ""
     _log.info("Mem0 client invalidated — will recreate on next call")
+
+    # Also invalidate the QualityWrapper which holds a captured Mem0 reference.
+    # Dependency flows upward: if the inner singleton is reset, the outer must be too.
+    try:
+        from context_broker_ae.memory.quality_wrapper import reset_quality_wrapper
+        reset_quality_wrapper()
+    except Exception:
+        pass  # QualityWrapper not available or broken (best-effort cleanup)
 
 
 async def get_mem0_client(config: dict) -> Optional[object]:
@@ -99,17 +109,15 @@ async def get_mem0_client(config: dict) -> Optional[object]:
             return None
 
 
-# Rogers Fix 2 monkey-patch removed — Mem0 1.0 handles dedup at the
-# application level via LLM-based comparison (DELETE/NOOP operations).
-# The old PGVector.insert monkey-patch was needed for 0.1.x but breaks
-# on 1.0 where the PGVector class API changed.
-
-
 def _build_mem0_instance(config: dict) -> object:
     """Build and configure the Mem0 Memory instance.
 
     Uses pgvector for vector storage and Neo4j for knowledge graph.
     LLM and embeddings are configured from config.yml.
+
+    The Mem0 fork (packages/mem0-fork) adds quality gate, metadata
+    passthrough, and expiration cleanup. Config for these features
+    comes from the AE config's memory_extraction section.
     """
     from mem0 import Memory
     from mem0.configs.base import (
@@ -120,7 +128,7 @@ def _build_mem0_instance(config: dict) -> object:
         VectorStoreConfig,
     )
 
-    from app.config import get_api_key
+    from app.config import get_api_key, get_tuning
 
     # Extraction LLM config — AE config top-level "extraction" section.
     # Falls back to "llm" for backward compat with legacy single-config.
@@ -133,8 +141,23 @@ def _build_mem0_instance(config: dict) -> object:
     postgres_password = os.environ.get("POSTGRES_PASSWORD", "")
     neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
 
+    # --- Fork config: quality gate ---
+    # Rejection rules and min_length come from config.yml memory_extraction section.
+    # Either setting alone enables the gate.
+    extraction_cfg = config.get("memory_extraction", {})
+    quality_gate_cfg = None
+    rejection_rules = extraction_cfg.get("rejection_rules")
+    min_fact_length = extraction_cfg.get("min_fact_length", 0)
+    if rejection_rules or min_fact_length:
+        quality_gate_cfg = {
+            "rejection_rules": rejection_rules or [],
+            "min_length": min_fact_length,
+        }
+
+    # --- Fork config: expiration ---
+    expiration_cfg = extraction_cfg.get("expiration")
+
     mem_config = MemoryConfig(
-        # v1.0: version parameter removed (was "v1.1" in 0.1.x)
         llm=LlmConfig(
             provider="openai",
             config={
@@ -153,9 +176,6 @@ def _build_mem0_instance(config: dict) -> object:
                 "openai_base_url": embeddings_config.get(
                     "base_url", "https://api.openai.com/v1"
                 ),
-                # MRL: pass embedding_dims to truncate to configured dimensions.
-                # Without this, the model returns full-size vectors (e.g., 3072 for
-                # gemini-embedding-001) which don't match the typed vector column.
                 "embedding_dims": _get_embedding_dims(config, embeddings_config),
             },
         ),
@@ -176,6 +196,8 @@ def _build_mem0_instance(config: dict) -> object:
             provider="neo4j",
             config=_neo4j_config(neo4j_password),
         ),
+        quality_gate=quality_gate_cfg,
+        expiration=expiration_cfg,
     )
 
     return Memory(config=mem_config)

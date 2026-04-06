@@ -495,24 +495,8 @@ def _get_tool_list() -> list[dict]:
                 },
             },
         },
-        {
-            "name": "search_knowledge",
-            "description": "Search extracted facts and relationships from the knowledge graph.",
-            "inputSchema": {
-                "type": "object",
-                "required": ["query", "user_id"],
-                "properties": {
-                    "query": {"type": "string", "minLength": 1, "maxLength": 2000},
-                    "user_id": {"type": "string", "minLength": 1, "maxLength": 255},
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 100,
-                        "default": 10,
-                    },
-                },
-            },
-        },
+        # search_knowledge core tool removed — replaced by knowledge_search (management tool)
+        # which returns enriched results via the CEA quality wrapper.
         # ============================================================
         # Management tools
         # ============================================================
@@ -812,10 +796,10 @@ def _get_tool_list() -> list[dict]:
         },
         {
             "name": "knowledge_search",
-            "description": "Semantic and graph search across extracted knowledge",
+            "description": "Search across vector store and knowledge graph. Returns both vector facts and graph relations enriched with quality metadata. user_id is optional -- omit for global search.",
             "inputSchema": {
                 "type": "object",
-                "required": ["query", "user_id"],
+                "required": ["query"],
                 "properties": {
                     "query": {"type": "string"},
                     "user_id": {"type": "string"},
@@ -824,50 +808,51 @@ def _get_tool_list() -> list[dict]:
             },
         },
         {
-            "name": "knowledge_get_context",
-            "description": "Retrieve relevant memories formatted for prompt injection",
-            "inputSchema": {
-                "type": "object",
-                "required": ["query", "user_id"],
-                "properties": {
-                    "query": {"type": "string"},
-                    "user_id": {"type": "string"},
-                    "limit": {"type": "integer", "default": 5},
-                },
-            },
-        },
-        {
             "name": "knowledge_add",
-            "description": "Directly add a memory to the knowledge graph",
+            "description": "Create a fact via the quality wrapper. Returns the fact ID. Optional metadata fields for quality scoring.",
             "inputSchema": {
                 "type": "object",
                 "required": ["content", "user_id"],
                 "properties": {
                     "content": {"type": "string"},
                     "user_id": {"type": "string"},
+                    "conversation_id": {"type": "string"},
+                    "durability": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                    "source_type": {"type": "string", "enum": ["decision", "observation", "speculation", "preference", "instruction"]},
+                    "original_utterance": {"type": "string"},
                 },
             },
         },
         {
             "name": "knowledge_list",
-            "description": "List all memories for a user",
+            "description": "List facts by scope. user_id is optional -- omit for all facts.",
             "inputSchema": {
                 "type": "object",
-                "required": ["user_id"],
                 "properties": {
                     "user_id": {"type": "string"},
-                    "limit": {"type": "integer", "default": 50},
+                    "limit": {"type": "integer", "default": 50, "minimum": 1, "maximum": 500},
                 },
             },
         },
         {
-            "name": "knowledge_delete",
-            "description": "Delete a specific memory by ID",
+            "name": "knowledge_feedback",
+            "description": "Record a feedback event on a fact or graph relation.",
             "inputSchema": {
                 "type": "object",
-                "required": ["memory_id"],
+                "required": ["target_type", "target_id", "event_type", "agent_id"],
                 "properties": {
-                    "memory_id": {"type": "string"},
+                    "target_type": {
+                        "type": "string",
+                        "enum": ["fact", "relation"],
+                    },
+                    "target_id": {"type": "string"},
+                    "event_type": {
+                        "type": "string",
+                        "enum": ["used", "discarded", "contradicted", "superseded", "invalidated", "conflicted"],
+                    },
+                    "agent_id": {"type": "string"},
+                    "context": {"type": "object"},
                 },
             },
         },
@@ -879,7 +864,7 @@ def _get_tool_list() -> list[dict]:
                 "required": ["message"],
                 "properties": {
                     "message": {"type": "string"},
-                    "conversation_id": {"type": "string", "format": "uuid"},
+                    "context_window_id": {"type": "string", "format": "uuid"},
                 },
             },
         },

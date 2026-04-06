@@ -89,14 +89,14 @@ The following flows constitute the infrastructure-focused **Action Engine (AE)**
 - **Embed Pipeline (Background):** Generates `pgvector` embeddings for search and retrieval.
 - **Context Assembly (Background):** Executes the build-type-specific assembly graph. Each build type registers its own assembly StateGraph (e.g., passthrough simply selects recent messages; standard-tiered runs progressive compression; knowledge-enriched adds semantic and graph layers).
 - **Retrieval:** Executes the build-type-specific retrieval graph. Produces a structured messages array using pre-computed episodic summaries and dynamically injected semantic/knowledge graph queries.
-- **Memory Extraction (Background):** Leverages Mem0 to extract structured facts into Neo4j.
+- **CEA Extraction (Background, at compaction time):** Runs within `compact_tier1()` as a synchronous StateGraph. Extracts durable facts and graph triples from artifact-stripped content using store-enriched single-pass extraction (searches existing facts before LLM call). Facts are stored via the Quality Wrapper around Mem0 with metadata in Postgres (`cea_quality_metadata`) and feedback events in an append-only log (`cea_feedback_events`).
 - **Hybrid Search and Query:** Combines vector search (pgvector) and full-text search (`ts_rank`, PostgreSQL's implementation of BM25-style ranking) via Reciprocal Rank Fusion (RRF), with optional API-based reranking (via the Infinity container or any `/rerank`-compatible provider). Backs the `search_messages` core tool.
 - **Database Queries:** Dedicated flows for straightforward structured filtering and retrieval operations (`conv_search_context_windows`, `conv_get_history`).
-- **Memory Search:** Dedicated flow for querying the knowledge graph and semantic memory via Mem0 APIs. Backs the `search_knowledge` core tool.
 - **Metrics:** Exposes Prometheus metrics collected from graph executions.
 
-The following flow constitutes the cognitive **Thought Engine (TE)**:
+The following flows constitute the cognitive **Thought Engine (TE)**:
 - **Imperator:** A graph-based ReAct agent (agent node → tool node → conditional edges) acting as the system's conversational interface. Uses standard LangGraph `MemorySaver` checkpointer for graph execution state (interrupt/resume, tool call tracking). Consumes the Context Broker's own MCP tools (`get_context`, `store_message`, `search_messages`, `search_knowledge`) — the same interface any external agent uses. Long-term conversation persistence is handled by the Context Broker pipeline; `MemorySaver` handles mid-execution state only.
+- **CEAc Enrichment (optional):** A ReAct subgraph invoked by the Imperator's `init_context_node` when `cea.ceac.enabled` is true. Searches knowledge via injected callables (`knowledge_search`, `knowledge_feedback`), ranks results using a four-dimension quality model (relevance × trustworthiness × memory_quality), enforces a token budget, and injects enriched context as a SystemMessage. Zero AE imports — fully decoupled via the TE protocol.
 
 ## 5. Storage Design
 
@@ -124,7 +124,7 @@ The Nginx gateway (`context-broker`) routes external traffic to the LangGraph co
 Programmatic access for agents, running on `/mcp`. Exposes core capabilities as tools:
 - `get_context`, `store_message`, `search_messages`, `search_knowledge` (core tools)
 - `conv_create_conversation`, `conv_list_conversations` (with `participant` filter), `conv_get_history`, `conv_search_context_windows`
-- `knowledge_add`, `knowledge_list`, `knowledge_delete`
+- `knowledge_add`, `knowledge_list`, `knowledge_feedback`
 - `query_logs` (SQL-based log filtering), `search_logs` (semantic log search, requires log vectorization)
 - `imperator_chat`
 - `metrics_get`, `install_stategraph`
@@ -184,26 +184,26 @@ Focuses entirely on chronological history with no vector search or knowledge gra
 
 **Lookback Cap for Large Budgets:** On initial assembly into a long conversation: `min(budget * initial_lookback_multiplier, max_lookback_tokens)`. Default max_lookback_tokens is 400K — prevents minutes-long initial assembly on very large windows.
 
-### 8.3 `knowledge-enriched` (Full Pipeline)
-Combines the same deadband compaction tiers as standard-tiered with semantically retrieved messages and knowledge graph facts.
+### 8.3 `knowledge-enriched` (CEAc-Enabled)
+Uses the same deadband compaction tiers as standard-tiered. Server-side RAG injection (semantic retrieval, knowledge graph) has been removed — knowledge enrichment is now performed client-side by the CEAc subgraph.
 - **Episodic Layers:** Same three-tier deadband layout as standard-tiered (tier 1 live, tier 2 chunks, tier 3 archival) with the same compaction rhythm.
-- **Semantic Retrieval:** Uses `langchain_postgres.PGVector` to dynamically find past messages similar to the most recent verbatim messages, but outside the tier 1 window.
-- **Knowledge Graph:** Dynamically traverses Mem0/Neo4j to extract structural facts and relationships pertinent to the entities identified in the recent context. At retrieval time, entities are extracted from the recent verbatim messages to serve as graph traversal seeds. Knowledge graph retrieval uses Mem0's native APIs for proper edge-following traversal — this is a justified deviation from the LangChain-first constraint (REQ §4.5) because graph traversal (following entity relationships) is architecturally distinct from vector similarity search, and no standard LangChain retriever supports it.
+- **CEAc Enrichment:** When `cea.ceac.enabled` is true, the Imperator's `init_context_node` invokes the CEAc subgraph after `get_context` returns tiers. CEAc searches knowledge via MCP tools (`knowledge_search`), ranks results using the four-dimension quality model, and injects enriched context as a SystemMessage before the agent responds. This is client-side enrichment — the server returns tiers only, the client enriches.
+- **Knowledge Graph:** Graph extraction happens at compaction time via CEAs (not at retrieval time). Graph search is available through `knowledge_search` which returns both vector facts and graph relations from the Quality Wrapper.
 
-**Prompt Ordering:** Semantic retrieval and knowledge graph layers are injected between tier 2 and tier 1 in the assembled context: tier 3 (archival) → tier 2 (chunks) → semantic retrieval → knowledge graph → tier 1 (live). This preserves prefix caching for the most stable layers while placing dynamic retrieval adjacent to the live context it augments.
+**Prompt Ordering:** Tiers are ordered most-static-first (tier 3 → tier 2 → tier 1). CEAc enrichment is injected as a separate SystemMessage after the tiered context.
 
 **Effective Utilization:** The 85% effective utilization cap is enforced by the deadband ceiling calculation — tier 1's ceiling is dynamically computed as `85% - tier3_pct - current_tier2_pct`, not by a separate multiplier applied after allocation.
 
 **Initial Assembly on Long Conversations:** When a new window is created on an existing long conversation, the assembly does not summarize the entire history. It looks back a configurable multiple (e.g., 3×) of the effective budget into the raw messages, summarizes that range into tier 2 and tier 1, and ignores everything older. Older messages remain in the database and are reachable via `search_messages` and `search_knowledge`. Subsequent assemblies are incremental — new messages push into tier 3, displaced messages are summarized into tier 2, and accumulated tier 2 summaries consolidate into tier 1. The pipeline never re-reads raw messages that have already been summarized.
 
-**Memory Confidence Scoring:** Extracted memories carry a confidence score that decays over time via a configurable half-life. Memories re-confirmed by new conversation evidence have their confidence refreshed. Low-confidence memories are deprioritized during knowledge graph retrieval.
+**Memory Quality Model (CEA):** Extracted facts carry four quality dimensions: durability (LLM prior, immutable), confidence (source reliability × source type weight), usefulness (observed from feedback events — blends with durability as events accumulate), and optional expiration (hard gate). Ranking formula: `score = relevance × trustworthiness × memory_quality`. Cold-start exploration mixes in underexplored facts at a configurable rate. See PRD-context-engineering-architecture.md REQ-CEA-Q02, REQ-CEA-C03, REQ-CEA-C06.
 
 ## 9. Async Processing Model
 
 Background processing is driven by database state, not external queues. The database is the single source of truth for both data and processing state — no external queue system is required.
 
 - **Embedding Worker:** Polls `SELECT FROM conversation_messages WHERE embedding IS NULL ORDER BY priority DESC LIMIT batch_size`. Embeds messages in batches using the configured embedding API. After embedding, checks for context windows that need reassembly.
-- **Extraction Worker:** Polls `SELECT FROM conversation_messages WHERE memory_extracted IS NOT TRUE ORDER BY priority DESC` — processes all pending conversations (no limit). Additionally, memory extraction runs at compaction time: when tier 1 compacts, the full chunk context is fed to the Mem0 pipeline for higher quality extraction from summarized content. Marks messages as extracted after successful processing.
+- **Extraction Worker:** Per-message extraction has been replaced by compaction-time extraction via the CEA. When tier 1 compacts in `compact_tier1()`, the CEAs extraction flow runs synchronously on the full chunk content with tier 2/3 context for enrichment. This produces higher-quality facts because the LLM sees significance in context rather than isolated messages. The extraction worker still polls for unextracted messages as a fallback but the primary extraction path is through compaction. Additionally, the worker periodically triggers expiration cleanup via the Quality Wrapper (`_maybe_cleanup`).
 - **Assembly Worker:** Triggered after embedding batches complete. Processes all pending windows (no limit), running concurrent assembly via `asyncio.gather` with configurable `assembly_concurrency`. Checks context windows where new tokens have accumulated since last assembly and runs the build-type-specific assembly graph.
 - **Immediate Assembly on Window Creation:** When `get_context` creates a new context window, assembly runs inline within the same request rather than waiting for the background worker. This ensures the first retrieval returns a fully assembled context without a round-trip delay.
 - **Concurrency & Locking:** PostgreSQL advisory locks prevent concurrent context assemblies on the same context window.

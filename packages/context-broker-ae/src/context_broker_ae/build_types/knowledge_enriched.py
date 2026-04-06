@@ -234,23 +234,17 @@ async def ke_load_summaries(state: KnowledgeEnrichedRetrievalState) -> dict:
 async def ke_load_recent_messages(state: KnowledgeEnrichedRetrievalState) -> dict:
     """Load tier 1 (recent/live) verbatim messages within the remaining token budget.
 
-    Uses deadband config: tier1_floor_pct sets the minimum percentage for live
-    messages. The ceiling is lower than standard-tiered because knowledge-enriched
-    reserves budget for RAG layers (semantic_retrieval_pct and knowledge_graph_pct).
+    CEA: semantic_retrieval_pct and knowledge_graph_pct are deprecated. Server-side
+    enrichment is removed; CEAc handles enrichment client-side. The tier-1 budget
+    calculation no longer reserves space for RAG layers — same logic as standard-tiered.
     """
     pool = get_pg_pool()
     build_type_config = state["build_type_config"]
     max_budget = state["max_token_budget"]
 
-    # Deadband: floor percentage for tier 1 (live messages)
-    # Knowledge-enriched has a smaller floor to reserve budget for RAG layers
-    tier1_floor_pct = build_type_config.get("tier1_floor_pct", 0.15)
-    # Ceiling: remaining after RAG layer reservations
-    semantic_pct = build_type_config.get("semantic_retrieval_pct", 0)
-    kg_pct = build_type_config.get("knowledge_graph_pct", 0)
-    tier1_ceiling_pct = max(tier1_floor_pct, 1.0 - semantic_pct - kg_pct - 0.20)
-    tier1_pct = max(tier1_floor_pct, min(tier1_ceiling_pct, 0.50))
-    tier1_budget = int(max_budget * tier1_pct)
+    # Deadband: same as standard-tiered now that server-side RAG is removed
+    tier1_floor_pct = build_type_config.get("tier1_floor_pct", 0.20)
+    tier1_budget = int(max_budget * tier1_floor_pct)
 
     # Calculate tokens already used by summaries
     summary_tokens = 0
@@ -307,158 +301,10 @@ async def ke_load_recent_messages(state: KnowledgeEnrichedRetrievalState) -> dic
     }
 
 
-async def ke_inject_semantic_retrieval(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Retrieve semantically similar messages via pgvector.
-
-    V2: Uses state["user_prompt"] (user's current prompt) when available.
-    Falls back to recent messages for backward compatibility.
-
-    G5-22a: Semantic retrieval may surface messages already compressed into
-    summaries. This is a known and accepted trade-off.
-    """
-    build_type_config = state["build_type_config"]
-    semantic_pct = build_type_config.get("semantic_retrieval_pct", 0)
-
-    if not semantic_pct or semantic_pct <= 0:
-        return {"semantic_messages": []}
-
-    if not state.get("recent_messages"):
-        return {"semantic_messages": []}
-
-    config = state["config"]
-
-    # V2: Use the user's user_prompt for semantic search when provided
-    query_text = state.get("user_prompt")
-    if not query_text:
-        # Backward compatibility: build user_prompt from recent messages
-        query_trunc = get_tuning(config, "query_truncation_chars", 200)
-        query_text = " ".join(
-            (m.get("content") or "")[:query_trunc] for m in state["recent_messages"][-3:]
-        )
-
-    try:
-        embeddings_model = get_embeddings_model(config)
-        query_embedding = await embeddings_model.aembed_query(query_text)
-    except (openai.APIError, httpx.HTTPError, ValueError) as exc:
-        _log.warning("Semantic retrieval: embedding failed: %s", exc)
-        return {"semantic_messages": []}
-
-    tier1_min_seq = (
-        state["recent_messages"][0]["sequence_number"]
-        if state["recent_messages"]
-        else None
-    )
-
-    if tier1_min_seq is None:
-        return {"semantic_messages": []}
-
-    semantic_budget = int(state["max_token_budget"] * semantic_pct)
-    tokens_per_msg = max(1, get_tuning(config, "tokens_per_message_estimate", 150))
-    semantic_limit = max(5, semantic_budget // tokens_per_msg)
-
-    pool = get_pg_pool()
-    vec_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
-
-    try:
-        rows = await pool.fetch(
-            """
-            SELECT id, role, sender, content, sequence_number, token_count,
-                   tool_calls, tool_call_id
-            FROM conversation_messages
-            WHERE conversation_id = $1
-              AND sequence_number < $2
-              AND embedding IS NOT NULL
-            ORDER BY embedding <=> $3::vector
-            LIMIT $4
-            """,
-            uuid.UUID(state["conversation_id"]),
-            tier1_min_seq,
-            vec_str,
-            semantic_limit,
-        )
-        semantic_messages = [dict(r) for r in rows]
-        _log.info(
-            "Semantic retrieval: found %d relevant messages for window=%s",
-            len(semantic_messages),
-            state["context_window_id"],
-        )
-        return {"semantic_messages": semantic_messages}
-    except (asyncpg.PostgresError, OSError) as exc:
-        _log.warning("Semantic retrieval user_prompt failed: %s", exc)
-        return {"semantic_messages": []}
-
-
-async def ke_inject_knowledge_graph(state: KnowledgeEnrichedRetrievalState) -> dict:
-    """Retrieve knowledge graph facts via Mem0.
-
-    V2: Uses state["user_prompt"] (user's current prompt) when available.
-    Falls back to recent messages for backward compatibility.
-    """
-    build_type_config = state["build_type_config"]
-    kg_pct = build_type_config.get("knowledge_graph_pct", 0)
-
-    if not kg_pct or kg_pct <= 0:
-        return {"knowledge_graph_facts": []}
-
-    if not state.get("recent_messages") and not state.get("user_prompt"):
-        return {"knowledge_graph_facts": []}
-
-    config = state["config"]
-
-    # V2: Use the user's user_prompt when provided
-    search_text = state.get("user_prompt")
-    if not search_text:
-        search_text = " ".join(
-            (m.get("content") or "")[:500] for m in state["recent_messages"][-5:]
-        )
-
-    try:
-        from context_broker_ae.memory.mem0_client import get_mem0_client
-
-        mem0 = await get_mem0_client(config)
-        if mem0 is None:
-            return {"knowledge_graph_facts": []}
-
-        loop = asyncio.get_running_loop()
-        results = await loop.run_in_executor(
-            None,
-            lambda: mem0.search(
-                search_text,
-                user_id=state["window"].get("participant_id", "default"),
-                limit=10,
-            ),
-        )
-
-        facts = []
-        if isinstance(results, dict):
-            memories = results.get("results", [])
-        else:
-            memories = results or []
-
-        # M-22: Apply half-life decay scoring and filter stale memories
-        memories = filter_and_rank_memories(memories, config)
-
-        for mem in memories:
-            fact_text = mem.get("memory") or mem.get("content") or str(mem)
-            if fact_text:
-                facts.append(fact_text)
-
-        _log.info(
-            "Knowledge graph: retrieved %d facts for window=%s",
-            len(facts),
-            state["context_window_id"],
-        )
-        return {"knowledge_graph_facts": facts}
-
-    except (
-        ConnectionError,
-        RuntimeError,
-        ValueError,
-        ImportError,
-        OSError,
-    ) as exc:  # EX-CB-001: broad catch for Mem0
-        _log.warning("Knowledge graph retrieval failed (degraded mode): %s", exc)
-        return {"knowledge_graph_facts": []}
+    # CEA: ke_inject_semantic_retrieval and ke_inject_knowledge_graph removed.
+    # Server-side enrichment is replaced by client-side CEAc subgraph.
+    # See PRD REQ-CEA-I01 (simplified get_context) and REQ-CEA-I02 (build types
+    # are compaction+extraction only, no retrieval enrichment).
 
 
 async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
@@ -692,22 +538,10 @@ def ke_route_after_wait(state: KnowledgeEnrichedRetrievalState) -> str:
     return "ke_load_summaries"
 
 
-def ke_route_after_load_messages(state: KnowledgeEnrichedRetrievalState) -> str:
-    """Route: check if build type needs semantic/KG retrieval."""
-    build_type_config = state.get("build_type_config", {})
-    needs_semantic = build_type_config.get("semantic_retrieval_pct", 0) > 0
-    needs_kg = build_type_config.get("knowledge_graph_pct", 0) > 0
-
-    if needs_semantic:
-        return "ke_inject_semantic_retrieval"
-    if needs_kg:
-        return "ke_inject_knowledge_graph"
-    return "ke_assemble_context"
-
-
 def ke_route_after_semantic(state: KnowledgeEnrichedRetrievalState) -> str:
+    # CEA: Dead code — retained only if someone re-enables server-side injection.
     build_type_config = state.get("build_type_config", {})
-    needs_kg = build_type_config.get("knowledge_graph_pct", 0) > 0
+    needs_kg = False  # CEA: deprecated, server-side KG injection removed
     if needs_kg:
         return "ke_inject_knowledge_graph"
     return "ke_assemble_context"
@@ -715,14 +549,16 @@ def ke_route_after_semantic(state: KnowledgeEnrichedRetrievalState) -> str:
 
 def build_knowledge_enriched_retrieval():
     """Build and compile the knowledge-enriched retrieval StateGraph."""
+    # CEA: Server-side semantic/KG injection removed. The enriched build type
+    # now returns tiered context only (same as standard-tiered). Enrichment
+    # happens client-side via the CEAc subgraph. The ke_inject_semantic_retrieval
+    # and ke_inject_knowledge_graph nodes are removed from the graph.
     workflow = StateGraph(KnowledgeEnrichedRetrievalState)
 
     workflow.add_node("ke_load_window", ke_load_window)
     workflow.add_node("ke_wait_for_assembly", ke_wait_for_assembly)
     workflow.add_node("ke_load_summaries", ke_load_summaries)
     workflow.add_node("ke_load_recent_messages", ke_load_recent_messages)
-    workflow.add_node("ke_inject_semantic_retrieval", ke_inject_semantic_retrieval)
-    workflow.add_node("ke_inject_knowledge_graph", ke_inject_knowledge_graph)
     workflow.add_node("ke_assemble_context", ke_assemble_context)
     workflow.add_node("ke_distill_context", ke_distill_context)
 
@@ -739,27 +575,7 @@ def build_knowledge_enriched_retrieval():
         {"ke_load_summaries": "ke_load_summaries"},
     )
     workflow.add_edge("ke_load_summaries", "ke_load_recent_messages")
-
-    workflow.add_conditional_edges(
-        "ke_load_recent_messages",
-        ke_route_after_load_messages,
-        {
-            "ke_inject_semantic_retrieval": "ke_inject_semantic_retrieval",
-            "ke_inject_knowledge_graph": "ke_inject_knowledge_graph",
-            "ke_assemble_context": "ke_assemble_context",
-        },
-    )
-
-    workflow.add_conditional_edges(
-        "ke_inject_semantic_retrieval",
-        ke_route_after_semantic,
-        {
-            "ke_inject_knowledge_graph": "ke_inject_knowledge_graph",
-            "ke_assemble_context": "ke_assemble_context",
-        },
-    )
-
-    workflow.add_edge("ke_inject_knowledge_graph", "ke_assemble_context")
+    workflow.add_edge("ke_load_recent_messages", "ke_assemble_context")
 
     workflow.add_conditional_edges(
         "ke_assemble_context",

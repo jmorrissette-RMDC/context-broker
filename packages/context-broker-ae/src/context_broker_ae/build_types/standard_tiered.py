@@ -531,28 +531,52 @@ async def compact_tier1(state: StandardTieredAssemblyState) -> dict:
         new_summaries.append(summary_text)
         cumulative_summary_tokens += summary_token_count
 
-        # Memory extraction at compaction time: feed the full chunk context
-        # to Mem0 for higher quality extraction. The LLM sees significance
-        # in context — a decision spanning 50 messages is visible as a
-        # decision, not as 50 individual statements.
-        # Fire-and-forget — don't block the assembly pipeline on extraction.
+        # CEA: Extraction at compaction time via CEAs flow (REQ-CEA-S01).
+        # The CEAs flow runs synchronously for prefix cache reuse — the
+        # extraction LLM shares the already-loaded context from summarization.
+        # On failure, compaction continues without extraction (REQ-CEA-S06).
         try:
-            from context_broker_ae.memory_extraction import build_memory_extraction
+            from context_broker_ae.cea_extraction_flow import build_cea_extraction_flow
 
             chunk_text_for_extraction = "\n".join(
-                f"{m.get('content') or ''}" for m in chunk if m.get("content")
+                f"{m.get('role', 'user')} ({m.get('sender', 'unknown')}): {m.get('content') or ''}"
+                for m in chunk if m.get("content")
             )
             if chunk_text_for_extraction:
-                extraction_graph = build_memory_extraction()
-                asyncio.create_task(
-                    extraction_graph.ainvoke({
-                        "conversation_id": state["conversation_id"],
-                        "config": state["config"],
-                        "messages": chunk,
-                    })
+                # Fetch existing tier context from DB for extraction enrichment (fix #10)
+                tier2_rows = await pool.fetch(
+                    """
+                    SELECT summary_text FROM conversation_summaries
+                    WHERE context_window_id = $1 AND tier = 2 AND is_active = TRUE
+                    ORDER BY summarizes_from_seq
+                    """,
+                    uuid.UUID(state["context_window_id"]),
                 )
+                tier3_rows = await pool.fetch(
+                    """
+                    SELECT summary_text FROM conversation_summaries
+                    WHERE context_window_id = $1 AND tier = 3 AND is_active = TRUE
+                    ORDER BY summarizes_from_seq
+                    """,
+                    uuid.UUID(state["context_window_id"]),
+                )
+                tier2_text = "\n\n".join(r["summary_text"] for r in tier2_rows)
+                tier3_text = "\n\n".join(r["summary_text"] for r in tier3_rows)
+
+                cea_flow = build_cea_extraction_flow()  # cached singleton (fix #15)
+                await cea_flow.ainvoke({
+                    "content": chunk_text_for_extraction,
+                    "tier2_context": tier2_text,
+                    "tier3_context": tier3_text,
+                    "conversation_id": state["conversation_id"],
+                    "existing_facts": [],
+                    "extraction_output": None,
+                    "dispatch_results": {},
+                    "config": state["config"],
+                    "error": None,
+                })
         except (ImportError, RuntimeError, ValueError, OSError) as exc:
-            _log.debug("Compaction-time extraction skipped: %s", exc)
+            _log.warning("CEAs extraction failed: %s", exc)  # fix #24: warning not debug
 
     _log.info(
         "Context assembly: wrote %d tier 2 chunk summaries for window=%s",

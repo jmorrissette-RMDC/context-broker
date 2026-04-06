@@ -29,6 +29,10 @@ from app.models import (
     MemGetContextInput,
     MemListInput,
     MemSearchInput,
+    KnowledgeSearchInput,
+    KnowledgeAddInput,
+    KnowledgeListInput,
+    KnowledgeFeedbackInput,
     MetricsGetInput,
     RetrieveContextInput,
     SearchContextWindowsInput,
@@ -211,25 +215,18 @@ async def _dispatch_tool_inner(
         return response
 
     elif tool_name == "search_knowledge":
+        # Deprecated: redirected to knowledge_search via quality wrapper
         validated = SearchKnowledgeInput(**arguments)
-        result = await _get_flow("memory_search").ainvoke(
-            {
-                "query": validated.query,
-                "user_id": validated.user_id,
-                "limit": validated.limit,
-                "config": config,
-                "memories": [],
-                "relations": [],
-                "degraded": False,
-                "error": None,
-            }
+        from context_broker_ae.memory.quality_wrapper import get_quality_wrapper
+        wrapper = await get_quality_wrapper(config)
+        result = await wrapper.search(
+            query=validated.query,
+            user_id=validated.user_id,
+            limit=validated.limit,
         )
-        if result.get("error") and not result.get("degraded"):
-            raise ValueError(result["error"])
         return {
-            "memories": result.get("memories", []),
-            "relations": result.get("relations", []),
-            "degraded": result.get("degraded", False),
+            "memories": result.get("vector_facts", []),
+            "relations": result.get("graph_relations", []),
         }
 
     # ============================================================
@@ -686,46 +683,18 @@ async def _dispatch_tool_inner(
         return {"entries": entries, "count": len(entries)}
 
     elif tool_name == "knowledge_search":
-        validated = MemSearchInput(**arguments)
-        result = await _get_flow("memory_search").ainvoke(
-            {
-                "query": validated.query,
-                "user_id": validated.user_id,
-                "limit": validated.limit,
-                "config": config,
-                "memories": [],
-                "relations": [],
-                "degraded": False,
-                "error": None,
-            }
+        # CEA: Route through quality wrapper for enriched results (fix #12)
+        validated = KnowledgeSearchInput(**arguments)
+        from context_broker_ae.memory.quality_wrapper import get_quality_wrapper
+        wrapper = await get_quality_wrapper(config)
+        result = await wrapper.search(
+            query=validated.query,
+            user_id=validated.user_id,
+            limit=validated.limit,
         )
-        if result.get("error") and not result.get("degraded"):
-            raise ValueError(result["error"])
         return {
-            "memories": result.get("memories", []),
-            "relations": result.get("relations", []),
-            "degraded": result.get("degraded", False),
-        }
-
-    elif tool_name == "knowledge_get_context":
-        validated = MemGetContextInput(**arguments)
-        result = await _get_flow("memory_context").ainvoke(
-            {
-                "query": validated.query,
-                "user_id": validated.user_id,
-                "limit": validated.limit,
-                "config": config,
-                "memories": [],
-                "context_text": "",
-                "degraded": False,
-                "error": None,
-            }
-        )
-        if result.get("error") and not result.get("degraded"):
-            raise ValueError(result["error"])
-        return {
-            "context": result.get("context_text", ""),
-            "memories": result.get("memories", []),
+            "vector_facts": result.get("vector_facts", []),
+            "graph_relations": result.get("graph_relations", []),
         }
 
     elif tool_name == "imperator_chat":
@@ -760,54 +729,60 @@ async def _dispatch_tool_inner(
         }
 
     elif tool_name == "knowledge_add":
-        # M-18: Routed through StateGraph flow instead of direct Mem0 call
-        validated = MemAddInput(**arguments)
-        result = await _get_flow("knowledge_add").ainvoke(
-            {
-                "content": validated.content,
-                "user_id": validated.user_id,
-                "config": config,
-                "result": None,
-                "degraded": False,
-                "error": None,
-            }
+        # CEA: Route through quality wrapper with metadata (fix #9, #12)
+        validated = KnowledgeAddInput(**arguments)
+        from context_broker_ae.memory.quality_wrapper import get_quality_wrapper
+        wrapper = await get_quality_wrapper(config)
+        import hashlib as _hashlib
+        utterance = validated.original_utterance or ""
+        content_hash = _hashlib.md5(validated.content.encode()).hexdigest()
+        add_result = await wrapper.add(
+            content=validated.content,
+            user_id=validated.user_id,
+            conversation_id=validated.conversation_id or "",
+            dedup_utterance=utterance,
         )
-        if result.get("error") and not result.get("degraded"):
-            raise ValueError(result["error"])
-        return {"status": "added", "result": result.get("result")}
+        memory_id = add_result.get("memory_id")
+        if not memory_id:
+            return {"status": "rejected", "reason": "quality gate or duplicate"}
+        # Write metadata if provided
+        if validated.durability is not None or validated.confidence is not None:
+            await wrapper.write_metadata(
+                target_type="fact",
+                target_id=memory_id,
+                durability=validated.durability if validated.durability is not None else 0.5,
+                confidence=validated.confidence if validated.confidence is not None else 0.5,
+                source_type=validated.source_type or "observation",
+                original_utterance=utterance,
+                extraction_model="manual",
+                expires_at=None,
+                user_id=validated.user_id,
+                conversation_id=validated.conversation_id or "",
+                content_hash=content_hash,
+            )
+        return {"status": "added", "memory_id": memory_id}
 
     elif tool_name == "knowledge_list":
-        # M-18: Routed through StateGraph flow instead of direct Mem0 call
-        validated = MemListInput(**arguments)
-        result = await _get_flow("knowledge_list").ainvoke(
-            {
-                "user_id": validated.user_id,
-                "limit": validated.limit,
-                "config": config,
-                "memories": [],
-                "degraded": False,
-                "error": None,
-            }
-        )
-        if result.get("error") and not result.get("degraded"):
-            raise ValueError(result["error"])
-        return {"memories": result.get("memories", [])}
+        # CEA: Route through quality wrapper (fix #12)
+        validated = KnowledgeListInput(**arguments)
+        from context_broker_ae.memory.quality_wrapper import get_quality_wrapper
+        wrapper = await get_quality_wrapper(config)
+        facts = await wrapper.list_facts(user_id=validated.user_id, limit=validated.limit)
+        return {"memories": facts}
 
-    elif tool_name == "knowledge_delete":
-        # M-18: Routed through StateGraph flow instead of direct Mem0 call
-        validated = MemDeleteInput(**arguments)
-        result = await _get_flow("knowledge_delete").ainvoke(
-            {
-                "memory_id": validated.memory_id,
-                "config": config,
-                "deleted": False,
-                "degraded": False,
-                "error": None,
-            }
+    elif tool_name == "knowledge_feedback":
+        # CEA: Record feedback event (fix #12)
+        validated = KnowledgeFeedbackInput(**arguments)
+        from context_broker_ae.memory.quality_wrapper import get_quality_wrapper
+        wrapper = await get_quality_wrapper(config)
+        ok = await wrapper.record_feedback(
+            target_type=validated.target_type,
+            target_id=validated.target_id,
+            event_type=validated.event_type,
+            agent_id=validated.agent_id,
+            context=validated.context,
         )
-        if result.get("error") and not result.get("degraded"):
-            raise ValueError(result["error"])
-        return {"status": "deleted", "memory_id": validated.memory_id}
+        return {"status": "recorded" if ok else "duplicate"}
 
     elif tool_name == "metrics_get":
         MetricsGetInput(**arguments)

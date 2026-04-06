@@ -222,9 +222,46 @@ class MemListInput(BaseModel):
 
 
 class MemDeleteInput(BaseModel):
-    """Input for knowledge_delete — delete a specific memory by ID."""
+    """Input for knowledge_delete — delete a specific memory by ID. DEPRECATED by CEA."""
 
     memory_id: str = Field(..., min_length=1, max_length=255)
+
+
+class KnowledgeSearchInput(BaseModel):
+    """Input for knowledge_search — CEA enriched search across vector + graph stores."""
+
+    query: str = Field(..., min_length=1, max_length=5000)
+    user_id: Optional[str] = Field(None, max_length=255)
+    limit: int = Field(10, ge=1, le=100)
+
+
+class KnowledgeAddInput(BaseModel):
+    """Input for knowledge_add — create a fact via quality wrapper."""
+
+    content: str = Field(..., min_length=1, max_length=10000)
+    user_id: str = Field(..., min_length=1, max_length=255)
+    conversation_id: Optional[str] = Field(None, max_length=255)
+    durability: Optional[float] = Field(None, ge=0.0, le=1.0)
+    confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
+    source_type: Optional[str] = Field(None, pattern="^(decision|observation|speculation|preference|instruction)$")
+    original_utterance: Optional[str] = Field(None, max_length=10000)
+
+
+class KnowledgeListInput(BaseModel):
+    """Input for knowledge_list — list facts by scope."""
+
+    user_id: Optional[str] = Field(None, max_length=255)
+    limit: int = Field(50, ge=1, le=500)
+
+
+class KnowledgeFeedbackInput(BaseModel):
+    """Input for knowledge_feedback — record a feedback event."""
+
+    target_type: str = Field(..., pattern="^(fact|relation)$")
+    target_id: str = Field(..., min_length=1, max_length=255)
+    event_type: str = Field(..., pattern="^(used|discarded|contradicted|superseded|invalidated|conflicted)$")
+    agent_id: str = Field(..., min_length=1, max_length=255)
+    context: Optional[dict] = None
 
 
 class QueryLogsInput(BaseModel):

@@ -551,6 +551,114 @@ async def _migration_022(conn) -> None:
     _log.info("Migration 022 complete — alert_instructions table")
 
 
+async def _migration_023(conn) -> None:
+    """Migration 23: CEA quality metadata and feedback event tables.
+
+    The Context Engineering Architecture stores quality metadata for all
+    extracted facts (pgvector) and graph relations (Neo4j) in a central
+    Postgres table. An append-only feedback event log tracks usage,
+    conflicts, supersession, and other quality signals.
+
+    See PRD-context-engineering-architecture.md REQ-CEA-Q01, REQ-CEA-C05.
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS cea_quality_metadata (
+            id                  SERIAL PRIMARY KEY,
+            target_type         TEXT NOT NULL,
+            target_id           TEXT NOT NULL,
+            durability          DOUBLE PRECISION NOT NULL,
+            confidence          DOUBLE PRECISION NOT NULL,
+            source_type         TEXT NOT NULL,
+            original_utterance  TEXT NOT NULL,
+            extraction_model    TEXT NOT NULL,
+            expires_at          TIMESTAMP WITH TIME ZONE,
+            extracted_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            user_id             TEXT NOT NULL,
+            conversation_id     UUID NOT NULL REFERENCES conversations(id),
+            UNIQUE (target_type, target_id)
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cea_metadata_user
+        ON cea_quality_metadata (user_id)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cea_metadata_conversation
+        ON cea_quality_metadata (conversation_id)
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cea_metadata_expires
+        ON cea_quality_metadata (expires_at)
+        WHERE expires_at IS NOT NULL
+    """)
+
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS cea_feedback_events (
+            id              SERIAL PRIMARY KEY,
+            target_type     TEXT NOT NULL,
+            target_id       TEXT NOT NULL,
+            event_type      TEXT NOT NULL,
+            agent_id        TEXT NOT NULL,
+            context         JSONB,
+            created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            dedup_key       TEXT NOT NULL UNIQUE
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cea_events_target
+        ON cea_feedback_events (target_type, target_id)
+    """)
+
+    _log.info("Migration 023 complete — CEA quality metadata and feedback event tables")
+
+
+async def _migration_024(conn) -> None:
+    """Migration 24: CEA post-review fixes.
+
+    1. Composite unique index for fact dedup on natural keys (replaces hash-based dedup).
+    2. Composite index on feedback events for target_type-aware usefulness aggregation.
+    """
+    # Natural-key dedup: same user saying the same thing in the same conversation
+    # should not produce duplicate facts regardless of how many times compaction runs.
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cea_metadata_natural_dedup
+        ON cea_quality_metadata (user_id, conversation_id, original_utterance)
+        WHERE original_utterance != ''
+    """)
+
+    # Target_type-aware usefulness aggregation
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cea_events_target_type_id
+        ON cea_feedback_events (target_type, target_id, event_type)
+    """)
+
+    _log.info("Migration 024 complete — CEA natural-key dedup index and usefulness index")
+
+
+async def _migration_025(conn) -> None:
+    """Migration 25: Fix natural-key dedup to allow multiple facts per utterance.
+
+    The original index on (user_id, conversation_id, original_utterance) rejected
+    multiple distinct facts extracted from the same utterance. Adding a content_hash
+    column allows different facts from the same utterance to coexist. See #503.
+    """
+    # Add content_hash column (nullable for backward compat with existing rows)
+    await conn.execute("""
+        ALTER TABLE cea_quality_metadata
+        ADD COLUMN IF NOT EXISTS content_hash TEXT
+    """)
+
+    # Drop old dedup index and create new one including content_hash
+    await conn.execute("DROP INDEX IF EXISTS idx_cea_metadata_natural_dedup")
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cea_metadata_natural_dedup
+        ON cea_quality_metadata (target_type, user_id, conversation_id, original_utterance, content_hash)
+        WHERE original_utterance != '' AND content_hash IS NOT NULL
+    """)
+
+    _log.info("Migration 025 complete — natural-key dedup includes content_hash")
+
+
 # Migration registry: version -> (description, migration_function)
 # Add new migrations here. Never modify existing entries.
 # IMPORTANT: This list MUST appear after all _migration_NNN function definitions.
@@ -628,6 +736,21 @@ MIGRATIONS: list[tuple[int, str, Callable]] = [
         22,
         "Create alert_instructions table for alerter sidecar tools",
         _migration_022,
+    ),
+    (
+        23,
+        "CEA: quality metadata and feedback event tables",
+        _migration_023,
+    ),
+    (
+        24,
+        "CEA: natural-key dedup index and usefulness aggregation index",
+        _migration_024,
+    ),
+    (
+        25,
+        "CEA: fix natural-key dedup to allow multiple facts per utterance (#503)",
+        _migration_025,
     ),
 ]
 

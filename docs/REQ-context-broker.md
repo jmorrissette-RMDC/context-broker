@@ -271,7 +271,8 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 -   `get_context` with `conversation_id` reuses the existing conversation. If no matching window exists for that `build_type` + `budget`, one is created automatically.
 -   `context_window_id` is an internal implementation detail — not exposed in the core tool interface. Window identity = conversation + build_type + budget_bucket.
 -   `build_type` is an enum populated dynamically from registered build types in config. `budget` is snapped to the nearest bucket (always up).
--   `search_knowledge` replaces both `knowledge_search` and `knowledge_get_context` — same search, one tool.
+-   `search_knowledge` replaces both `knowledge_search` and `knowledge_get_context` — same search, one tool. Returns enriched results with quality metadata (durability, confidence, usefulness) attached but does not apply ranking — ranking is performed client-side by the CEAc subgraph.
+-   `knowledge_delete` has been removed — facts are immutable (create-read only) per the CEA architecture. All post-creation activity is recorded as feedback events via `knowledge_feedback`.
 
 **Management tools** — used for administration and setup. Prefixed per naming convention:
 
@@ -283,7 +284,7 @@ The Context Broker exposes tools via MCP in two categories. Full input/output sc
 | `conv_search_context_windows` | Search and list context windows                                 |
 | `knowledge_add`               | Explicitly add a memory to the knowledge graph                  |
 | `knowledge_list`              | List stored memories, optionally filtered                       |
-| `knowledge_delete`            | Delete a specific memory by ID                                  |
+| `knowledge_feedback`          | Record a feedback event (used/discarded/contradicted/superseded/invalidated/conflicted) for a fact or graph relation. Drives usefulness scoring in the CEA ranking formula. |
 | `query_logs`                  | Query system logs. Filter by container, level, time range, keyword. |
 | `search_logs`                 | Semantic search over logs (requires log vectorization enabled). |
 | `imperator_chat`              | Conversational interface to the Imperator                       |
@@ -416,15 +417,13 @@ build_types:
     max_lookback_tokens: 400000
 
   knowledge-enriched:
-    # Episodic + semantic — full retrieval pipeline
-    tier1_floor_pct: 0.15
+    # Episodic tiers (same as standard-tiered) — CEAc handles enrichment client-side
+    tier1_floor_pct: 0.20
     tier2_chunk_pct: 0.02
     tier2_min_chunks: 3
     tier2_max_chunks: 6
     tier3_pct: 0.02
     tier3_header_pct: 0.0025
-    knowledge_graph_pct: 0.15       # extracted facts and entity relationships from graph traversal (Mem0/Neo4j)
-    semantic_retrieval_pct: 0.15    # semantically relevant messages retrieved via vector similarity search (pgvector)
     max_context_tokens: auto
     fallback_tokens: 16000
     effective_utilization: 0.85
@@ -432,7 +431,7 @@ build_types:
     max_lookback_tokens: 400000
 ```
 
--   `knowledge_graph_pct` and `semantic_retrieval_pct` are distinct retrieval mechanisms. Knowledge graph retrieval returns structured facts and relationships extracted from conversations. Semantic retrieval returns actual messages that are vectorially similar to the current conversation topic but outside the recent verbatim window. A build type can use either, both, or neither.
+-   The `knowledge-enriched` build type uses the same deadband compaction as `standard-tiered`. Server-side RAG injection (`knowledge_graph_pct`, `semantic_retrieval_pct`) has been removed — knowledge enrichment is now performed client-side by the Context Engineering Agent (CEAc) subgraph, which searches and ranks memories via MCP tools (`knowledge_search`, `knowledge_feedback`). See PRD-context-engineering-architecture.md for the full CEA design.
 -   Build types are open-ended. Deployers can define additional build types in `config.yml` to suit their use case (see c1 for examples: sliding window, knowledge-dominant, document injection).
 
 **5.4 Token Budget Resolution**
@@ -469,7 +468,7 @@ imperator:
 
 -   The Imperator's Identity, Purpose, and Persona are defined in its system prompt file (e.g., `/config/prompts/imperator_identity.md`), referenced by the `system_prompt` field. The system prompt is the primary artifact that defines who the Imperator is — it is part of the TE package. See REQ-001 §11.2.
 -   The Imperator uses standard LangGraph `MemorySaver` checkpointing for graph execution state. It consumes the Context Broker's own MCP tools (`get_context`, `store_message`, `search_messages`, `search_knowledge`) — the same interface any external agent uses. This is self-consumption: the Imperator proves the system works by using it on itself.
--   `build_type` controls which retrieval layers the Imperator's context window uses. Defaults to `standard-tiered` for lower inference cost. Switching to `knowledge-enriched` activates the full retrieval pipeline including vector similarity search and knowledge graph traversal.
+-   `build_type` controls which retrieval layers the Imperator's context window uses. Defaults to `standard-tiered` for lower inference cost. Both `standard-tiered` and `knowledge-enriched` use the same deadband compaction; the difference is that `knowledge-enriched` was historically the RAG-enabled type. With CEA, knowledge enrichment is handled client-side by the CEAc subgraph (configured via `cea.ceac.enabled` in TE config) regardless of build type.
 -   Imperator tools are organized into separate files by category in the TE package (`tools/*.py`). Each file exports a `get_tools()` function. The Imperator flow discovers and binds tools from all files at compilation. New tools are added by creating a new file — no edits to the Imperator flow.
 -   **Diagnostic tools** (always available):
     -   Query MAD container logs from Postgres (collected by the log shipper)
@@ -515,11 +514,15 @@ imperator:
 -   The Imperator decides when to write domain information — no automatic extraction. Common triggers: learning a new procedure, discovering a configuration detail, receiving operational guidance from the user.
 -   Enabled by default via `domain_information.enabled: true` in TE config.
 
-**5.8 Future: Conversation Memories**
+**5.8 Context Engineering Architecture (CEA)**
 
--   The `conv_memory_*` tool namespace is reserved for conversation-level memory management.
--   A `conversation_memories` table will store per-conversation memories — facts, decisions, preferences, and context extracted from the conversation. Memories are auto-populated during compaction (the compaction pipeline identifies salient facts worth preserving independently of the summary) and manually addable by Imperators or users via the `conv_memory_*` tools.
--   Not implemented in this release. The namespace is cleared by the `mem_*` → `knowledge_*` rename — no collision with existing tools.
+-   The CEA replaces per-message extraction with compaction-time extraction via a quality wrapper around Mem0, and moves context enrichment from server-side RAG to a client-side agentic subgraph (CEAc).
+-   **CEAs (server-side extraction):** A deterministic StateGraph that runs synchronously within `compact_tier1()`. Extracts durable facts and graph triples from artifact-stripped tier 1 content via structured LLM output. Uses store-enriched single-pass extraction: searches existing facts before the LLM call to avoid duplicates.
+-   **CEAc (client-side enrichment):** An agentic ReAct StateGraph in the TE package. When `cea.ceac.enabled` is true, the Imperator invokes CEAc before responding. CEAc searches knowledge via MCP tools, ranks results using a four-dimension quality model, and injects enriched context into the prompt.
+-   **Quality Wrapper:** Wraps Mem0 with a Postgres-backed metadata table (`cea_quality_metadata`) and append-only feedback event log (`cea_feedback_events`). All quality logic (rejection rules, metadata, expiration cleanup, enriched search) lives in the wrapper; Mem0 remains near-stock.
+-   **Four-dimension quality model:** Each fact has durability (LLM prior, immutable), confidence (source reliability), usefulness (observed from feedback events), and optional expiration (hard gate). Ranking: `score = relevance × trustworthiness × memory_quality`, where `memory_quality` blends durability and usefulness as feedback accumulates.
+-   **Facts are immutable (CR-only):** Once created, facts are never updated or deleted. All post-creation activity is recorded as feedback events (used, discarded, contradicted, superseded, invalidated, conflicted).
+-   See PRD-context-engineering-architecture.md and HLD-context-engineering-architecture.md for the full design.
 
 **5.9 Future: Artifacts**
 

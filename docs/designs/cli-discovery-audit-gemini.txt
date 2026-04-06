@@ -1,0 +1,31 @@
+YOLO mode is enabled. All tool calls will be automatically approved.
+YOLO mode is enabled. All tool calls will be automatically approved.
+Registering notification handlers for server 'hymie'. Capabilities: {
+  experimental: {},
+  logging: {},
+  prompts: { listChanged: true },
+  resources: { subscribe: false, listChanged: true },
+  tools: { listChanged: true }
+}
+Server 'hymie' supports tool updates. Listening for changes...
+Server 'hymie' supports resource updates. Listening for changes...
+Server 'hymie' supports prompt updates. Listening for changes...
+Scheduling MCP context refresh...
+Executing MCP context refresh...
+MCP context refresh complete.
+I will begin by listing the contents of the `state_4_development/context_broker_pmad/` directory to confirm the project structure and locate the requested files.
+I'll list the contents of the `app/` and `packages/` directories to confirm the file paths for the audit.
+I'll list the contents of the `packages/context-broker-ae/src/context_broker_ae/` and `packages/context-broker-te/src/context_broker_te/` directories.
+I'll list the contents of `packages/mem0-fork/mem0/memory/`, `config/prompts/`, `config-test/prompts/`, `alerter/`, `log_shipper/`, and `tests/claude/` as well.
+I'll start reading the files, focusing on the new CEA code. I'll search for `quality_wrapper.py` since it wasn't in the previous `list_directory` output.
+`quality_wrapper.py` is in `packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py`. I'll also check `packages/context-broker-te/src/context_broker_te/tools/` for the MCP tool changes.
+I'll search `packages/context-broker-te/src/context_broker_te/` for `knowledge_search`, `knowledge_add`, and the other missing elements.
+Grep results lead me to `state_4_development/context_broker_pmad/app/routes/mcp.py` and `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py`. I'll start by reading the `app/` files.
+I've analyzed `app/main.py`, `app/routes/mcp.py`, `app/stategraph_registry.py`, and `app/migrations.py`. I've documented the application lifecycle, CEA-specific validations, MCP tool definitions (including the new `knowledge_` tools), StateGraph scanning, and database migrations (specifically 023 and 024). Now, I'll examine the CEA extraction and enrichment flows, the Imperator flow, the quality wrapper, and the Mem0 quality and expiration components.
+I've analyzed the CEA extraction and enrichment flows, the Imperator flow, the quality wrapper, and the quality and expiration components of the Mem0 fork. I've documented the StateGraphs, ranking formulas, ReAct loops, and metadata management. Now, I'll examine `app/flows/tool_dispatch.py`, `packages/context-broker-ae/src/context_broker_ae/memory_extraction.py`, and `packages/mem0-fork/mem0/memory/main.py` to understand their integration with CEA.
+I've determined that `app/flows/tool_dispatch.py` routes MCP tool calls to StateGraph flows, including the new CEA tools which are redirected through `QualityWrapper`. The `memory_extraction.py` background flow now skips graph extraction to avoid bottlenecks. Crucially, the quality gate and expiration logic have been moved from the `mem0-fork` directly into the `QualityWrapper`, although the fork still supports `_skip_graph` and preserved payload keys. I'll now examine `graph_memory.py`, the Postgres initialization, the CEA and memory extraction prompt templates, the test plan, and relevant test files to complete my understanding.
+I've detailed the `graph_memory.py` fork's support for `elementId` preservation, soft-deletes, and relationship metadata, which enables the `QualityWrapper` to track graph relations. I've also reviewed the `postgres/init.sql` schema and the `cea_vector_extraction.md` and `cea_graph_extraction.md` prompts. Now, I'll examine the `test_phase_c_management.py` live tests, the `test_memory/` mock tests, and the `mem0_client.py` implementation to assess coverage for the new `knowledge_` tools, the `QualityWrapper`, and the Mem0 fork.
+I've gathered a solid understanding of the codebase, but I've spotted a potential discrepancy between `mem0_client.py`, which passes `quality_gate` and `expiration` to the `Memory` constructor, and `main.py`, which claims those fork changes were removed. I'll re-examine the beginning of `packages/mem0-fork/mem0/memory/main.py` to clarify the `Memory` class's actual responsibilities.
+The `main.py` comments clearly state that quality gate and expiration logic have been moved to the `QualityWrapper`, but `mem0_client.py` still attempts to configure them, suggesting a possible version mismatch or that `MemoryConfig` retains unused fields. Regardless, I have sufficient information for the audit, which focuses on identifying all capabilities needing test coverage. I'll briefly verify if `cea_quality_metadata` and `cea_feedback_events` are in `init.sql` or if they remain exclusively in migrations 023/024.
+I've confirmed that `cea_quality_metadata` and `cea_feedback_events` are established in `migrations.py` (023), not `init.sql`. I'm now proceeding to write the audit, adhering to the requested structure.
+I've completed the discovery audit and saved it to the requested file. The audit provides a comprehensive overview of the functions, MCP tools, pipeline stages, worker behaviors, and integration points, while also highlighting critical gaps in test coverage and potential implementation issues.

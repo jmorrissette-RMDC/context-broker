@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import async_load_config, load_config, get_build_type_config, get_tuning
-from app.database import init_postgres, close_all_connections
+from app.database import init_postgres, close_all_connections, get_pg_pool
 from app.logging_setup import setup_logging, update_log_level
 from app.migrations import run_migrations
 from app.routes import chat, health, mcp, metrics
@@ -118,6 +118,14 @@ async def lifespan(application: FastAPI):
             _log.error("Invalid build type config '%s': %s", bt_name, exc)
             raise RuntimeError(f"Invalid build type config '{bt_name}': {exc}") from exc
 
+    # REQ-CEA-A05: Validate CEA configuration parameters at startup
+    from app.config import validate_cea_config
+    try:
+        validate_cea_config(config)
+    except RuntimeError as exc:
+        _log.error("CEA config validation failed: %s", exc)
+        raise
+
     # REQ-001 §7.4 Fail Fast: Validate embedding_dims is set
     embeddings_config = config.get("embeddings", {})
     if not embeddings_config.get("embedding_dims"):
@@ -193,7 +201,19 @@ async def lifespan(application: FastAPI):
                     lambda: mem0.search("startup_init", user_id="system", limit=1),
                 )
                 _log.info("Mem0 client initialized at startup — tables ready")
-        except (ImportError, OSError, RuntimeError) as exc:
+
+                # CB-18 / #426: Create dedup index AFTER Mem0 tables exist.
+                # Migrations 8 and 16 run before Mem0 init so they skip silently
+                # and get marked as "applied" permanently. This ensures the index
+                # is created on every startup once the table exists.
+                pool = get_pg_pool()
+                await pool.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_mem0_hash_user
+                    ON mem0_memories ((payload->>'hash'), (payload->>'user_id'))
+                """)
+                _log.info("Mem0 dedup index ensured (CB-18)")
+
+        except (ImportError, OSError, RuntimeError, asyncpg.PostgresError) as exc:
             _log.warning("Mem0 startup initialization skipped: %s", exc)
 
     _log.info("Context Broker startup complete")

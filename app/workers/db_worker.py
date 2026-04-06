@@ -49,11 +49,12 @@ def _get_embed_flow():
 
 
 def _get_extraction_flow():
+    """Get the memory extraction flow, or None if deregistered (CEA replaces it)."""
     global _extraction_flow
     if _extraction_flow is None:
         builder = get_flow_builder("memory_extraction")
         if builder is None:
-            raise RuntimeError("AE package not loaded: memory_extraction unavailable")
+            return None  # CEA: extraction now happens at compaction time
         _extraction_flow = builder()
     return _extraction_flow
 
@@ -290,12 +291,23 @@ async def _extraction_worker(config: dict) -> None:
                     continue
 
                 try:
+                    extraction_flow = _get_extraction_flow()
+                    if extraction_flow is None:
+                        # CEA: per-message extraction deregistered. Mark as extracted.
+                        # Extraction now happens at compaction time in compact_tier1().
+                        await pool.execute(
+                            "UPDATE conversation_messages SET memory_extracted = TRUE "
+                            "WHERE conversation_id = $1 AND memory_extracted IS NOT TRUE",
+                            conv_row["conversation_id"],
+                        )
+                        continue
+
                     extraction_timeout = get_tuning(
                         config, "extraction_timeout_seconds", 600
                     )
                     start = time.monotonic()
                     result = await asyncio.wait_for(
-                        _get_extraction_flow().ainvoke(
+                        extraction_flow.ainvoke(
                             {
                                 "conversation_id": conv_id,
                                 "config": config,
@@ -353,6 +365,14 @@ async def _extraction_worker(config: dict) -> None:
                     ).inc()
                 finally:
                     await pool.execute("SELECT pg_advisory_unlock($1)", lock_id)
+
+            # CEA: Periodic expiration cleanup (REQ-CEA-Q03, fix #28)
+            try:
+                from context_broker_ae.memory.quality_wrapper import get_quality_wrapper
+                wrapper = await get_quality_wrapper(config)
+                await wrapper._maybe_cleanup()
+            except (ImportError, RuntimeError, asyncpg.PostgresError) as cleanup_exc:
+                _log.debug("CEA expiration cleanup skipped: %s", cleanup_exc)
 
             consecutive_failures = 0
             await asyncio.sleep(poll_interval)
