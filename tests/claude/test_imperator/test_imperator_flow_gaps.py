@@ -67,12 +67,20 @@ def test_needs_init_no_system_message(base_config):
 
 
 def test_needs_init_has_system_message(base_config):
-    """Routes to llm_call_node when SystemMessage already present."""
+    """Routes to llm_call_node only when Imperator identity SystemMessage is present."""
+    # Generic SystemMessage without Imperator marker → still needs init
     state = _make_state(
         messages=[SystemMessage(content="sys"), HumanMessage(content="Hi")],
         config=base_config,
     )
-    assert needs_init(state) == "llm_call_node"
+    assert needs_init(state) == "init_context_node"
+
+    # SystemMessage WITH Imperator marker → skip init
+    state_with_identity = _make_state(
+        messages=[SystemMessage(content="You are the Imperator"), HumanMessage(content="Hi")],
+        config=base_config,
+    )
+    assert needs_init(state_with_identity) == "llm_call_node"
 
 
 # ── should_continue() ────────────────────────────────────────────────
