@@ -733,14 +733,18 @@ async def _dispatch_tool_inner(
         validated = KnowledgeAddInput(**arguments)
         from context_broker_ae.memory.quality_wrapper import get_quality_wrapper
         wrapper = await get_quality_wrapper(config)
+        import hashlib as _hashlib
+        utterance = validated.original_utterance or ""
+        content_hash = _hashlib.md5(validated.content.encode()).hexdigest()
         add_result = await wrapper.add(
             content=validated.content,
             user_id=validated.user_id,
             conversation_id=validated.conversation_id or "",
+            dedup_utterance=utterance,
         )
         memory_id = add_result.get("memory_id")
         if not memory_id:
-            return {"status": "rejected", "reason": "quality gate"}
+            return {"status": "rejected", "reason": "quality gate or duplicate"}
         # Write metadata if provided
         if validated.durability is not None or validated.confidence is not None:
             await wrapper.write_metadata(
@@ -749,11 +753,12 @@ async def _dispatch_tool_inner(
                 durability=validated.durability or 0.5,
                 confidence=validated.confidence or 0.5,
                 source_type=validated.source_type or "observation",
-                original_utterance=validated.original_utterance or "",
+                original_utterance=utterance,
                 extraction_model="manual",
                 expires_at=None,
                 user_id=validated.user_id,
                 conversation_id=validated.conversation_id or "",
+                content_hash=content_hash,
             )
         return {"status": "added", "memory_id": memory_id}
 
