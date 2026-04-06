@@ -438,8 +438,18 @@ def _should_iterate(state: CEAcEnrichmentState) -> str:
     return "assemble_context"
 
 
+_compiled_ceac_flow = None
+
+
 def build_ceac_enrichment_flow():
-    """Build and compile the CEAc enrichment StateGraph (ReAct pattern)."""
+    """Build and compile the CEAc enrichment StateGraph (ReAct pattern).
+
+    Cached singleton — compiled once, reused across invocations.
+    """
+    global _compiled_ceac_flow
+    if _compiled_ceac_flow is not None:
+        return _compiled_ceac_flow
+
     workflow = StateGraph(CEAcEnrichmentState)
 
     workflow.add_node("decide_search", decide_search)
@@ -455,4 +465,5 @@ def build_ceac_enrichment_flow():
     workflow.add_edge("assemble_context", "record_feedback")
     workflow.add_edge("record_feedback", END)
 
-    return workflow.compile()
+    _compiled_ceac_flow = workflow.compile()
+    return _compiled_ceac_flow

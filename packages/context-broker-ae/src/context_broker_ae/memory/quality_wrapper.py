@@ -16,9 +16,11 @@ See HLD-context-engineering-architecture.md S2 Quality Wrapper.
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -149,14 +151,12 @@ class QualityWrapper:
         # The composite unique index on (user_id, conversation_id, original_utterance)
         # in cea_quality_metadata enforces this at the DB level too, but checking
         # here avoids the Mem0 add() call for known duplicates.
-        import uuid as _uuid
         try:
-            conv_uuid = _uuid.UUID(conversation_id) if conversation_id else None
+            conv_uuid = uuid.UUID(conversation_id) if conversation_id else None
         except ValueError:
             conv_uuid = None
 
-        import hashlib as _hashlib
-        content_hash = _hashlib.md5(content.encode()).hexdigest()
+        content_hash = hashlib.md5(content.encode()).hexdigest()
 
         if conv_uuid and dedup_utterance:
             existing = await self.pool.fetchval(
@@ -238,9 +238,8 @@ class QualityWrapper:
         content_hash: Optional[str] = None,
     ) -> None:
         """Write quality metadata to the Postgres cea_quality_metadata table."""
-        import uuid as _uuid
         try:
-            conv_uuid = _uuid.UUID(conversation_id)
+            conv_uuid = uuid.UUID(conversation_id)
         except (ValueError, AttributeError):
             _log.warning("Invalid conversation_id for metadata: %s", conversation_id)
             return
@@ -267,9 +266,8 @@ class QualityWrapper:
                 conv_uuid,
                 content_hash,
             )
-        except asyncpg.UniqueViolationError:
-            # Natural-key dedup index collision under concurrent extraction — safe to ignore
-            _log.debug("Metadata natural-key collision (concurrent extraction): %s/%s", target_type, target_id)
+        # Note: ON CONFLICT DO NOTHING handles natural-key collisions silently.
+        # No UniqueViolationError will be raised.
 
     # ------------------------------------------------------------------
     # Read side
@@ -410,7 +408,7 @@ class QualityWrapper:
                 target_id,
                 event_type,
                 agent_id,
-                __import__("json").dumps(context) if context else None,
+                json.dumps(context, default=str) if context else None,
                 dedup,
             )
             # Check if row was actually inserted (fix #25)

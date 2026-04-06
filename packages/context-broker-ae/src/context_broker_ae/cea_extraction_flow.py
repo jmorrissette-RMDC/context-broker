@@ -10,6 +10,7 @@ See HLD S3 Flow A: Extraction (Write Side).
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -239,49 +240,33 @@ async def dispatch_results(state: CEAsExtractionState) -> dict:
         if not content:
             continue
 
-        user_id = fact.get("user_id", "unknown")
-        conversation_id = state["conversation_id"]
-        original_utterance = fact.get("original_utterance", "")
-        expires_at = resolve_temporal(fact.get("expires_at"), extraction_date)
+        try:
+            user_id = fact.get("user_id", "unknown")
+            conversation_id = state["conversation_id"]
+            original_utterance = fact.get("original_utterance", "")
+            expires_at = resolve_temporal(fact.get("expires_at"), extraction_date)
 
-        add_result = await wrapper.add(
-            content=content,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            skip_graph=False,
-            dedup_utterance=original_utterance,
-        )
+            add_result = await wrapper.add(
+                content=content,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                skip_graph=False,
+                dedup_utterance=original_utterance,
+            )
 
-        memory_id = add_result.get("memory_id")
-        if not memory_id:
-            continue
+            memory_id = add_result.get("memory_id")
+            if not memory_id:
+                continue
 
-        import hashlib as _hashlib
-        durability = float(fact.get("durability") or 0.5)
-        confidence = float(fact.get("confidence") or 0.5)
-        source_type = fact.get("source_type", "observation")
-        fact_content_hash = _hashlib.md5(content.encode()).hexdigest()
+            durability = float(fact.get("durability") or 0.5)
+            confidence = float(fact.get("confidence") or 0.5)
+            source_type = fact.get("source_type", "observation")
+            fact_content_hash = hashlib.md5(content.encode()).hexdigest()
 
-        # Write quality metadata for the vector fact
-        await wrapper.write_metadata(
-            target_type="fact",
-            target_id=memory_id,
-            durability=durability,
-            confidence=confidence,
-            source_type=source_type,
-            original_utterance=original_utterance,
-            extraction_model=extraction_model,
-            expires_at=expires_at,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            content_hash=fact_content_hash,
-        )
-
-        # Write quality metadata for any graph relations created by Mem0 (REQ-CEA-Q01)
-        for rel_id in add_result.get("relation_ids", []):
+            # Write quality metadata for the vector fact
             await wrapper.write_metadata(
-                target_type="relation",
-                target_id=rel_id,
+                target_type="fact",
+                target_id=memory_id,
                 durability=durability,
                 confidence=confidence,
                 source_type=source_type,
@@ -293,45 +278,67 @@ async def dispatch_results(state: CEAsExtractionState) -> dict:
                 content_hash=fact_content_hash,
             )
 
-        if relationship == "NEW":
-            counts["new"] += 1
-            if CEA_FACTS_EXTRACTED:
-                CEA_FACTS_EXTRACTED.labels(relationship="NEW").inc()
+            # Write quality metadata for any graph relations created by Mem0 (REQ-CEA-Q01)
+            for rel_id in add_result.get("relation_ids", []):
+                await wrapper.write_metadata(
+                    target_type="relation",
+                    target_id=rel_id,
+                    durability=durability,
+                    confidence=confidence,
+                    source_type=source_type,
+                    original_utterance=original_utterance,
+                    extraction_model=extraction_model,
+                    expires_at=expires_at,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    content_hash=fact_content_hash,
+                )
 
-        elif relationship == "SUPERSEDES":
-            counts["supersedes"] += 1
-            related_id = fact.get("related_fact_id")
-            if related_id:
-                await wrapper.record_feedback(
-                    target_type="fact",
-                    target_id=related_id,
-                    event_type="superseded",
-                    agent_id="ceas",  # fix #20
-                    context={"replacement_id": memory_id},
-                )
-            if CEA_FACTS_EXTRACTED:
-                CEA_FACTS_EXTRACTED.labels(relationship="SUPERSEDES").inc()
+            if relationship == "NEW":
+                counts["new"] += 1
+                if CEA_FACTS_EXTRACTED:
+                    CEA_FACTS_EXTRACTED.labels(relationship="NEW").inc()
 
-        elif relationship == "CONFLICTS":
-            counts["conflicts"] += 1
-            related_id = fact.get("related_fact_id")
-            if related_id:
-                await wrapper.record_feedback(
-                    target_type="fact",
-                    target_id=related_id,
-                    event_type="conflicted",
-                    agent_id="ceas",  # fix #20
-                    context={"conflicting_id": memory_id},
-                )
-                await wrapper.record_feedback(
-                    target_type="fact",
-                    target_id=memory_id,
-                    event_type="conflicted",
-                    agent_id="ceas",  # fix #20
-                    context={"conflicting_id": related_id},
-                )
-            if CEA_FACTS_EXTRACTED:
-                CEA_FACTS_EXTRACTED.labels(relationship="CONFLICTS").inc()
+            elif relationship == "SUPERSEDES":
+                counts["supersedes"] += 1
+                related_id = fact.get("related_fact_id")
+                if related_id:
+                    await wrapper.record_feedback(
+                        target_type="fact",
+                        target_id=related_id,
+                        event_type="superseded",
+                        agent_id="ceas",
+                        context={"replacement_id": memory_id},
+                    )
+                if CEA_FACTS_EXTRACTED:
+                    CEA_FACTS_EXTRACTED.labels(relationship="SUPERSEDES").inc()
+
+            elif relationship == "CONFLICTS":
+                counts["conflicts"] += 1
+                related_id = fact.get("related_fact_id")
+                if related_id:
+                    await wrapper.record_feedback(
+                        target_type="fact",
+                        target_id=related_id,
+                        event_type="conflicted",
+                        agent_id="ceas",
+                        context={"conflicting_id": memory_id},
+                    )
+                    await wrapper.record_feedback(
+                        target_type="fact",
+                        target_id=memory_id,
+                        event_type="conflicted",
+                        agent_id="ceas",
+                        context={"conflicting_id": related_id},
+                    )
+                if CEA_FACTS_EXTRACTED:
+                    CEA_FACTS_EXTRACTED.labels(relationship="CONFLICTS").inc()
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log.warning("CEAs: failed to dispatch fact '%s': %s", content[:50], exc)
+            continue
 
     # Graph triples are handled by Mem0 internally when skip_graph=False.
     # The wrapper.add() call passes content to Mem0, which runs its own entity
