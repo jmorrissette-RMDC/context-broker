@@ -557,14 +557,14 @@ class QualityWrapper:
         rows = await self.pool.fetch(
             """
             SELECT id, (payload->>'data') AS memory,
-                   1 - (embedding <=> $1::vector) AS score,
+                   1 - (vector <=> $1::vector) AS score,
                    payload->>'hash' AS hash,
                    payload->>'created_at' AS created_at,
                    payload->>'updated_at' AS updated_at,
                    payload->>'user_id' AS user_id
             FROM mem0_memories
-            WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> $1::vector
+            WHERE vector IS NOT NULL
+            ORDER BY vector <=> $1::vector
             LIMIT $2
             """,
             str(embedding),
