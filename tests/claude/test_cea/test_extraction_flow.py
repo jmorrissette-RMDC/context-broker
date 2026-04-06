@@ -164,7 +164,7 @@ class TestDispatchResults:
 
     @pytest.mark.asyncio
     async def test_new_fact_dispatched(self):
-        from context_broker_ae.cea_extraction_flow import dispatch_results
+        from context_broker_ae.cea_extraction_flow import dispatch_extraction_results as dispatch_results
 
         extraction = {
             "facts": [{
@@ -195,7 +195,7 @@ class TestDispatchResults:
 
     @pytest.mark.asyncio
     async def test_duplicate_skipped(self):
-        from context_broker_ae.cea_extraction_flow import dispatch_results
+        from context_broker_ae.cea_extraction_flow import dispatch_extraction_results as dispatch_results
 
         extraction = {
             "facts": [{
@@ -218,7 +218,7 @@ class TestDispatchResults:
 
     @pytest.mark.asyncio
     async def test_no_extraction_output(self):
-        from context_broker_ae.cea_extraction_flow import dispatch_results
+        from context_broker_ae.cea_extraction_flow import dispatch_extraction_results as dispatch_results
 
         state = _base_state(extraction_output=None)
         result = await dispatch_results(state)
@@ -260,7 +260,7 @@ class TestShouldDispatch:
         from context_broker_ae.cea_extraction_flow import _should_dispatch
 
         state = _base_state(extraction_output={"facts": []})
-        assert _should_dispatch(state) == "dispatch_results"
+        assert _should_dispatch(state) == "dispatch_extraction_results"
 
     def test_routes_to_error_on_no_output(self):
         from context_broker_ae.cea_extraction_flow import _should_dispatch

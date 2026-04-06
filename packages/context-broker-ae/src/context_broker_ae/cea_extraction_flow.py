@@ -196,7 +196,7 @@ async def run_extraction_llm(state: CEAsExtractionState) -> dict:
         return {"extraction_output": None, "error": f"Extraction LLM error: {exc}"}
 
 
-async def dispatch_results(state: CEAsExtractionState) -> dict:
+async def dispatch_extraction_results(state: CEAsExtractionState) -> dict:
     """Process structured extraction output and write to stores.
 
     REQ-CEA-S05: Dispatch NEW/DUPLICATE/SUPERSEDES/CONFLICTS.
@@ -372,7 +372,7 @@ def _should_dispatch(state: CEAsExtractionState) -> str:
     """Route: dispatch results or handle error."""
     if state.get("error") or not state.get("extraction_output"):
         return "handle_error"
-    return "dispatch_results"
+    return "dispatch_extraction_results"
 
 
 # Compiled flow singleton (fix #15 — don't recompile per chunk)
@@ -389,13 +389,13 @@ def build_cea_extraction_flow():
 
     workflow.add_node("search_existing_facts", search_existing_facts)
     workflow.add_node("run_extraction_llm", run_extraction_llm)
-    workflow.add_node("dispatch_results", dispatch_results)
+    workflow.add_node("dispatch_extraction_results", dispatch_extraction_results)
     workflow.add_node("handle_error", handle_error)
 
     workflow.set_entry_point("search_existing_facts")
     workflow.add_edge("search_existing_facts", "run_extraction_llm")
     workflow.add_conditional_edges("run_extraction_llm", _should_dispatch)
-    workflow.add_edge("dispatch_results", END)
+    workflow.add_edge("dispatch_extraction_results", END)
     workflow.add_edge("handle_error", END)
 
     _compiled_flow = workflow.compile()

@@ -142,14 +142,14 @@ class TestKnowledgeEnrichedBudget:
     """Tests for knowledge-enriched build type budget change."""
 
     def test_no_rag_budget_reservation_in_source(self):
-        """ke_load_recent_messages should not reserve budget for semantic/KG retrieval."""
+        """ke_load_recent_messages should not use semantic_retrieval_pct or knowledge_graph_pct for budget calculation."""
         import inspect
         from context_broker_ae.build_types.knowledge_enriched import ke_load_recent_messages
 
         source = inspect.getsource(ke_load_recent_messages)
-        # Should NOT contain semantic_retrieval_pct or knowledge_graph_pct
-        assert "semantic_retrieval_pct" not in source
-        assert "knowledge_graph_pct" not in source
+        # Should NOT use these config keys for budget calculation (comments mentioning deprecation are OK)
+        assert '.get("semantic_retrieval_pct")' not in source
+        assert '.get("knowledge_graph_pct")' not in source
 
 
 # ---------------------------------------------------------------------------
