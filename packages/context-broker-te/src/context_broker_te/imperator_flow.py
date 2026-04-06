@@ -73,7 +73,6 @@ class ImperatorState(TypedDict):
 # ── Core search tools (depend on AE flow singletons) ──────────────────
 
 _conv_search_flow_singleton = None
-_mem_search_flow_singleton = None
 
 
 def _get_conv_search_flow():
@@ -87,17 +86,6 @@ def _get_conv_search_flow():
             )
         _conv_search_flow_singleton = builder()
     return _conv_search_flow_singleton
-
-
-def _get_mem_search_flow():
-    global _mem_search_flow_singleton
-    if _mem_search_flow_singleton is None:
-        ctx = get_ctx()
-        builder = ctx.get_flow_builder("memory_search")
-        if builder is None:
-            raise RuntimeError("AE package not loaded: memory_search flow unavailable")
-        _mem_search_flow_singleton = builder()
-    return _mem_search_flow_singleton
 
 
 @tool
@@ -157,26 +145,22 @@ async def knowledge_search(query: str, user_id: str = "imperator", limit: int = 
     """
     ctx = get_ctx()
     config = await ctx.async_load_config()
-    flow = _get_mem_search_flow()
-    result = await flow.ainvoke(
-        {
-            "query": query,
-            "user_id": user_id,
-            "limit": limit,
-            "config": config,
-            "memories": [],
-            "relations": [],
-            "degraded": False,
-            "error": None,
-        }
+    result = await ctx.dispatch_tool(
+        "knowledge_search",
+        {"query": query, "user_id": user_id, "limit": limit},
+        config,
+        None,
     )
-    memories = result.get("memories", [])
-    if not memories:
+    facts = result.get("vector_facts", [])
+    relations = result.get("graph_relations", [])
+    if not facts and not relations:
         return "No relevant memories found."
-    lines = [f"Found {len(memories)} relevant memory/memories:"]
-    for mem in memories:
+    lines = [f"Found {len(facts)} facts and {len(relations)} relations:"]
+    for mem in facts:
         fact = mem.get("memory") or mem.get("content") or str(mem)
         lines.append(f"- {fact}")
+    for rel in relations:
+        lines.append(f"- {rel.get('source', '?')} --[{rel.get('relationship', '?')}]--> {rel.get('destination', '?')}")
     return "\n".join(lines)
 
 
