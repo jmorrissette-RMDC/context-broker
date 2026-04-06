@@ -414,7 +414,7 @@ class TestMetadataQuality:
             "ORDER BY qm.extracted_at DESC LIMIT 10"
         ).strip()
 
-        if not raw or raw == "0" or "0 rows" in raw:
+        if not raw or "(0 rows)" in raw:
             log_issue(
                 "test_metadata_quality",
                 "warning",

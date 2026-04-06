@@ -99,8 +99,8 @@ class TestCEAExtraction:
 
         CEA extraction fires at compaction time (within compact_tier1).
         This verifies that at least some facts have associated quality metadata.
-        If compaction has not been triggered yet (too few messages), logs a
-        warning but does not hard-fail.
+        Hard-fails if the table is empty — Phase 1 data load should have
+        triggered compaction and produced extraction results.
         """
         import re
         raw = docker_psql("SELECT COUNT(*) FROM cea_quality_metadata").strip()
@@ -169,9 +169,10 @@ class TestCEAMetrics:
                 "cea_extraction_* metrics",
                 "none found",
             )
-        # Don't hard-fail — metrics only appear after the code path executes
-        # (prometheus_client registers on first use, not at import time)
-        assert True
+        # Intentional soft-fail: prometheus_client registers metrics on first use,
+        # not at import time. Metrics will be absent on a fresh deploy before any
+        # compaction fires. log_issue above records absence as a warning.
+        assert True  # noqa: S101 — soft-fail by design, see comment above
 
 
 class TestAssembly:

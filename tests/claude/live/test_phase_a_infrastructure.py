@@ -327,6 +327,19 @@ class TestKnowledgeToolsPresent:
             "knowledge_delete should have been removed from tools/list (CEA: facts are CR-only)"
         )
 
+    def test_knowledge_get_context_absent(self, http_client):
+        """A-new-b2: knowledge_get_context is NOT registered (removed by CEA — enrichment is client-side)."""
+        resp = mcp_call_raw(
+            http_client,
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+        tools = resp.json()["result"]["tools"]
+        tool_names = {t["name"] for t in tools}
+        assert "knowledge_get_context" not in tool_names, (
+            "knowledge_get_context should have been removed from tools/list "
+            "(CEA: enrichment is now client-side via CEAc)"
+        )
+
     def test_knowledge_core_tools_present(self, http_client):
         """A-new-c: knowledge_search, knowledge_add, knowledge_list are registered."""
         resp = mcp_call_raw(

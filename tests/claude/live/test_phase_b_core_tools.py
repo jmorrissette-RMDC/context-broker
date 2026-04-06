@@ -2,7 +2,7 @@
 Phase B — Core tool integration tests.
 
 Tests the four core MCP tools (store_message, get_context, search_messages,
-search_knowledge) against the live stack with Phase 1 bulk-loaded data.
+knowledge_search) against the live stack with Phase 1 bulk-loaded data.
 
 All tests run against the live stack at http://localhost:8081.
 """

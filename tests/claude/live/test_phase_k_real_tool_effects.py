@@ -414,7 +414,9 @@ class TestKnowledgeAddCreatesSearchableMemory:
         )
         assert add_resp.status_code == 200
         add_result = extract_mcp_result(add_resp)
-        assert isinstance(add_result, dict), f"knowledge_add returned unexpected type: {add_result}"
+        assert add_result.get("status") == "added", (
+            f"knowledge_add should return status='added' (CEA format), got: {add_result}"
+        )
 
         # Search for the memory with retries
         # CEA: knowledge_search returns vector_facts (not memories)

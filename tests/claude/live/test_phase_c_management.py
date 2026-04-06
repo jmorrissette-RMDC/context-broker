@@ -454,7 +454,12 @@ class TestMemAdd:
         )
         assert resp.status_code == 200
         result = extract_mcp_result(resp)
-        assert isinstance(result, dict)
+        assert result.get("status") == "added", (
+            f"knowledge_add should return status='added', got: {result}"
+        )
+        assert result.get("memory_id") is not None, (
+            f"knowledge_add should return memory_id, got: {result}"
+        )
 
     def test_knowledge_add_embedding_persisted(self, http_client):
         """C-15b: After knowledge_add, verify memory_id returned and row count increases.
@@ -679,10 +684,11 @@ class TestKnowledgeFeedback:
         assert resp2.status_code == 200
         result2 = extract_mcp_result(resp2)
 
-        # At least one of the two should be duplicate (within the same minute bucket)
+        # Second call within the same minute bucket must be deduplicated
         statuses = {result1.get("status"), result2.get("status")}
-        assert "duplicate" in statuses or "recorded" in statuses, (
-            f"Expected one recorded and one duplicate, got: {result1}, {result2}"
+        assert "duplicate" in statuses, (
+            f"Expected second feedback to be deduplicated (status='duplicate'), "
+            f"got: {result1}, {result2}"
         )
 
     def test_knowledge_feedback_invalid_event_type_rejected(self, http_client):
@@ -697,9 +703,9 @@ class TestKnowledgeFeedback:
                 "agent_id": "test",
             },
         )
-        # Should return 400 validation error
-        assert resp.status_code in (400, 422, 500), (
-            f"Expected validation error for invalid event_type, got {resp.status_code}"
+        # Should return 400/422 validation error — 500 is a server crash, not validation
+        assert resp.status_code in (400, 422), (
+            f"Expected validation error (400/422) for invalid event_type, got {resp.status_code}"
         )
 
     def test_knowledge_feedback_persisted_in_db(self, http_client):
