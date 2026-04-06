@@ -155,13 +155,17 @@ class QualityWrapper:
         except ValueError:
             conv_uuid = None
 
+        import hashlib as _hashlib
+        content_hash = _hashlib.md5(content.encode()).hexdigest()
+
         if conv_uuid and dedup_utterance:
             existing = await self.pool.fetchval(
                 """
                 SELECT target_id FROM cea_quality_metadata
-                WHERE user_id = $1 AND conversation_id = $2 AND original_utterance = $3
+                WHERE user_id = $1 AND conversation_id = $2
+                  AND original_utterance = $3 AND content_hash = $4
                 """,
-                user_id, conv_uuid, dedup_utterance,
+                user_id, conv_uuid, dedup_utterance, content_hash,
             )
             if existing:
                 _log.debug("Duplicate fact detected (natural key match): %s", content[:50])
@@ -169,16 +173,22 @@ class QualityWrapper:
 
         await self._maybe_cleanup()
 
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: self.mem0.add(
-                messages=content,
-                user_id=user_id,
-                _skip_graph=skip_graph,
-                metadata=metadata or {},
-            ),
-        )
+        try:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: self.mem0.add(
+                    messages=content,
+                    user_id=user_id,
+                    _skip_graph=skip_graph,
+                    metadata=metadata or {},
+                ),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log.warning("Mem0 add failed for content '%s': %s", content[:50], exc)
+            return _empty
 
         # Extract the memory ID from Mem0's response
         memory_id = None
@@ -225,6 +235,7 @@ class QualityWrapper:
         expires_at: Optional[datetime],
         user_id: str,
         conversation_id: str,
+        content_hash: Optional[str] = None,
     ) -> None:
         """Write quality metadata to the Postgres cea_quality_metadata table."""
         import uuid as _uuid
@@ -239,8 +250,9 @@ class QualityWrapper:
                 """
                 INSERT INTO cea_quality_metadata
                     (target_type, target_id, durability, confidence, source_type,
-                     original_utterance, extraction_model, expires_at, user_id, conversation_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                     original_utterance, extraction_model, expires_at, user_id, conversation_id,
+                     content_hash)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 ON CONFLICT (target_type, target_id) DO NOTHING
                 """,
                 target_type,
@@ -253,6 +265,7 @@ class QualityWrapper:
                 expires_at,
                 user_id,
                 conv_uuid,
+                content_hash,
             )
         except asyncpg.UniqueViolationError:
             # Natural-key dedup index collision under concurrent extraction — safe to ignore
@@ -437,7 +450,9 @@ class QualityWrapper:
                     raise
                 except Exception as exc:
                     _log.warning("Failed to delete expired fact %s: %s", row["target_id"], exc)
+                    continue  # Don't delete metadata if Mem0 delete failed
 
+            # Only delete metadata after successful Mem0 cleanup (or for non-fact types)
             await self.pool.execute(
                 "DELETE FROM cea_quality_metadata WHERE target_type = $1 AND target_id = $2",
                 row["target_type"],

@@ -409,10 +409,10 @@ async def record_feedback(state: CEAcEnrichmentState) -> dict:
                 agent_id="ceac",
                 context=event.get("context"),
             )
+            if CEAC_FEEDBACK_EVENTS:
+                CEAC_FEEDBACK_EVENTS.labels(event_type=event["event_type"]).inc()
         except Exception as exc:
             _log.warning("CEAc: feedback recording failed for %s: %s", event["target_id"], exc)
-        if CEAC_FEEDBACK_EVENTS:
-            CEAC_FEEDBACK_EVENTS.labels(event_type=event["event_type"]).inc()
 
     _log.debug("CEAc.record_feedback recorded %d events", len(events))
     return {}

@@ -256,9 +256,11 @@ async def dispatch_results(state: CEAsExtractionState) -> dict:
         if not memory_id:
             continue
 
-        durability = float(fact.get("durability", 0.5))
-        confidence = float(fact.get("confidence", 0.5))
+        import hashlib as _hashlib
+        durability = float(fact.get("durability") or 0.5)
+        confidence = float(fact.get("confidence") or 0.5)
         source_type = fact.get("source_type", "observation")
+        fact_content_hash = _hashlib.md5(content.encode()).hexdigest()
 
         # Write quality metadata for the vector fact
         await wrapper.write_metadata(
@@ -272,6 +274,7 @@ async def dispatch_results(state: CEAsExtractionState) -> dict:
             expires_at=expires_at,
             user_id=user_id,
             conversation_id=conversation_id,
+            content_hash=fact_content_hash,
         )
 
         # Write quality metadata for any graph relations created by Mem0 (REQ-CEA-Q01)
@@ -287,6 +290,7 @@ async def dispatch_results(state: CEAsExtractionState) -> dict:
                 expires_at=expires_at,
                 user_id=user_id,
                 conversation_id=conversation_id,
+                content_hash=fact_content_hash,
             )
 
         if relationship == "NEW":
