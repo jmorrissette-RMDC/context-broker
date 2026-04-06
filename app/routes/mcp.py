@@ -864,7 +864,7 @@ def _get_tool_list() -> list[dict]:
                 "required": ["message"],
                 "properties": {
                     "message": {"type": "string"},
-                    "conversation_id": {"type": "string", "format": "uuid"},
+                    "context_window_id": {"type": "string", "format": "uuid"},
                 },
             },
         },
