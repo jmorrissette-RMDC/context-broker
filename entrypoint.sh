@@ -95,9 +95,8 @@ for wheel in /app/stategraph-wheels/*.whl; do
 done
 
 # Ensure /data subdirectories exist.
-# /data is a bind mount. With UID matching the host user (UID 1000),
-# the container user can create subdirectories directly.
-mkdir -p /data/downloads
+# /data is a bind mount — may lack write permission depending on host setup.
+mkdir -p /data/downloads 2>/dev/null || true
 
 # Start the application
 exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
