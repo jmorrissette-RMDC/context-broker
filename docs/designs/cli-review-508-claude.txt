@@ -1,0 +1,92 @@
+Here is the complete findings report:
+
+---
+
+## Code Review Findings — CEA Live Test Suite (#508)
+
+### Finding 1 — Stale tool name in module docstring
+**File:** `test_phase_b_core_tools.py` — module docstring, line 4
+**Description:** Module header still lists `search_knowledge` (old name): `"Tests the four core MCP tools (store_message, get_context, search_messages, search_knowledge)"`. The actual test at B-08 correctly uses `knowledge_search`, but the docstring is misleading to anyone reading the file header.
+
+---
+
+### Finding 2 — Dedup assertion is trivially true (logic error)
+**File:** `test_phase_c_management.py` — `TestKnowledgeFeedback.test_knowledge_feedback_deduplicates`, lines 682–686
+```python
+statuses = {result1.get("status"), result2.get("status")}
+assert "duplicate" in statuses or "recorded" in statuses, (...)
+```
+**Description:** If deduplication fails and both calls return `"recorded"`, `statuses = {"recorded"}` — the `or "recorded" in statuses` branch makes the assertion pass. The test verifies nothing. The assertion should be `assert "duplicate" in statuses` to actually prove the second call was deduped.
+
+---
+
+### Finding 3 — First-call assertion too lenient in records_event test
+**File:** `test_phase_c_management.py` — `TestKnowledgeFeedback.test_knowledge_feedback_records_event`, line 651
+```python
+assert result.get("status") in ("recorded", "duplicate"), (...)
+```
+**Description:** The very first call to `knowledge_feedback` (with a fresh `memory_id`) should always return `"recorded"`, never `"duplicate"`. Accepting `"duplicate"` here could mask a system-wide bug where the dedup logic incorrectly fires on the initial call. Should assert `result.get("status") == "recorded"`.
+
+---
+
+### Finding 4 — 500 accepted as valid validation error response
+**File:** `test_phase_c_management.py` — `TestKnowledgeFeedback.test_knowledge_feedback_invalid_event_type_rejected`, line 701
+```python
+assert resp.status_code in (400, 422, 500), (...)
+```
+**Description:** HTTP 500 indicates an unhandled server exception. A clean validation rejection of an invalid `event_type` should return 400 or 422. Including 500 means a server crash on bad input passes this test. Should be `(400, 422)`.
+
+---
+
+### Finding 5 — pytest.fail vs pytest.skip mismatch (D workers)
+**File:** `test_phase_d_workers.py` — `TestCEAExtraction.test_cea_quality_metadata_populated`, lines 109–122
+```python
+if count == 0:
+    log_issue(..., "warning", ...)
+    pytest.fail("cea_quality_metadata is empty — CEA extraction has not produced any facts. ...")
+```
+**Description:** The docstring explicitly says *"logs a warning but does not hard-fail"* when compaction hasn't been triggered. The code contradicts this: it calls `pytest.fail()`. Because CEA extraction fires at compaction time (not per-message), an environment with fewer messages than the compaction threshold will trigger a guaranteed spurious failure. Should use `pytest.skip()`, consistent with the docstring and with the sibling test `test_cea_metadata_has_required_columns` which correctly calls `pytest.skip()` when the table is empty.
+
+---
+
+### Finding 6 — pytest.fail vs pytest.skip mismatch (L quality eval)
+**File:** `test_phase_l_quality_eval.py` — `TestKnowledgeExtractionQuality.test_knowledge_extraction_quality`, lines 307–310
+```python
+if not vector_facts:
+    log_issue(..., "warning", ...)
+    pytest.fail("No vector_facts found — CEA extraction has not produced searchable facts. ...")
+```
+**Description:** Same issue as Finding 5. `TestMetadataQuality` in the same file correctly uses `pytest.skip()` for the identical condition ("CEA extraction not yet triggered"). `TestKnowledgeExtractionQuality` inconsistently calls `pytest.fail()`. Both are timing-dependent on compaction having run; both should use `pytest.skip()`.
+
+---
+
+### Finding 7 — knowledge_add primary success test doesn't assert CEA contract
+**File:** `test_phase_c_management.py` — `TestMemAdd.test_knowledge_add_succeeds`, lines 455–457
+```python
+result = extract_mcp_result(resp)
+assert isinstance(result, dict)
+```
+**Description:** The basic "succeeds" test only checks that the result is a dict. The CEA API contract specifies `{"status": "added", "memory_id": ...}` — neither key is checked here. `test_knowledge_add_embedding_persisted` (C-15b) does check both, but a reader running only the first test would get a false green if the response format regressed. The primary success test should assert `result.get("status") == "added"` at minimum.
+
+---
+
+### Finding 8 — knowledge_get_context absence not verified
+**File:** `test_phase_a_infrastructure.py` — `TestKnowledgeToolsPresent`
+**Description:** `test_knowledge_delete_absent` explicitly verifies `knowledge_delete` was removed from `tools/list`. There is no equivalent test verifying `knowledge_get_context` is also absent. Per the spec, both tools were removed in CEA. The absence of `knowledge_get_context` is only noted in a comment in phase C (`# C-17: knowledge_get_context removed`). A parallel `test_knowledge_get_context_absent` in `TestKnowledgeToolsPresent` would match the pattern established for `knowledge_delete`.
+
+---
+
+### Summary Table
+
+| # | File | Test | Issue |
+|---|------|------|-------|
+| 1 | `test_phase_b_core_tools.py` | module docstring | Stale tool name `search_knowledge` |
+| 2 | `test_phase_c_management.py` | `test_knowledge_feedback_deduplicates` | Dedup assertion trivially passes; should assert `"duplicate" in statuses` |
+| 3 | `test_phase_c_management.py` | `test_knowledge_feedback_records_event` | First call accepts `"duplicate"`; should assert `== "recorded"` |
+| 4 | `test_phase_c_management.py` | `test_knowledge_feedback_invalid_event_type_rejected` | 500 accepted; should be 400/422 only |
+| 5 | `test_phase_d_workers.py` | `test_cea_quality_metadata_populated` | `pytest.fail` contradicts docstring; use `pytest.skip` |
+| 6 | `test_phase_l_quality_eval.py` | `test_knowledge_extraction_quality` | `pytest.fail` when no `vector_facts`; use `pytest.skip` (matches `TestMetadataQuality`) |
+| 7 | `test_phase_c_management.py` | `test_knowledge_add_succeeds` | No assertion on `status`/`memory_id`; CEA contract untested in primary case |
+| 8 | `test_phase_a_infrastructure.py` | `TestKnowledgeToolsPresent` | No `knowledge_get_context` absent-check to complement `knowledge_delete` absent-check |
+
+No stale references to removed tools (`knowledge_delete`, `knowledge_get_context`, `search_knowledge`) found in actual tool call arguments. The `memories` key (old search response format) does not appear in any assertion — all search assertions correctly use `vector_facts`. The `graph_relations` key is consistently checked alongside `vector_facts` in B-08, K-15, and the return type check in B-08.
