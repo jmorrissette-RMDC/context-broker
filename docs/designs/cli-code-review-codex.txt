@@ -1,0 +1,639 @@
+2026-04-04T05:18:58.092375Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Client(reqwest::Error { kind: Status(404, None), url: "http://192.168.1.120:9222/" })
+OpenAI Codex v0.93.0 (research preview)
+--------
+workdir: C:\Users\j\projects\Joshua26
+model: gpt-5.2-codex
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: auto
+session id: 019d56ee-19fa-7991-b2a7-df7a4b55f604
+--------
+user
+Review the Context Engineering Architecture (CEA) implementation code for the Context Broker. This is a post-implementation code review against the PRD, HLD, and engineering requirements.
+
+The implementation is on branch `feature/cea-implementation`. Read these documents for context:
+1. state_4_development/context_broker_pmad/docs/PRD-context-engineering-architecture.md -- the PRD
+2. state_4_development/context_broker_pmad/docs/HLD-context-engineering-architecture.md -- the HLD
+3. .gemini-temp/cea-implementation-plan.md -- scroll to "## Implementation Phase" and "### Implementation Progress Log" for what was done
+
+Now read ALL of the implementation code (the new and modified files):
+
+**New files:**
+4. state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py -- Quality Wrapper (central component)
+5. state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py -- CEAs flow (server-side extraction)
+6. state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py -- CEAc flow (client-side enrichment)
+7. state_4_development/context_broker_pmad/config/prompts/cea_vector_extraction.md -- extraction prompt template
+8. state_4_development/context_broker_pmad/config/prompts/cea_graph_extraction.md -- graph extraction prompt
+9. state_4_development/context_broker_pmad/config/prompts/cea_output.md -- CEAc output template
+
+**Modified files:**
+10. state_4_development/context_broker_pmad/app/migrations.py -- migration 023 (CEA tables)
+11. state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py -- side-channel removal
+12. state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py -- elementId shim fix
+13. state_4_development/context_broker_pmad/app/routes/mcp.py -- tool schema updates
+14. state_4_development/context_broker_pmad/app/flows/tool_dispatch.py -- dispatch updates
+15. state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/register.py -- flow registration changes
+16. state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py -- CEAs integration in compact_tier1()
+
+Also read the engineering requirements for compliance checking:
+17. docs/requirements/ERQ-001-engineering-requirements.md
+18. docs/requirements/ERQ-002-mad-engineering-requirements.md
+
+Review the code for:
+
+1. **PRD compliance** -- Does every requirement (S01-S10, C01-C06, Q01-Q03, I01-I08, A01-A06) have a working implementation? What is missing or incomplete?
+
+2. **Code correctness** -- Bugs, logic errors, race conditions, missing error handling, incorrect SQL, broken imports.
+
+3. **ERQ compliance** -- StateGraph mandate (ERQ-002 S2.1), state immutability (S2.2), no blocking I/O in async (ERQ-001 S4.1), specific exception handling (S3.5), input validation (S2.2), config classification.
+
+4. **Integration issues** -- Will the modified files break existing functionality? Are there import errors, missing dependencies, or broken dispatch paths?
+
+5. **Security** -- SQL injection, hardcoded secrets, missing validation.
+
+Be specific -- cite file paths, line numbers, function names. Classify each finding as BLOCKER (must fix before merge) or OBSERVATION (improvement, not blocking).
+
+Do NOT create, modify, or delete any files except the output file specified below. Do NOT run any commands that modify the filesystem.
+
+Write your review to state_4_development/context_broker_pmad/docs/designs/cli-code-review-codex.md using the write tool.
+mcp: malory starting
+mcp: malory failed: MCP client for `malory` failed to start: MCP startup failed: handshaking with MCP server failed: Send message error Transport [rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<reqwest::async_impl::client::Client>>] error: Client error: HTTP status client error (404 Not Found) for url (http://192.168.1.120:9222/), when send initialize request
+mcp startup: failed: malory
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-ChildItem -Force' in C:\Users\j\projects\Joshua26 succeeded in 420ms:
+
+
+    Directory: C:\Users\j\projects\Joshua26
+
+
+Mode                 LastWriteTime         Length Name                                                                 
+----                 -------------         ------ ----                                                                 
+d-----          4/1/2026   2:56 AM                .aider.tags.cache.v4                                                 
+d-----         2/26/2026  12:32 AM                .claude                                                              
+d-----         2/28/2026  11:53 PM                .cursor                                                              
+d-----          4/4/2026   1:18 AM                .gemini-temp                                                         
+d--h--          4/4/2026  12:39 AM                .git                                                                 
+d-----         3/10/2026  12:12 AM                .github                                                              
+d-----          4/1/2026   1:26 AM                .grok                                                                
+d-----         2/22/2026   9:16 PM                .ruff_cache                                                          
+d-----         3/31/2026   9:41 AM                docs                                                                 
+d-----         2/17/2026   5:18 PM                lib                                                                  
+d-----         3/28/2026   8:34 PM                mads                                                                 
+d-----         3/31/2026  12:01 PM                scripts                                                              
+d-----         3/30/2026   5:12 PM                state_4_development                                                  
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/docs/PRD-context-engineering-architecture.md' in C:\Users\j\projects\Joshua26 succeeded in 256ms:
+# Context Engineering Architecture -- Product Requirements Document
+
+**Version:** 1.0 **Date:** 2026-04-03 **Status:** Active
+
+**Supersedes:** REQ-context-broker.md S3.5.4 (memory confidence scoring), S5.3 build type retrieval model (build types no longer include retrieval graphs -- retrieval moves to client-side CEAc), S5.3 retrieval configuration parameters (knowledge_graph_pct, semantic_retrieval_pct are deprecated). The four-dimension memory model and client-side enrichment replace the previous single-score confidence decay and server-side RAG injection.
+
+**Implements:** REQ-context-broker.md S5.8 (Conversation Memories). The CEAs compaction-time extraction is the implementation of the conversation memories concept described in S5.8.
+
+**Subject to:** ERQ-001 (base engineering requirements), ERQ-002 (MAD engineering requirements), ERQ-003 (pMAD requirements). REQ-context-broker.md S4.6 tool inventory requires amendment to reflect CEA tool changes.
+
+---
+
+## Purpose and Scope
+
+This document defines the requirements for the Context Engineering Architecture (CEA) -- the system responsible for compacting conversation context, extracting durable knowledge into vector and graph stores, and providing intelligent context enrichment for calling agents.
+
+The CEA replaces the current per-message extraction pipeline with a compaction-time extraction model and moves context enrichment from the server to the client. It operates as two components of a single architecture:
+
+- **CEAs (server-side):** A deterministic StateGraph flow within the Context Broker that runs at compaction time. Executes tiered summarization (tier 1 to tier 2 to tier 3), extracts durable facts and graph triples via Mem0, manages the memory store's integrity (deduplication, supersession, conflict detection), and sets immutable quality metadata on each extracted fact and graph relation.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/docs/HLD-context-engineering-architecture.md' in C:\Users\j\projects\Joshua26 succeeded in 229ms:
+# Context Engineering Architecture -- High-Level Design
+
+**Version:** 1.0 **Date:** 2026-04-03 **Status:** Active
+**Implements:** PRD-context-engineering-architecture.md v1.0
+
+---
+
+## 1. System Overview
+
+The Context Engineering Architecture (CEA) is the knowledge management subsystem of the Context Broker. It extracts durable knowledge from conversations during compaction, stores it in vector and graph form, and provides intelligent retrieval and ranking for calling agents.
+
+The CEA addresses a fundamental problem: the current per-message extraction pipeline extracts facts from small windows of raw messages without conversation context, producing decontextualized, redundant, low-quality knowledge. The CEA moves extraction to compaction time where the full conversation context is available, and introduces a feedback-driven quality model that learns from actual usage which knowledge is valuable.
+
+The architecture follows a write-side / read-side separation:
+
+- **CEAs (server-side)** runs at compaction time within the Context Broker. It is a deterministic StateGraph flow that produces structured extraction output, which a dispatch process writes to the stores.
+- **CEAc (client-side)** runs at query time within the calling agent (e.g., the Imperator). It is an agentic StateGraph subgraph that searches, ranks, assembles enriched context, and records feedback.
+
+Both components interact through a quality wrapper that sits around Mem0, adding quality metadata, feedback tracking, and enriched search results without modifying Mem0's internal pipeline.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw .gemini-temp/cea-implementation-plan.md' in C:\Users\j\projects\Joshua26 succeeded in 228ms:
+# Context Broker â€” Compaction Redesign Implementation Plan
+
+**Date:** 2026-03-31
+**Scope:** Phases 2-5 from SESSION-HANDOFF.md
+
+---
+
+## Context
+
+The Context Broker completed Gate 2 with 377 issues found and fixed across 7 review rounds. 482 tests pass (299 mock + 183 live). Two issues were deferred to the compaction redesign: RB-27 (inline assembly on new window) and RB-32d (dedup logic rewrite). The compaction redesign is fully specified in `DESIGN-compaction-v2.md`, validated by 3 CLIs. This plan implements that design.
+
+**Reading list for context recovery (read in this order after compaction or new session):**
+1. Component memory reading list first â€” check `~/.claude/projects/C--Users-j-projects-Joshua26-state-4-development-context-broker-pmad/memory/MEMORY.md`
+2. This plan file â€” current state, what's done, what's next
+3. Open GitHub Issues: `gh issue list --repo rmdevpro/Joshua26 --label component:context-broker --state open`
+4. `docs/guides/sdlc/SDLC-00-required-reading.md` â€” master reading list (all SDLC guides, ERQs, WPRs)
+5. `state_4_development/context_broker_pmad/docs/designs/DESIGN-compaction-v2.md` â€” the design
+6. Gate 2 reviews at `state_4_development/context_broker_pmad/docs/Review/gate-2-review-2026-04-01-{claude,gemini,codex}.md`
+
+**CRITICAL: Follow the guides at all times.** Guides are at `C:\Users\j\projects\Joshua26\docs\guides`. The SDLC subfolder is critical. Read and follow `SDLC-06-debugging-guide.md` for every bug. Get output from all 3 CLIs. Never skip, dismiss, or defer findings.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw docs/requirements/ERQ-001-engineering-requirements.md' in C:\Users\j\projects\Joshua26 succeeded in 228ms:
+# REQ-001: Engineering Requirements
+
+**Status:** Active
+**Date:** 2026-03-31
+**Category:** Engineering Requirements
+**Derived from:** Extracted from former REQ-001 (State 4 MAD Engineering Requirements), now REQ-002.
+**Purpose:** Define engineering requirements that apply to ALL software projects â€” standalone applications, MADs, and any other system built in this ecosystem.
+
+---
+
+## Scope
+
+These requirements apply universally to all projects. They define baseline engineering quality, security, observability, resilience, and configuration standards. MAD-specific requirements (StateGraph, AE/TE, Imperator, MCP protocol, Prometheus) are in REQ-002. pMAD container requirements are in REQ-003. eMAD package requirements are in REQ-004. Ecosystem deployment requirements are in REQ-005.
+
+---
+
+## 1. Code Quality
+
+**1.1 Code Clarity**
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw docs/requirements/ERQ-002-mad-engineering-requirements.md' in C:\Users\j\projects\Joshua26 succeeded in 225ms:
+# REQ-002: MAD Engineering Requirements
+
+**Status:** Active
+**Date:** 2026-03-31 (renumbered from REQ-001, 2026-03-25)
+**Category:** Engineering Requirements
+**Base:** ERQ-001 (Engineering Requirements) â€” all MADs must also comply with ERQ-001.
+**Purpose:** Define engineering requirements specific to MADs (Multipurpose Agentic Duos) that go beyond the base engineering requirements.
+
+---
+
+## Scope
+
+These requirements apply to all MADs: pMADs, eMADs, State 1 through State 4, in addition to REQ-001 (base engineering requirements). They define what makes a MAD a MAD â€” StateGraph architecture, AE/TE separation, Imperator pattern, MCP protocol, Prometheus metrics. General engineering quality (code, security, logging, resilience, configuration) is in ERQ-001. Container-specific requirements are in ERQ-003 (pMAD). Package-specific requirements are in ERQ-004 (eMAD). Ecosystem deployment is in REQ-005.
+
+---
+
+> **Sections 1 (Code Quality), 3 (Security), 4 (Logging), 5 (Async), 6.3 (Health Endpoint), 7 (Resilience), and 8 (Configuration) have been extracted to ERQ-001 (Engineering Requirements) where they apply to all projects. The sections below are MAD-specific additions.**
+
+---
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py' in C:\Users\j\projects\Joshua26 succeeded in 215ms:
+"""
+CEA Quality Wrapper â€” wraps a near-stock Mem0 instance with quality metadata,
+feedback tracking, enriched search, and expiration management.
+
+All CEA quality logic lives here. Mem0 handles vector storage (pgvector),
+graph extraction (Neo4j), dedup/update logic, and entity normalization.
+The wrapper intercepts before add and after search.
+
+See PRD-context-engineering-architecture.md REQ-CEA-Q03.
+See HLD-context-engineering-architecture.md Â§2 Quality Wrapper.
+"""
+
+import hashlib
+import logging
+import re
+import time
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+import asyncpg
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 216ms:
+"""
+CEAs Extraction Flow -- server-side deterministic StateGraph.
+
+Runs at compaction time within compact_tier1(). Extracts durable facts
+and graph triples from artifact-stripped tier 1 content via structured
+LLM output, then dispatches results through the quality wrapper.
+
+See PRD REQ-CEA-S01 through S10.
+See HLD Â§3 Flow A: Extraction (Write Side).
+"""
+
+import json
+import logging
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 218ms:
+"""
+CEAc Enrichment Flow -- client-side agentic StateGraph subgraph.
+
+Sits between get_context and agent response generation. Searches the
+vector store and knowledge graph via MCP tools, ranks results using
+the four-dimension memory model, assembles enriched context, and
+records feedback events.
+
+See PRD REQ-CEA-C01 through C06.
+See HLD Â§3 Flow B: Enrichment (Read Side).
+"""
+
+import logging
+import math
+import time
+from typing import Optional
+
+from langgraph.graph import END, StateGraph
+from typing_extensions import TypedDict
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config/prompts/cea_vector_extraction.md' in C:\Users\j\projects\Joshua26 succeeded in 212ms:
+You are a knowledge extraction system. Your task is to extract durable facts from a conversation segment.
+
+## Context
+
+You are processing content that was compacted from a conversation. The content has been artifact-stripped (code blocks, JSON, file listings removed) but retains identifiers (file paths, function names, entity names) as retrieval hooks.
+
+**Current date:** {current_date}
+
+## Existing Facts
+
+The following facts already exist in the knowledge store for this scope. Use them to avoid duplicates and to detect supersession or conflicts:
+
+{existing_facts}
+
+## Content to Extract From
+
+{content}
+
+## Tier Context (read-only, for reference)
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config/prompts/cea_graph_extraction.md' in C:\Users\j\projects\Joshua26 succeeded in 209ms:
+You are a knowledge graph extraction system. Your task is to extract entity-relationship triples from a conversation segment.
+
+## Context
+
+You are processing content that was compacted from a conversation. The content has been artifact-stripped but retains identifiers as retrieval hooks.
+
+**Current date:** {current_date}
+
+## Content to Extract From
+
+{content}
+
+## Instructions
+
+Extract entity-relationship triples that capture meaningful structural relationships discussed in the content. Focus on:
+- People, systems, components, and their relationships
+- Decisions and their consequences
+- Dependencies and requirements
+- Temporal relationships and sequences
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/config/prompts/cea_output.md' in C:\Users\j\projects\Joshua26 succeeded in 209ms:
+## Retrieved Knowledge
+
+### Facts (Vector Store)
+{vector_facts}
+
+### Relationships (Knowledge Graph)
+{graph_relations}
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/migrations.py' in C:\Users\j\projects\Joshua26 succeeded in 219ms:
+"""
+Database schema migration management.
+
+Applies pending migrations on startup. Migrations are forward-only
+and non-destructive. The application refuses to start if a migration
+cannot be safely applied.
+"""
+
+import logging
+from typing import Callable
+
+import asyncpg
+
+from app.database import get_pg_pool
+
+_log = logging.getLogger("context_broker.migrations")
+
+
+async def _migration_001(conn) -> None:
+    """Migration 1: Initial schema.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/main.py' in C:\Users\j\projects\Joshua26 succeeded in 264ms:
+import asyncio
+import concurrent
+import gc
+import hashlib
+import json
+import logging
+import os
+import uuid
+import warnings
+from copy import deepcopy
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Union
+
+from pydantic import ValidationError
+
+from mem0.configs.base import MemoryConfig, MemoryItem
+from mem0.configs.enums import MemoryType
+from mem0.configs.prompts import (
+    PROCEDURAL_MEMORY_SYSTEM_PROMPT,
+    get_update_memory_messages,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/mem0-fork/mem0/memory/graph_memory.py' in C:\Users\j\projects\Joshua26 succeeded in 232ms:
+import logging
+
+from mem0.memory.utils import format_entities, sanitize_relationship_for_cypher
+
+try:
+    from langchain_neo4j import Neo4jGraph
+except ImportError:
+    raise ImportError("langchain_neo4j is not installed. Please install it using pip install langchain-neo4j")
+
+try:
+    from rank_bm25 import BM25Okapi
+except ImportError:
+    raise ImportError("rank_bm25 is not installed. Please install it using pip install rank-bm25")
+
+from mem0.graphs.tools import (
+    DELETE_MEMORY_STRUCT_TOOL_GRAPH,
+    DELETE_MEMORY_TOOL_GRAPH,
+    EXTRACT_ENTITIES_STRUCT_TOOL,
+    EXTRACT_ENTITIES_TOOL,
+    RELATIONS_STRUCT_TOOL,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/routes/mcp.py' in C:\Users\j\projects\Joshua26 succeeded in 212ms:
+"""
+MCP (Model Context Protocol) endpoint.
+
+Implements HTTP/SSE transport for MCP tool access.
+Routes tool calls to compiled StateGraph flows.
+
+Endpoints:
+  GET  /mcp          â€” Establish SSE session
+  POST /mcp          â€” Sessionless tool call or route to session
+  POST /mcp?sessionId=xxx â€” Route to existing session
+"""
+
+import asyncio
+import decimal
+import json
+import logging
+import time
+import uuid
+from collections import OrderedDict
+from typing import Any, AsyncGenerator
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/app/flows/tool_dispatch.py' in C:\Users\j\projects\Joshua26 succeeded in 204ms:
+"""
+Tool dispatch â€” routes MCP tool calls to compiled StateGraph flows.
+
+All tool logic lives in StateGraph flows loaded dynamically from AE/TE
+packages via entry_points (REQ-001 Â§10). This module is the thin
+kernel-side routing layer that maps tool names to their flows using
+the stategraph_registry.
+"""
+
+import logging
+import time
+from typing import Any
+
+from app.flows.build_type_registry import get_retrieval_graph
+from app.metrics_registry import MCP_REQUESTS, MCP_REQUEST_DURATION
+from app.stategraph_registry import get_flow_builder, get_imperator_builder
+from app.models import (
+    GetContextInput,
+    ImperatorChatInput,
+    CreateContextWindowInput,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/register.py' in C:\Users\j\projects\Joshua26 succeeded in 203ms:
+"""
+Context Broker AE â€” Package registration entry point.
+
+Called by the bootstrap kernel's stategraph_registry.scan() when this
+package is discovered via entry_points(group="context-broker.ae").
+
+Returns an AERegistration dict with build type registrations and
+flow builders that the kernel processes to populate its registries.
+"""
+
+
+def register() -> dict:
+    """Register the Context Broker AE's infrastructure StateGraphs.
+
+    Returns a dict with:
+    - build_types: dict of (assembly_builder, retrieval_builder) pairs
+    - flows: dict of flow_name -> builder callable
+    """
+    # Build types â€” Python module names use underscores, config names use hyphens
+    from context_broker_ae.build_types.passthrough import (
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -Raw state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py' in C:\Users\j\projects\Joshua26 succeeded in 209ms:
+"""
+Standard-tiered build type (ARCH-18).
+
+Three-tier progressive compression context assembly with deadband compaction:
+  Tier 3: Archival summary (oldest, most compressed â€” historical header + recent archival)
+  Tier 2: Chunk summaries (middle layer, 3-6 chunks of ~2% each)
+  Tier 1: Live verbatim messages (newest, full fidelity â€” swings 20%-73%)
+
+Compaction rhythm:
+  1. Tier 1 fills from floor (20%) toward ceiling (85% - tier2 - tier3).
+  2. When tier 1 hits ceiling: oldest content above floor summarized to a 2% chunk,
+     appended to tier 2. Tier 1 resets to floor.
+  3. When tier 2 reaches max_chunks (6): full compaction consolidates 4 oldest
+     tier 2 chunks into tier 3, keeping 2 newest + new chunk = 3 chunks.
+
+15% buffer keeps total under 85% utilization (models degrade past ~85%).
+
+Moved from the monolithic context_assembly.py and retrieval_flow.py.
+All original logic, error handling, and lock management preserved.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "cea_extraction" -n state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py' in C:\Users\j\projects\Joshua26 succeeded in 200ms:
+539:            from context_broker_ae.cea_extraction_flow import build_cea_extraction_flow
+546:                cea_flow = build_cea_extraction_flow()
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/build_types/standard_tiered.py | Select-Object -Skip 500 -First 120' in C:\Users\j\projects\Joshua26 succeeded in 277ms:
+
+        # R5-M14: Catch UniqueViolationError in case a concurrent assembler
+        # already inserted a summary for this range between our pre-check
+        # and this INSERT.
+        try:
+            await pool.execute(
+                """
+                INSERT INTO conversation_summaries
+                    (conversation_id, context_window_id, summary_text, tier,
+                     summarizes_from_seq, summarizes_to_seq, message_count,
+                     original_token_count, summary_token_count, summarized_by_model)
+                VALUES ($1, $2, $3, 2, $4, $5, $6, $7, $8, $9)
+                """,
+                uuid.UUID(state["conversation_id"]),
+                uuid.UUID(state["context_window_id"]),
+                summary_text,
+                chunk[0]["sequence_number"],
+                chunk[-1]["sequence_number"],
+                len(chunk),
+                chunk_tokens,
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$i=0; Get-Content state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py | ForEach-Object { $i++; "${i}: $_" }' in C:\Users\j\projects\Joshua26 exited -1 in 0ms:
+`"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$i=0; Get-Content state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py | ForEach-Object { $i++; "${i}: $_" }'` rejected: blocked by policy
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "def (add|search|list_facts|record_feedback|_get_usefulness_batch|_global_vector_search|resolve_temporal)" state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py' in C:\Users\j\projects\Joshua26 succeeded in 197ms:
+49:def resolve_temporal(expires_at_raw: Optional[str], extraction_date: datetime) -> Optional[datetime]:
+127:    async def add(
+213:    async def search(
+281:    async def list_facts(
+313:    async def record_feedback(
+432:    async def _get_usefulness_batch(self, id_pairs: list[tuple[str, str]]) -> dict:
+461:    async def _global_vector_search(self, query: str, limit: int) -> dict:
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "search_existing_facts|run_extraction_llm|dispatch_results|build_cea_extraction_flow" state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 198ms:
+58:    dispatch_results: dict  # summary of what was dispatched
+63:async def search_existing_facts(state: CEAsExtractionState) -> dict:
+71:    verbose_log(config, _log, "CEAs.search_existing_facts ENTER conv=%s", state["conversation_id"])
+99:    verbose_log(config, _log, "CEAs.search_existing_facts EXIT found=%d (%.2fs)", len(facts), elapsed)
+104:async def run_extraction_llm(state: CEAsExtractionState) -> dict:
+114:    verbose_log(config, _log, "CEAs.run_extraction_llm ENTER conv=%s", state["conversation_id"])
+159:        verbose_log(config, _log, "CEAs.run_extraction_llm EXIT facts=%d (%.2fs)", n_facts, elapsed)
+175:async def dispatch_results(state: CEAsExtractionState) -> dict:
+186:    verbose_log(config, _log, "CEAs.dispatch_results ENTER conv=%s", state["conversation_id"])
+190:        verbose_log(config, _log, "CEAs.dispatch_results EXIT (no extraction output)")
+193:        return {"dispatch_results": {"new": 0, "duplicate": 0, "supersedes": 0, "conflicts": 0}}
+294:        "CEAs.dispatch_results EXIT new=%d dup=%d sup=%d con=%d (%.2fs)",
+301:    return {"dispatch_results": counts}
+311:    return {"dispatch_results": {"error": error}}
+318:    return "dispatch_results"
+321:def build_cea_extraction_flow():
+325:    workflow.add_node("search_existing_facts", search_existing_facts)
+326:    workflow.add_node("run_extraction_llm", run_extraction_llm)
+327:    workflow.add_node("dispatch_results", dispatch_results)
+330:    workflow.set_entry_point("search_existing_facts")
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "def _compute_memory_quality|def _rank_results|def assemble_context|def record_feedback|def build_ceac_enrichment_flow|def execute_search|def decide_search" state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 188ms:
+57:def _compute_memory_quality(durability: float, usefulness_data: dict, config: dict) -> float:
+107:def _rank_results(results: list[dict], config: dict) -> list[dict]:
+158:async def decide_search(state: CEAcEnrichmentState) -> dict:
+179:async def execute_search(state: CEAcEnrichmentState) -> dict:
+241:async def assemble_context(state: CEAcEnrichmentState) -> dict:
+306:async def record_feedback(state: CEAcEnrichmentState) -> dict:
+346:def build_ceac_enrichment_flow():
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "knowledge_search|knowledge_add|knowledge_list|knowledge_feedback|search_knowledge" state_4_development/context_broker_pmad/app/routes/mcp.py state_4_development/context_broker_pmad/app/flows/tool_dispatch.py' in C:\Users\j\projects\Joshua26 succeeded in 219ms:
+state_4_development/context_broker_pmad/app/routes/mcp.py:371:    Core tools (get_context, store_message, search_messages, search_knowledge)
+state_4_development/context_broker_pmad/app/routes/mcp.py:498:        # search_knowledge core tool removed — replaced by knowledge_search (management tool)
+state_4_development/context_broker_pmad/app/routes/mcp.py:798:            "name": "knowledge_search",
+state_4_development/context_broker_pmad/app/routes/mcp.py:811:            "name": "knowledge_add",
+state_4_development/context_broker_pmad/app/routes/mcp.py:824:            "name": "knowledge_list",
+state_4_development/context_broker_pmad/app/routes/mcp.py:835:            "name": "knowledge_feedback",
+state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:213:    elif tool_name == "search_knowledge":
+state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:214:        # Deprecated: redirected to knowledge_search via quality wrapper
+state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:681:    elif tool_name == "knowledge_search":
+state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:725:    elif tool_name == "knowledge_add":
+state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:741:    elif tool_name == "knowledge_list":
+state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:750:    elif tool_name == "knowledge_feedback":
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg -n "_should_iterate" state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py' in C:\Users\j\projects\Joshua26 succeeded in 205ms:
+334:def _should_iterate(state: CEAcEnrichmentState) -> str:
+359:    workflow.add_conditional_edges("evaluate_and_rank", _should_iterate)
+codex
+I can’t write `state_4_development/context_broker_pmad/docs/designs/cli-code-review-codex.md` in this environment (read-only sandbox; no write tool available). Below is the full review content you asked for, ready to paste into that file.
+
+**Findings (ordered by severity)**  
+- BLOCKER: TE directly imports AE quality wrapper instead of calling MCP tools, violating AE/TE separation and breaking TE portability. `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:179` (execute_search), `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:306` (record_feedback).  
+- BLOCKER: CEAs does not extract or persist graph triples/metadata. Only vector prompt is used, graph template unused, and dispatch ignores `graph_triples`. This violates REQ-CEA-S02, REQ-CEA-Q01, REQ-CEA-I06. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py:104` (run_extraction_llm uses only vector prompt), `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py:175` (dispatch_results only facts).  
+- BLOCKER: Quality wrapper never captures Neo4j relation IDs or writes metadata for relations; `QualityWrapper.add()` returns only memory ID and drops `relations`, so relation metadata cannot be recorded. Violates REQ-CEA-S02/Q01/Q03. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:127`.  
+- BLOCKER: Retrieval scope config is not implemented (user scope is a stub; conversation scope not filtered). Violates REQ-CEA-S04 and weakens store-enriched extraction (S03). `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py:63` (search_existing_facts).  
+- BLOCKER: knowledge_add does not accept required extraction metadata fields and does not write metadata; resulting memories are missing quality metadata. Violates REQ-CEA-I03/Q01. `state_4_development/context_broker_pmad/app/routes/mcp.py:811` (schema missing durability/confidence/source_type/etc.), `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:725` (knowledge_add only calls wrapper.add).  
+- BLOCKER: Idempotency for extraction dispatch is not implemented. `_fact_dedup_key()` is unused; wrapper/add doesn’t check dedup across (content, conversation_id, user_id, utterance) as required. Violates REQ-CEA-A03. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:33` (dedup key helper unused), `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:127` (add).  
+- BLOCKER: knowledge_* tool inputs are not validated via Pydantic models (direct argument access), violating ERQ-001 §2.2 and REQ-CEA-I03 tool validation requirement. `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:681` (knowledge_search), `:725` (knowledge_add), `:741` (knowledge_list), `:750` (knowledge_feedback).  
+- BLOCKER: Global knowledge_search returns no graph relations (vector-only path). Violates REQ-CEA-I03 requirement that knowledge_search returns vector + graph results. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:213` (search), `:461` (_global_vector_search returns relations = []).  
+- BLOCKER: CEAc is not an agentic retrieval loop; it does a single deterministic search and only re-iterates on empty results. This does not meet REQ-CEA-C02 (agentic loop with iteration limit) and REQ-CEA-A01 (ReAct pattern). `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:158` (decide_search is fixed), `:334` (_should_iterate).  
+
+- OBSERVATION: Temporal resolution is incomplete; `resolve_temporal` only handles “in N days/weeks/months/years” and ISO dates, but not “next week”, “until Friday”, etc. Partial compliance with REQ-CEA-S08/I04. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:49`.  
+- OBSERVATION: CEAc ranking for graph relations uses default relevance 0.5 (no structural relevance), which deviates from REQ-CEA-C03. `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:107`.  
+- OBSERVATION: Usefulness aggregation ignores target_type filter; if a fact ID collides with a relation ID, counts can mix. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:432`.  
+- OBSERVATION: Pipeline observability and metrics are defined but not recorded. `CEA_EXTRACTION_DURATION` and `CEAC_ENRICHMENT_DURATION` are never observed, so REQ-CEA-A06 (latency metrics) is not met. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py:22` (defined, unused), `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:19` (defined, unused).  
+- OBSERVATION: CEAc logging is not gated by `verbose_log` config (REQ-CEA-A02); it always uses debug logs. `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:158`, `:179`, `:306`.  
+- OBSERVATION: tool_dispatch still supports `search_knowledge` (deprecated per PRD) even though it’s removed from tool list. If backward compatibility is intended, document it. `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:213`.  
+
+**PRD compliance gaps summary**  
+- Missing/Incomplete: S02 (dual-store extraction + relation metadata), S04 (scope), S05 (graph output processing), S08/I04 (temporal parsing), C02 (agentic loop), C03 (structural relevance for graph), C05 (feedback context + MCP use), Q01 (relation metadata), Q03 (wrapper relation handling), I03 (knowledge_add schema + validation + metadata writes), I06 (graph prompt unused), A02 (CEAc verbose logging toggle), A03 (idempotent dispatch), A06 (metrics emitted).  
+
+**ERQ compliance gaps**  
+- ERQ-001 §2.2 input validation missing for knowledge_* tools (`tool_dispatch.py:681, 725, 741, 750`).  
+- ERQ-002 §9 AE/TE separation violated by TE importing AE wrapper (`cea_enrichment_flow.py:179, 306`).  
+- ERQ-002 §2.1 ReAct/agentic loop for CEAc not implemented (`cea_enrichment_flow.py:158, 334`).  
+
+**Open questions / assumptions**  
+- Is backward compatibility for `search_knowledge` intentionally preserved, or should it be removed to align with PRD?  
+- Is the graph extraction supposed to be solely Mem0-internal (no separate graph prompt), or should CEAs explicitly call the graph prompt and persist relation metadata?  
+
+**Suggested next steps**  
+1) Fix the AE/TE separation by making CEAc call MCP tools (knowledge_search/knowledge_feedback) instead of importing AE wrapper.  
+2) Implement full graph triple path: call graph prompt, persist relation metadata, and ensure wrapper captures Neo4j relation IDs.  
+3) Add Pydantic validation models for knowledge_* and extend knowledge_add schema to accept full metadata; write metadata on add.  
+4) Implement scope filtering for pre-extraction search (conversation/user/global).  
+5) Add idempotent dedup using `_fact_dedup_key` before add.  
+
+If you want, I can provide a ready-to-paste block for `cli-code-review-codex.md` once you enable write access.
+tokens used
+263,652
+I can’t write `state_4_development/context_broker_pmad/docs/designs/cli-code-review-codex.md` in this environment (read-only sandbox; no write tool available). Below is the full review content you asked for, ready to paste into that file.
+
+**Findings (ordered by severity)**  
+- BLOCKER: TE directly imports AE quality wrapper instead of calling MCP tools, violating AE/TE separation and breaking TE portability. `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:179` (execute_search), `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:306` (record_feedback).  
+- BLOCKER: CEAs does not extract or persist graph triples/metadata. Only vector prompt is used, graph template unused, and dispatch ignores `graph_triples`. This violates REQ-CEA-S02, REQ-CEA-Q01, REQ-CEA-I06. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py:104` (run_extraction_llm uses only vector prompt), `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py:175` (dispatch_results only facts).  
+- BLOCKER: Quality wrapper never captures Neo4j relation IDs or writes metadata for relations; `QualityWrapper.add()` returns only memory ID and drops `relations`, so relation metadata cannot be recorded. Violates REQ-CEA-S02/Q01/Q03. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:127`.  
+- BLOCKER: Retrieval scope config is not implemented (user scope is a stub; conversation scope not filtered). Violates REQ-CEA-S04 and weakens store-enriched extraction (S03). `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py:63` (search_existing_facts).  
+- BLOCKER: knowledge_add does not accept required extraction metadata fields and does not write metadata; resulting memories are missing quality metadata. Violates REQ-CEA-I03/Q01. `state_4_development/context_broker_pmad/app/routes/mcp.py:811` (schema missing durability/confidence/source_type/etc.), `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:725` (knowledge_add only calls wrapper.add).  
+- BLOCKER: Idempotency for extraction dispatch is not implemented. `_fact_dedup_key()` is unused; wrapper/add doesn’t check dedup across (content, conversation_id, user_id, utterance) as required. Violates REQ-CEA-A03. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:33` (dedup key helper unused), `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:127` (add).  
+- BLOCKER: knowledge_* tool inputs are not validated via Pydantic models (direct argument access), violating ERQ-001 §2.2 and REQ-CEA-I03 tool validation requirement. `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:681` (knowledge_search), `:725` (knowledge_add), `:741` (knowledge_list), `:750` (knowledge_feedback).  
+- BLOCKER: Global knowledge_search returns no graph relations (vector-only path). Violates REQ-CEA-I03 requirement that knowledge_search returns vector + graph results. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:213` (search), `:461` (_global_vector_search returns relations = []).  
+- BLOCKER: CEAc is not an agentic retrieval loop; it does a single deterministic search and only re-iterates on empty results. This does not meet REQ-CEA-C02 (agentic loop with iteration limit) and REQ-CEA-A01 (ReAct pattern). `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:158` (decide_search is fixed), `:334` (_should_iterate).  
+
+- OBSERVATION: Temporal resolution is incomplete; `resolve_temporal` only handles “in N days/weeks/months/years” and ISO dates, but not “next week”, “until Friday”, etc. Partial compliance with REQ-CEA-S08/I04. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:49`.  
+- OBSERVATION: CEAc ranking for graph relations uses default relevance 0.5 (no structural relevance), which deviates from REQ-CEA-C03. `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:107`.  
+- OBSERVATION: Usefulness aggregation ignores target_type filter; if a fact ID collides with a relation ID, counts can mix. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/memory/quality_wrapper.py:432`.  
+- OBSERVATION: Pipeline observability and metrics are defined but not recorded. `CEA_EXTRACTION_DURATION` and `CEAC_ENRICHMENT_DURATION` are never observed, so REQ-CEA-A06 (latency metrics) is not met. `state_4_development/context_broker_pmad/packages/context-broker-ae/src/context_broker_ae/cea_extraction_flow.py:22` (defined, unused), `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:19` (defined, unused).  
+- OBSERVATION: CEAc logging is not gated by `verbose_log` config (REQ-CEA-A02); it always uses debug logs. `state_4_development/context_broker_pmad/packages/context-broker-te/src/context_broker_te/cea_enrichment_flow.py:158`, `:179`, `:306`.  
+- OBSERVATION: tool_dispatch still supports `search_knowledge` (deprecated per PRD) even though it’s removed from tool list. If backward compatibility is intended, document it. `state_4_development/context_broker_pmad/app/flows/tool_dispatch.py:213`.  
+
+**PRD compliance gaps summary**  
+- Missing/Incomplete: S02 (dual-store extraction + relation metadata), S04 (scope), S05 (graph output processing), S08/I04 (temporal parsing), C02 (agentic loop), C03 (structural relevance for graph), C05 (feedback context + MCP use), Q01 (relation metadata), Q03 (wrapper relation handling), I03 (knowledge_add schema + validation + metadata writes), I06 (graph prompt unused), A02 (CEAc verbose logging toggle), A03 (idempotent dispatch), A06 (metrics emitted).  
+
+**ERQ compliance gaps**  
+- ERQ-001 §2.2 input validation missing for knowledge_* tools (`tool_dispatch.py:681, 725, 741, 750`).  
+- ERQ-002 §9 AE/TE separation violated by TE importing AE wrapper (`cea_enrichment_flow.py:179, 306`).  
+- ERQ-002 §2.1 ReAct/agentic loop for CEAc not implemented (`cea_enrichment_flow.py:158, 334`).  
+
+**Open questions / assumptions**  
+- Is backward compatibility for `search_knowledge` intentionally preserved, or should it be removed to align with PRD?  
+- Is the graph extraction supposed to be solely Mem0-internal (no separate graph prompt), or should CEAs explicitly call the graph prompt and persist relation metadata?  
+
+**Suggested next steps**  
+1) Fix the AE/TE separation by making CEAc call MCP tools (knowledge_search/knowledge_feedback) instead of importing AE wrapper.  
+2) Implement full graph triple path: call graph prompt, persist relation metadata, and ensure wrapper captures Neo4j relation IDs.  
+3) Add Pydantic validation models for knowledge_* and extend knowledge_add schema to accept full metadata; write metadata on add.  
+4) Implement scope filtering for pre-extraction search (conversation/user/global).  
+5) Add idempotent dedup using `_fact_dedup_key` before add.  
+
+If you want, I can provide a ready-to-paste block for `cli-code-review-codex.md` once you enable write access.

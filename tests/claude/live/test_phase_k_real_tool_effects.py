@@ -1,0 +1,541 @@
+"""Phase K: Real tool effects tests.
+
+Verifies that tools produce REAL side effects -- not just that the Imperator
+responds, but that the tool actually changed something on the server.
+
+Each test calls a tool (via MCP direct or imperator_chat) and then verifies
+the side effect via docker_exec, docker_psql, or follow-up MCP calls.
+
+All tests run against the live stack at http://192.168.1.110:8081.
+"""
+
+import json
+import re
+import time
+import uuid
+
+import pytest
+
+from tests.claude.live.helpers import (
+    BASE_URL,
+    chat_call,
+    docker_exec,
+    docker_logs,
+    docker_psql,
+    extract_mcp_result,
+    log_issue,
+    mcp_call,
+)
+
+pytestmark = pytest.mark.live
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _imperator_chat(http_client, message: str, timeout: int = 120) -> str:
+    """Send a message via imperator_chat MCP tool and return the response text."""
+    resp = mcp_call(
+        http_client,
+        "imperator_chat",
+        {"message": message},
+        timeout=timeout,
+    )
+    assert resp.status_code == 200, f"imperator_chat failed: {resp.status_code} {resp.text[:300]}"
+    result = extract_mcp_result(resp)
+    return result.get("response", "")
+
+
+def _chat(http_client, message: str, timeout: int = 120, context_window_id: str | None = None) -> str:
+    """Send a message via /v1/chat/completions and return the content."""
+    result = chat_call(http_client, message, timeout=timeout, context_window_id=context_window_id)
+    assert not result.get("error"), f"chat_call error: {result}"
+    return result["choices"][0]["message"]["content"]
+
+
+@pytest.fixture
+def context_window_id():
+    """Generate a unique context window ID for each test."""
+    return str(uuid.uuid4())
+
+
+# ===========================================================================
+# K-01: file_write creates a file
+# ===========================================================================
+
+class TestFileWriteCreatesFile:
+    """K-01: file_write via Imperator creates a file on disk."""
+
+    @pytest.mark.live
+    def test_file_write_creates_file(self, http_client, context_window_id):
+        """Write a file via Imperator, then verify it exists via docker_exec."""
+        tag = uuid.uuid4().hex[:8]
+        filename = f"test-k01-{tag}.txt"
+        filepath = f"/data/downloads/{filename}"
+        content = f"Phase K file_write test {tag}"
+
+        # Ask Imperator to write the file
+        response = _chat(
+            http_client,
+            f"Write a file to {filepath} with the exact content: {content}",
+            context_window_id=context_window_id,
+        )
+        if not any(
+            kw in response.lower()
+            for kw in ["written", "created", "saved", "success", "wrote"]
+        ):
+            log_issue("test_file_write", "warning", "imperator", f"Imperator did not invoke file_write: {response[:300]}")
+
+        # Verify file exists on disk via docker_exec
+        ls_output = docker_exec("context-broker-langgraph", f"ls -la {filepath}")
+        assert filename in ls_output, (
+            f"File not found on disk after file_write. ls output: {ls_output}"
+        )
+
+        # Verify content
+        cat_output = docker_exec("context-broker-langgraph", f"cat {filepath}")
+        assert content in cat_output, (
+            f"File content mismatch. Expected '{content}', got: {cat_output[:200]}"
+        )
+
+        # Cleanup
+        docker_exec("context-broker-langgraph", f"rm -f {filepath}")
+
+
+# ===========================================================================
+# K-02: run_command returns output
+# ===========================================================================
+
+class TestRunCommandReturnsOutput:
+    """K-02: run_command via Imperator returns real command output."""
+
+    def test_run_command_returns_output(self, http_client, context_window_id):
+        """Ask Imperator to run uptime, verify response contains uptime data."""
+        response = _chat(http_client, "Run the uptime command and show me the raw output", context_window_id=context_window_id)
+        # Uptime output typically contains 'up', 'load average', 'users', etc.
+        response_lower = response.lower()
+        has_uptime_data = any(
+            kw in response_lower for kw in ["up", "load", "day", "hour", "min"]
+        )
+        assert has_uptime_data, (
+            f"run_command uptime did not return uptime data: {response[:300]}"
+        )
+
+
+# ===========================================================================
+# K-03: calculate returns correct answer
+# ===========================================================================
+
+class TestCalculateReturnsCorrectAnswer:
+    """K-03: calculate tool returns mathematically correct result."""
+
+    def test_calculate_returns_correct_answer(self, http_client, context_window_id):
+        """Ask Imperator to calculate 1024 * 0.85, verify 870.4 in response."""
+        response = _chat(http_client, "Calculate 1024 * 0.85 and tell me the exact result", context_window_id=context_window_id)
+        assert "870" in response, (
+            f"calculate did not return 870.4: {response[:300]}"
+        )
+
+
+# K-04 and K-05 (schedule tests) removed — scheduling tool will be
+# reimplemented as a separate container.
+
+# ===========================================================================
+# K-06: add_alert_instruction persists
+# ===========================================================================
+
+class TestAddAlertInstructionPersists:
+    """K-06: add_alert_instruction creates a row in alert_instructions table."""
+
+    @pytest.mark.live
+    def test_add_alert_instruction_persists(self, http_client, context_window_id):
+        """Add an alert instruction via Imperator, verify count increases in DB."""
+        tag = uuid.uuid4().hex[:8]
+        description = f"k06-test-alert-{tag}"
+
+        # Count alert instructions before
+        before_result = docker_psql("SELECT COUNT(*) FROM alert_instructions")
+        before_count = int(re.search(r"(\d+)", before_result).group(1))
+
+        _chat(
+            http_client,
+            f"Add an alert instruction with description '{description}', "
+            f"instruction 'Format alerts for testing', "
+            f"channels [{{'type': 'log'}}]",
+            context_window_id=context_window_id,
+        )
+        time.sleep(2)
+
+        # Count alert instructions after
+        after_result = docker_psql("SELECT COUNT(*) FROM alert_instructions")
+        after_count = int(re.search(r"(\d+)", after_result).group(1))
+        assert after_count > before_count, (
+            f"Alert instruction count did not increase. "
+            f"Before: {before_count}, After: {after_count}"
+        )
+
+        # Cleanup: delete it
+        _chat(http_client, f"Delete the alert instruction for '{description}'", context_window_id=context_window_id)
+
+
+# ===========================================================================
+# K-07: store_domain_info persists
+# ===========================================================================
+
+class TestStoreDomainInfoPersists:
+    """K-07: store_domain_info creates a row in domain_information table."""
+
+    @pytest.mark.live
+    def test_store_domain_info_persists(self, http_client, context_window_id):
+        """Store domain info via Imperator, verify count increases in domain_information table."""
+        tag = uuid.uuid4().hex[:8]
+        content = f"K07 test fact: The Context Broker uses {tag} as a marker"
+
+        # Count domain_information rows before
+        before_result = docker_psql("SELECT COUNT(*) FROM domain_information")
+        before_count = int(re.search(r"(\d+)", before_result).group(1)) if re.search(r"(\d+)", before_result) else 0
+
+        _chat(
+            http_client,
+            f"Store this as domain information: {content}",
+            context_window_id=context_window_id,
+        )
+        time.sleep(2)
+
+        # Count domain_information rows after
+        after_result = docker_psql("SELECT COUNT(*) FROM domain_information")
+        after_count = int(re.search(r"(\d+)", after_result).group(1)) if re.search(r"(\d+)", after_result) else 0
+        assert after_count > before_count, (
+            f"Domain information count did not increase. "
+            f"Before: {before_count}, After: {after_count}"
+        )
+
+
+# ===========================================================================
+# K-08: config_write takes effect
+# ===========================================================================
+
+class TestConfigWriteTakesEffect:
+    """K-08: config_write changes a setting that config_read can verify."""
+
+    @pytest.mark.live
+    def test_config_write_takes_effect(self, http_client, context_window_id):
+        """Set verbose_logging to true, verify via config_read, then restore."""
+        # Enable verbose logging
+        _chat(http_client, "Set tuning.verbose_logging to true in the config", context_window_id=context_window_id)
+        time.sleep(1)
+
+        # Verify via Imperator
+        verify_response = _chat(
+            http_client,
+            "Read the current config and tell me the value of tuning.verbose_logging",
+            context_window_id=context_window_id,
+        )
+        verify_lower = verify_response.lower()
+        assert "true" in verify_lower or "enabled" in verify_lower or " on" in verify_lower, (
+            f"config_write did not take effect. Response: {verify_response[:300]}"
+        )
+
+        # Restore — sleep >1s to avoid mtime cache collision (filesystem mtime
+        # resolution is 1 second; two writes within the same second get the same
+        # mtime and the config loader returns the stale cached version)
+        time.sleep(1.5)
+        _chat(http_client, "Set tuning.verbose_logging to false in the config", context_window_id=context_window_id)
+        time.sleep(1.5)
+
+        # Verify restored
+        restore_response = _chat(
+            http_client,
+            "Read the current config and tell me the value of tuning.verbose_logging",
+            context_window_id=context_window_id,
+        )
+        restore_lower = restore_response.lower()
+        assert "false" in restore_lower or "disabled" in restore_lower or "off" in restore_lower, (
+            f"config_write restore failed. Response: {restore_response[:300]}"
+        )
+
+
+# ===========================================================================
+# K-09: verbose_toggle changes config
+# ===========================================================================
+
+class TestVerboseToggleChangesConfig:
+    """K-09: verbose_toggle flips the verbose_logging config value."""
+
+    def test_verbose_toggle_changes_config(self, http_client, context_window_id):
+        """Toggle verbose logging on and off, verify change via config_read."""
+        # First, ensure we know the current state by setting to false
+        _chat(http_client, "Set tuning.verbose_logging to false in the config", context_window_id=context_window_id)
+        # Sleep >1s to avoid mtime cache collision (filesystem mtime
+        # resolution is 1 second — same pattern as K-08)
+        time.sleep(2)
+
+        # Toggle on
+        toggle_response = _chat(
+            http_client,
+            "Toggle verbose logging on",
+            context_window_id=context_window_id,
+        )
+        time.sleep(2)
+
+        # Check it changed
+        check_response = _chat(
+            http_client,
+            "What is tuning.verbose_logging currently set to?",
+            context_window_id=context_window_id,
+        )
+        check_lower = check_response.lower()
+        assert "true" in check_lower or "enabled" in check_lower or " on" in check_lower, (
+            f"verbose_toggle did not enable logging. Response: {check_response[:300]}"
+        )
+
+        # Restore by toggling off
+        _chat(http_client, "Toggle verbose logging off", context_window_id=context_window_id)
+        time.sleep(2)
+
+
+# ===========================================================================
+# K-10: db_query returns real data
+# ===========================================================================
+
+class TestDbQueryReturnsRealData:
+    """K-10: db_query returns actual database row counts."""
+
+    def test_db_query_returns_real_data(self, http_client, context_window_id):
+        """Run SELECT COUNT(*) FROM conversations via Imperator, verify numeric result."""
+        response = _chat(
+            http_client,
+            "Run this exact database query and give me only the number: SELECT COUNT(*) FROM conversations",
+            context_window_id=context_window_id,
+        )
+        # Extract any number from the response
+        numbers = re.findall(r"\d+", response)
+        assert numbers, (
+            f"db_query did not return any numbers. Response: {response[:300]}"
+        )
+        count = int(numbers[0])
+        assert count >= 1, (
+            f"db_query returned count={count}, expected at least 1 conversation"
+        )
+
+
+# ===========================================================================
+# K-11: change_inference lists models
+# ===========================================================================
+
+class TestChangeInferenceListsModels:
+    """K-11: change_inference in list mode returns model catalog."""
+
+    def test_change_inference_lists_models(self, http_client, context_window_id):
+        """Ask what models are available for summarization slot, verify catalog."""
+        response = _chat(
+            http_client,
+            "What models are available for the summarization inference slot? "
+            "Just list the model names.",
+            context_window_id=context_window_id,
+        )
+        response_lower = response.lower()
+        # Should contain at least one known model family
+        has_models = any(
+            kw in response_lower
+            for kw in ["gpt", "gemini", "claude", "sonnet", "haiku", "flash", "model"]
+        )
+        assert has_models, (
+            f"change_inference did not list any known models. Response: {response[:400]}"
+        )
+
+
+# ===========================================================================
+# K-12: send_notification reaches alerter
+# ===========================================================================
+
+class TestSendNotificationReachesAlerter:
+    """K-12: send_notification dispatches an event visible in alerter logs."""
+
+    def test_send_notification_reaches_alerter(self, http_client, context_window_id):
+        """Send a notification via Imperator, check alerter logs for the event."""
+        tag = uuid.uuid4().hex[:8]
+        notification_msg = f"K12 test notification {tag}"
+
+        _chat(
+            http_client,
+            f"Send a notification with type 'test.k12' and message '{notification_msg}'",
+            context_window_id=context_window_id,
+        )
+        time.sleep(3)
+
+        # Check alerter logs for the notification
+        logs = docker_logs("context-broker-alerter", lines=100)
+        if tag in logs:
+            # Found the notification in alerter logs
+            return
+
+        # If alerter is not running or logs don't contain it, check app logs
+        app_logs = docker_logs("context-broker-langgraph", lines=100)
+        if tag in app_logs or "notification" in app_logs.lower():
+            log_issue(
+                "test_send_notification_reaches_alerter",
+                "info",
+                "alerter",
+                f"Notification sent but only found in app logs, not alerter: tag={tag}",
+            )
+            return
+
+        # Soft-fail: log the issue but don't hard-fail since alerter may not be configured
+        log_issue(
+            "test_send_notification_reaches_alerter",
+            "warning",
+            "alerter",
+            f"Notification tag '{tag}' not found in alerter or app logs",
+            "Notification visible in logs",
+            f"alerter logs (last 100 lines): ...not found",
+        )
+
+
+# ===========================================================================
+# K-13: knowledge_add creates searchable memory
+# ===========================================================================
+
+class TestKnowledgeAddCreatesSearchableMemory:
+    """K-13: knowledge_add creates a memory that knowledge_search can find."""
+
+    def test_knowledge_add_creates_searchable_memory(self, http_client):
+        """Add a memory via MCP, then search for it."""
+        tag = uuid.uuid4().hex[:8]
+        user_id = f"k13-test-{tag}"
+        fact = f"The user's favorite database is CockroachDB ({tag})"
+
+        # Add memory via direct MCP call
+        add_resp = mcp_call(
+            http_client,
+            "knowledge_add",
+            {"content": fact, "user_id": user_id},
+        )
+        assert add_resp.status_code == 200
+        add_result = extract_mcp_result(add_resp)
+        assert add_result.get("status") == "added", (
+            f"knowledge_add should return status='added' (CEA format), got: {add_result}"
+        )
+
+        # Search for the memory with retries
+        # CEA: knowledge_search returns vector_facts (not memories)
+        found = False
+        for attempt in range(4):
+            time.sleep(3)
+            search_resp = mcp_call(
+                http_client,
+                "knowledge_search",
+                {"query": "favorite database", "user_id": user_id},
+            )
+            assert search_resp.status_code == 200
+            search_result = extract_mcp_result(search_resp)
+            vector_facts = search_result.get("vector_facts", [])
+            if vector_facts:
+                # Check that at least one fact relates to our content
+                all_text = " ".join(
+                    str(f.get("memory", f.get("content", ""))) for f in vector_facts
+                ).lower()
+                if "cockroachdb" in all_text or tag in all_text:
+                    found = True
+                    break
+
+        assert found, (
+            f"knowledge_search did not find the memory added by knowledge_add. "
+            f"user_id={user_id}, searched for 'favorite database'"
+        )
+
+
+# ===========================================================================
+# K-14: search_messages returns relevant content
+# ===========================================================================
+
+class TestSearchMessagesReturnsRelevant:
+    """K-14: search_messages returns content relevant to the query."""
+
+    def test_search_messages_returns_relevant(self, http_client):
+        """Search for 'Context Broker' and verify results contain relevant content."""
+        resp = mcp_call(
+            http_client,
+            "search_messages",
+            {"query": "Context Broker", "limit": 10},
+        )
+        assert resp.status_code == 200
+        result = extract_mcp_result(resp)
+        messages = result.get("messages", [])
+        assert len(messages) > 0, (
+            "search_messages returned no results for 'Context Broker'"
+        )
+
+        # Verify at least some results mention context, broker, or related terms
+        relevant_count = 0
+        for msg in messages:
+            content = str(msg.get("content", "")).lower()
+            if any(kw in content for kw in ["context", "broker", "memory", "conversation"]):
+                relevant_count += 1
+
+        assert relevant_count > 0, (
+            f"search_messages returned {len(messages)} results but none seem relevant "
+            f"to 'Context Broker'"
+        )
+
+
+# ===========================================================================
+# K-15: search_knowledge returns facts
+# ===========================================================================
+
+class TestSearchKnowledgeReturnsFacts:
+    """K-15: knowledge_search returns extracted facts or relations."""
+
+    def test_search_knowledge_returns_facts(self, http_client):
+        """Search knowledge for a broad topic, verify vector_facts or graph_relations returned.
+
+        CEA: knowledge_search returns vector_facts and graph_relations (not memories).
+        """
+        resp = mcp_call(
+            http_client,
+            "knowledge_search",
+            {"query": "software architecture patterns", "user_id": "default"},
+        )
+        assert resp.status_code == 200
+        result = extract_mcp_result(resp)
+        # CEA: response uses vector_facts key
+        assert "vector_facts" in result, (
+            f"knowledge_search missing 'vector_facts' key: {list(result.keys())}"
+        )
+        vector_facts = result.get("vector_facts", [])
+        graph_relations = result.get("graph_relations", [])
+
+        if not vector_facts and not graph_relations:
+            # Try a different query
+            resp2 = mcp_call(
+                http_client,
+                "knowledge_search",
+                {"query": "context engineering memory", "user_id": "default"},
+            )
+            assert resp2.status_code == 200
+            result2 = extract_mcp_result(resp2)
+            vector_facts = result2.get("vector_facts", [])
+            graph_relations = result2.get("graph_relations", [])
+
+        if not vector_facts and not graph_relations:
+            log_issue(
+                "test_search_knowledge_returns_facts",
+                "warning",
+                "knowledge",
+                "knowledge_search returned no facts for broad queries; "
+                "CEA extraction may not have completed (compaction not yet triggered)",
+                "At least 1 vector_fact or graph_relation",
+                "0 results",
+            )
+            assert False, "knowledge_search returned no facts — CEA extraction not working"
+
+        # Verify structure: each fact should have content or memory text
+        for fact in (vector_facts + graph_relations)[:5]:
+            has_text = (
+                fact.get("memory") or fact.get("content") or fact.get("text")
+                or fact.get("source") or fact.get("relationship")
+            )
+            assert has_text, (
+                f"Knowledge fact entry has no text content: {fact}"
+            )

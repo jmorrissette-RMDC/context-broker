@@ -1,0 +1,38 @@
+# Stress test configuration
+# Run with: python tests/stress/stress_test.py
+
+target:
+  host: 192.168.1.110
+  port: 8081
+  ssh: aristotle9@192.168.1.110
+  remote_project_dir: /mnt/storage/projects/portfolio/ContextBroker
+  compose_project: claude-test
+  compose_file: docker-compose.claude-test.yml
+
+seed:
+  session_dir: "C:\\Users\\j\\.claude\\projects"
+  max_seed_tokens: 2_000_000
+  batch_size: 50
+  chars_per_token: 4
+
+lifecycle:
+  user_model: gemini-2.5-flash-lite
+  user_model_base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  user_model_api_key_env: GOOGLE_API_KEY
+  target_compaction_cycles: 10
+  quality_check_interval: 2  # Every N compaction cycles
+  budget: 1048576             # 1M
+  build_type: tiered-summary
+  conversation_poll_interval: 30  # Seconds between compaction checks
+
+gradient:
+  budgets: [8192, 32768, 131072, 262144, 524288, 1048576]
+  build_type: tiered-summary
+  assembly_timeout: 600  # 10 min per window
+
+concurrent:
+  budgets: [8192, 32768, 131072, 262144, 524288, 1048576]
+
+checkpoint:
+  file: tests/stress/checkpoint.json
+  interval: 60

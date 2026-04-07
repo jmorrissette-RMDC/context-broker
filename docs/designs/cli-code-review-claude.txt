@@ -1,0 +1,15 @@
+Review written to `state_4_development/context_broker_pmad/docs/designs/cli-code-review-claude.md`.
+
+**Summary: 8 blockers, 14 observations.**
+
+The most critical findings:
+
+1. **B-01: CEAc imports from the AE package** -- violates TE portability (ERQ-002 S12.3). Should use MCP tools.
+2. **B-02: CEAc is not agentic** -- it's a deterministic linear flow, not the ReAct-pattern graph required by PRD REQ-CEA-A01/C02.
+3. **B-03: CEAs flow recompiles on every chunk** in the compaction loop -- unnecessary overhead.
+4. **B-04: `knowledge_add` MCP tool doesn't call `write_metadata()`** -- facts added via the tool have no quality metadata.
+5. **B-05: No Pydantic input validation** on the four CEA MCP tools.
+6. **B-06: Retrieval scope "user" and "conversation" are stub code** -- only global scope works.
+7. **B-08: Graph extraction prompt template is dead code** -- exists but never loaded.
+
+The PRD coverage matrix shows 25/32 requirements passing, 4 failing, and 3 partial. The write side (CEAs) is substantially complete. The read side (CEAc) needs architectural rework to meet the agentic retrieval requirement.

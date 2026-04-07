@@ -1,0 +1,103 @@
+"""
+Context Broker AE — Package registration entry point.
+
+Called by the bootstrap kernel's stategraph_registry.scan() when this
+package is discovered via entry_points(group="context-broker.ae").
+
+Returns an AERegistration dict with build type registrations and
+flow builders that the kernel processes to populate its registries.
+"""
+
+
+def register() -> dict:
+    """Register the Context Broker AE's infrastructure StateGraphs.
+
+    Returns a dict with:
+    - build_types: dict of (assembly_builder, retrieval_builder) pairs
+    - flows: dict of flow_name -> builder callable
+    """
+    # Build types — Python module names use underscores, config names use hyphens
+    from context_broker_ae.build_types.passthrough import (
+        build_passthrough_assembly,
+        build_passthrough_retrieval,
+    )
+    from context_broker_ae.build_types.standard_tiered import (
+        build_standard_tiered_assembly,
+        build_standard_tiered_retrieval,
+    )
+    from context_broker_ae.build_types.knowledge_enriched import (
+        build_knowledge_enriched_retrieval,
+    )
+
+    # Flow builders
+    from context_broker_ae.message_pipeline import build_message_pipeline
+    from context_broker_ae.embed_pipeline import build_embed_pipeline
+    # CEA: build_memory_extraction removed — replaced by cea_extraction (#492)
+    from context_broker_ae.search_flow import (
+        build_conversation_search_flow,
+        build_message_search_flow,
+    )
+    from context_broker_ae.conversation_ops_flow import (
+        build_create_conversation_flow,
+        build_create_context_window_flow,
+        build_delete_conversation_flow,
+        build_get_context_flow,
+        build_get_history_flow,
+        build_list_conversations_flow,
+        build_query_logs_flow,
+        build_rename_conversation_flow,
+        build_search_context_windows_flow,
+        build_search_logs_flow,
+    )
+    # CEA: memory_search_flow and memory_context_flow replaced by quality wrapper.
+    # memory_admin_flow: knowledge_delete removed (facts are CR-only).
+    from context_broker_ae.memory_admin_flow import (
+        build_mem_add_flow,
+        build_mem_list_flow,
+    )
+    from context_broker_ae.cea_extraction_flow import build_cea_extraction_flow
+    from context_broker_ae.health_flow import build_health_check_flow
+    from context_broker_ae.metrics_flow import build_metrics_flow
+
+    return {
+        "build_types": {
+            # Config name → (assembly_builder, retrieval_builder)
+            "sliding-window": (
+                build_passthrough_assembly,
+                build_passthrough_retrieval,
+            ),
+            "tiered-summary": (
+                build_standard_tiered_assembly,
+                build_standard_tiered_retrieval,
+            ),
+            "enriched": (
+                # Reuses tiered-summary assembly; only retrieval differs
+                build_standard_tiered_assembly,
+                build_knowledge_enriched_retrieval,
+            ),
+        },
+        "flows": {
+            "message_pipeline": build_message_pipeline,
+            "embed_pipeline": build_embed_pipeline,
+            # "memory_extraction" removed — replaced by cea_extraction (#492)
+            "conversation_search": build_conversation_search_flow,
+            "message_search": build_message_search_flow,
+            "create_conversation": build_create_conversation_flow,
+            "create_context_window": build_create_context_window_flow,
+            "delete_conversation": build_delete_conversation_flow,
+            "get_context": build_get_context_flow,
+            "get_history": build_get_history_flow,
+            "list_conversations": build_list_conversations_flow,
+            "query_logs": build_query_logs_flow,
+            "rename_conversation": build_rename_conversation_flow,
+            "search_context_windows": build_search_context_windows_flow,
+            "search_logs": build_search_logs_flow,
+            # CEA: memory_search and memory_context deregistered — replaced by quality wrapper.
+            # knowledge_delete deregistered — facts are CR-only (REQ-CEA-I03).
+            "knowledge_add": build_mem_add_flow,
+            "knowledge_list": build_mem_list_flow,
+            "cea_extraction": build_cea_extraction_flow,
+            "health_check": build_health_check_flow,
+            "metrics": build_metrics_flow,
+        },
+    }

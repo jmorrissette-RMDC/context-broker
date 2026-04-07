@@ -1,0 +1,220 @@
+"""
+Unit tests for StateGraph state immutability (test plan section 4.11).
+
+For key node and routing functions, verify that the input state dict
+is not mutated by the function call. This ensures LangGraph's state
+management is not corrupted by side effects.
+"""
+
+import copy
+
+
+from context_broker_ae.message_pipeline import route_after_store
+from context_broker_ae.build_types.tier_scaling import (
+    calculate_tier1_ceiling,
+    extract_deadband_config,
+    should_trigger_compaction,
+)
+from context_broker_ae.memory_scoring import filter_and_rank_memories, score_memory
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+
+def _assert_state_unchanged(original: dict, after: dict, fn_name: str):
+    """Assert that two dicts are identical, providing a clear error message."""
+    assert original == after, (
+        f"{fn_name} mutated its input state. " f"Diff: expected {original}, got {after}"
+    )
+
+
+# ------------------------------------------------------------------
+# route_after_store (message pipeline routing)
+# ------------------------------------------------------------------
+
+
+class TestRouteAfterStoreImmutability:
+    """Verify route_after_store does not mutate its input state."""
+
+    def test_no_error_no_collapse(self):
+        """Normal path: route to enqueue_background_jobs without mutation."""
+        state = {
+            "context_window_id": "abc",
+            "conversation_id_input": None,
+            "role": "user",
+            "sender": "user-1",
+            "recipient": None,
+            "content": "Hello",
+            "model_name": None,
+            "tool_calls": None,
+            "tool_call_id": None,
+            "message_id": "msg-1",
+            "conversation_id": "conv-1",
+            "sequence_number": 1,
+            "was_collapsed": False,
+            "queued_jobs": [],
+            "error": None,
+        }
+        original = copy.deepcopy(state)
+        route_after_store(state)
+        _assert_state_unchanged(original, state, "route_after_store")
+
+    def test_with_error(self):
+        """Error path: routes to END without mutation."""
+        state = {
+            "error": "Something went wrong",
+            "was_collapsed": False,
+        }
+        original = copy.deepcopy(state)
+        route_after_store(state)
+        _assert_state_unchanged(original, state, "route_after_store (error)")
+
+    def test_with_collapse(self):
+        """Collapse path: routes to END without mutation."""
+        state = {
+            "error": None,
+            "was_collapsed": True,
+        }
+        original = copy.deepcopy(state)
+        route_after_store(state)
+        _assert_state_unchanged(original, state, "route_after_store (collapse)")
+
+
+# ------------------------------------------------------------------
+# Deadband tier functions (tier scaling)
+# ------------------------------------------------------------------
+
+
+class TestDeadbandImmutability:
+    """Verify deadband tier functions do not mutate their input."""
+
+    def test_extract_deadband_config(self):
+        """extract_deadband_config does not mutate input."""
+        config = {
+            "tier1_floor_pct": 0.20,
+            "tier2_chunk_pct": 0.02,
+            "tier3_pct": 0.02,
+            "tier2_min_chunks": 3,
+            "tier2_max_chunks": 6,
+            "tier3_header_pct": 0.0025,
+            "fallback_tokens": 8192,
+        }
+        original = copy.deepcopy(config)
+        extract_deadband_config(config)
+        _assert_state_unchanged(original, config, "extract_deadband_config")
+
+    def test_calculate_tier1_ceiling(self):
+        """calculate_tier1_ceiling does not mutate input."""
+        config = {
+            "tier1_floor_pct": 0.20,
+            "tier2_chunk_pct": 0.02,
+            "tier3_pct": 0.02,
+            "tier2_max_chunks": 6,
+            "effective_utilization": 0.85,
+        }
+        original = copy.deepcopy(config)
+        calculate_tier1_ceiling(1_000_000, config)
+        _assert_state_unchanged(original, config, "calculate_tier1_ceiling")
+
+    def test_should_trigger_compaction(self):
+        """should_trigger_compaction does not mutate input."""
+        config = {
+            "tier1_floor_pct": 0.20,
+            "tier2_chunk_pct": 0.02,
+            "tier3_pct": 0.02,
+            "tier2_max_chunks": 6,
+            "effective_utilization": 0.85,
+        }
+        original = copy.deepcopy(config)
+        should_trigger_compaction(500_000, 1_000_000, config)
+        _assert_state_unchanged(original, config, "should_trigger_compaction")
+
+
+# ------------------------------------------------------------------
+# score_memory (memory scoring)
+# ------------------------------------------------------------------
+
+
+class TestScoreMemoryImmutability:
+    """Verify score_memory does not mutate its input memory dict."""
+
+    def test_standard_memory(self):
+        """Scoring a standard memory does not mutate the input."""
+        from datetime import datetime, timezone
+
+        mem = {
+            "id": "mem-1",
+            "content": "Test",
+            "category": "factual",
+            "created_at": datetime(2026, 3, 1, tzinfo=timezone.utc).isoformat(),
+            "last_accessed": datetime(2026, 3, 20, tzinfo=timezone.utc).isoformat(),
+        }
+        config = {"tuning": {"memory_half_lives": {"factual": 60, "default": 30}}}
+        original = copy.deepcopy(mem)
+        score_memory(mem, config)
+        _assert_state_unchanged(original, mem, "score_memory")
+
+    def test_memory_without_dates(self):
+        """Scoring a memory with missing dates does not mutate."""
+        mem = {"category": "default", "created_at": None}
+        config = {"tuning": {}}
+        original = copy.deepcopy(mem)
+        score_memory(mem, config)
+        _assert_state_unchanged(original, mem, "score_memory (no dates)")
+
+
+# ------------------------------------------------------------------
+# filter_and_rank_memories
+# ------------------------------------------------------------------
+
+
+class TestFilterAndRankImmutability:
+    """Verify filter_and_rank_memories does not mutate its input list or dicts."""
+
+    def test_input_list_not_mutated(self):
+        """The original list is not modified (no in-place sort, no dict mutation)."""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        memories = [
+            {
+                "id": "mem-1",
+                "content": "Test A",
+                "category": "factual",
+                "created_at": (now - timedelta(days=5)).isoformat(),
+                "last_accessed": None,
+            },
+            {
+                "id": "mem-2",
+                "content": "Test B",
+                "category": "ephemeral",
+                "created_at": (now - timedelta(days=100)).isoformat(),
+                "last_accessed": None,
+            },
+        ]
+        config = {
+            "tuning": {
+                "memory_half_lives": {"factual": 60, "ephemeral": 3, "default": 30}
+            }
+        }
+        original = copy.deepcopy(memories)
+        filter_and_rank_memories(memories, config)
+        _assert_state_unchanged(original, memories, "filter_and_rank_memories")
+
+    def test_individual_dicts_not_mutated(self):
+        """Individual memory dicts do not gain a confidence_score key."""
+        from datetime import datetime, timezone
+
+        mem = {
+            "id": "mem-1",
+            "content": "Test",
+            "category": "default",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_accessed": None,
+        }
+        memories = [mem]
+        config = {"tuning": {}}
+        filter_and_rank_memories(memories, config)
+        # The original dict should NOT have confidence_score added
+        assert "confidence_score" not in mem

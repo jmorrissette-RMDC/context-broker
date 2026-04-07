@@ -1,0 +1,10 @@
+Review written to `state_4_development/context_broker_pmad/docs/designs/cli-implementation-review-claude.md`.
+
+**Summary of findings:**
+
+- **No blockers.** The plan is structurally sound and covers all 27 PRD requirements.
+- **4 must-fix items** — mostly about files the plan doesn't mention: what happens to `knowledge_enriched.py` retrieval graph, the old `memory_extraction.py` flow (violates I08 if left registered), `memory_search_flow.py` dead code, and the BM25 elementId-stripping fix in `graph_memory.py` being harder than described.
+- **5 should-fix items** — missing A02 (verbose logging), A06 (Prometheus metrics), `conversation_id` not in CEAs state, no gating test for graph re-enablement, config chunk ordering.
+- **5 observations** — synchronous CEAs latency, LLM attribution accuracy, structured output format choice, wrapper instantiation pattern, test plan granularity.
+
+The biggest correctness issue is in `graph_memory.py:search()` — the Cypher query returns `elementId` fields but BM25 reranking strips them at lines 116-126. Fixing this requires mapping reranked results back to original rows or bypassing BM25, which is more work than the plan implies.

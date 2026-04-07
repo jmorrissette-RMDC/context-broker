@@ -1,0 +1,825 @@
+"""
+Imperator — LangGraph ReAct-style conversational agent flow.
+
+The Imperator is the Context Broker's built-in conversational agent.
+It uses a proper LangGraph ReAct graph (agent_node -> tool_node loop).
+Conversation history is loaded from PostgreSQL on each invocation and
+results are stored via the standard message pipeline (conv_store_message).
+
+Uses LangChain's ChatOpenAI.bind_tools() for tool binding.
+
+ARCH-05: ReAct loop is graph edges, not a while loop inside a node.
+ARCH-06: In-memory MemorySaver is used as the LangGraph checkpointer for
+         the ReAct loop's multi-step tool calling cycle. It is NOT used
+         for cross-invocation persistence — each invocation gets a unique
+         thread_id, so the MemorySaver is effectively ephemeral. The DB
+         remains the persistence layer for conversation history.
+F-22:    Messages stored through conv_store_message pipeline.
+"""
+
+import logging
+import socket
+import uuid
+from typing import Annotated, Optional
+
+import asyncpg
+import httpx
+import openai
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from typing_extensions import TypedDict
+
+from context_broker_te._ctx import get_ctx
+
+from context_broker_te.tools.admin import get_tools as get_admin_tools
+from context_broker_te.tools.alerting import get_tools as get_alerting_tools
+from context_broker_te.tools.diagnostic import get_tools as get_diagnostic_tools
+from context_broker_te.tools.filesystem import get_tools as get_filesystem_tools
+from context_broker_te.tools.notify import get_tools as get_notify_tools
+from context_broker_te.tools.operational import get_tools as get_operational_tools
+from context_broker_te.tools.system import get_tools as get_system_tools
+from context_broker_te.tools.web import get_tools as get_web_tools
+
+_log = logging.getLogger("context_broker.flows.imperator")
+
+# MAD identity — hostname is the Docker container name
+_MAD_HOSTNAME = socket.gethostname()
+
+
+# ── State ────────────────────────────────────────────────────────────────
+
+
+class ImperatorState(TypedDict):
+    """State for the Imperator ReAct agent.
+
+    ARCH-05: messages accumulates via add_messages reducer across
+    agent_node <-> tool_node cycles.  Each invocation gets a unique
+    thread_id — MemorySaver is ephemeral (ReAct loop state only).
+    """
+
+    messages: Annotated[list[AnyMessage], add_messages]
+    context_window_id: Optional[str]
+    config: dict
+    response_text: Optional[str]
+    error: Optional[str]
+    iteration_count: int
+    _user_message_stored: Optional[bool]  # V2: set by agent_node when get_context stores the user msg
+    _streaming: Optional[bool]  # Set by streaming route to use streaming-enabled LLM
+
+
+# ── Core search tools (depend on AE flow singletons) ──────────────────
+
+_conv_search_flow_singleton = None
+
+
+def _get_conv_search_flow():
+    global _conv_search_flow_singleton
+    if _conv_search_flow_singleton is None:
+        ctx = get_ctx()
+        builder = ctx.get_flow_builder("conversation_search")
+        if builder is None:
+            raise RuntimeError(
+                "AE package not loaded: conversation_search flow unavailable"
+            )
+        _conv_search_flow_singleton = builder()
+    return _conv_search_flow_singleton
+
+
+@tool
+async def conv_search(query: str, limit: int = 5) -> str:
+    """Search conversation history for relevant messages and conversations.
+
+    Use this when the user asks about what was said, discussed, or decided
+    in past conversations.
+
+    Args:
+        query: The search query describing what to find.
+        limit: Maximum number of results to return (default 5).
+    """
+    ctx = get_ctx()
+    config = await ctx.async_load_config()
+    flow = _get_conv_search_flow()
+    result = await flow.ainvoke(
+        {
+            "query": query,
+            "limit": limit,
+            "offset": 0,
+            "date_from": None,
+            "date_to": None,
+            "flow_id": None,
+            "user_id": None,
+            "sender": None,
+            "config": config,
+            "query_embedding": None,
+            "results": [],
+            "warning": None,
+            "error": None,
+        }
+    )
+    results = result.get("results", [])
+    if not results:
+        return "No conversations found matching that query."
+    lines = [f"Found {len(results)} conversation(s):"]
+    for conv in results:
+        lines.append(
+            f"- {conv.get('title', 'Untitled')} (id: {conv['id']}, "
+            f"messages: {conv.get('total_messages', 0)})"
+        )
+    return "\n".join(lines)
+
+
+@tool
+async def knowledge_search(query: str, user_id: str = "imperator", limit: int = 5) -> str:
+    """Search extracted knowledge and memories from the knowledge graph.
+
+    Use this when the user asks about facts, preferences, relationships,
+    or anything that has been learned and stored as structured knowledge.
+
+    Args:
+        query: The search query describing what knowledge to find.
+        user_id: The user whose memories to search (default: imperator).
+        limit: Maximum number of results to return (default 5).
+    """
+    ctx = get_ctx()
+    config = await ctx.async_load_config()
+    result = await ctx.dispatch_tool(
+        "knowledge_search",
+        {"query": query, "user_id": user_id, "limit": limit},
+        config,
+        None,
+    )
+    facts = result.get("vector_facts", [])
+    relations = result.get("graph_relations", [])
+    if not facts and not relations:
+        return "No relevant memories found."
+    lines = [f"Found {len(facts)} facts and {len(relations)} relations:"]
+    for mem in facts:
+        fact = mem.get("memory") or mem.get("content") or str(mem)
+        lines.append(f"- {fact}")
+    for rel in relations:
+        lines.append(f"- {rel.get('source', '?')} --[{rel.get('relationship', '?')}]--> {rel.get('destination', '?')}")
+    return "\n".join(lines)
+
+
+# ── Tool assembly ──────────────────────────────────────────────────────
+
+# Core tools: always available
+_core_tools: list = [conv_search, knowledge_search]
+
+
+def _collect_tools(imperator_config: dict) -> list:
+    """Collect all active tools based on config.
+
+    Discovers tools from the tools/ modules via get_tools().
+    """
+    active = list(_core_tools)
+    active.extend(get_diagnostic_tools())
+    active.extend(get_web_tools())
+    active.extend(get_filesystem_tools())
+    active.extend(get_system_tools())
+    active.extend(get_notify_tools(imperator_config))
+    if imperator_config.get("admin_tools", False):
+        active.extend(get_admin_tools())
+    active.extend(get_operational_tools(imperator_config))
+    active.extend(get_alerting_tools(imperator_config))
+    return active
+
+
+# ── Message pipeline singleton ──────────────────────────────────────────
+
+# R7-m14: Pre-bound LLM with tools — set at graph compilation time
+_prebound_llm = None
+
+_message_pipeline_singleton = None
+
+
+def _get_message_pipeline():
+    """Lazy-init the standard message pipeline flow."""
+    global _message_pipeline_singleton
+    if _message_pipeline_singleton is None:
+        ctx = get_ctx()
+        builder = ctx.get_flow_builder("message_pipeline")
+        if builder is None:
+            raise RuntimeError(
+                "AE package not loaded: message_pipeline flow unavailable"
+            )
+        _message_pipeline_singleton = builder()
+    return _message_pipeline_singleton
+
+
+# ── Helper: load DB history ─────────────────────────────────────────────
+
+
+async def _load_conversation_history(context_window_id: str, config: dict) -> str:
+    """Load recent conversation history from PostgreSQL for context.
+
+    ARCH-06: History comes from the DB, not a checkpointer.  Returns a
+    formatted string to embed in the system prompt.
+    """
+    ctx = get_ctx()
+    history_limit = ctx.get_tuning(config, "imperator_history_limit", 20)
+    try:
+        pool = ctx.get_pool()
+        cw_row = await pool.fetchrow(
+            "SELECT conversation_id FROM context_windows WHERE id = $1",
+            uuid.UUID(context_window_id),
+        )
+        if cw_row is None:
+            _log.warning("Context window %s not found", context_window_id)
+            return ""
+
+        conversation_id = cw_row["conversation_id"]
+        rows = await pool.fetch(
+            """
+            SELECT role, content
+            FROM conversation_messages
+            WHERE conversation_id = $1
+            ORDER BY sequence_number DESC
+            LIMIT $2
+            """,
+            conversation_id,
+            history_limit,
+        )
+        if not rows:
+            return ""
+
+        history_lines = []
+        for row in reversed(rows):
+            row_content = row.get("content") or ""
+            history_lines.append(f"[{row['role']}]: {row_content}")
+        return (
+            "\n\n--- Recent conversation history (for context) ---\n"
+            + "\n".join(history_lines)
+            + "\n--- End of history ---\n"
+        )
+    except (RuntimeError, OSError, asyncpg.PostgresError) as exc:
+        _log.warning("Failed to load Imperator history: %s", exc)
+        return ""
+
+
+# ── Graph nodes ──────────────────────────────────────────────────────────
+
+
+async def init_context_node(state: ImperatorState) -> dict:
+    """First-call setup: load system prompt, domain RAG, get_context for history.
+
+    CR-A03: Split from agent_node. Only runs when no SystemMessage in state
+    (i.e., first iteration). Subsequent ReAct iterations skip this node
+    via the conditional edge and go directly to llm_call_node.
+
+    V2 cache-friendly message structure:
+      1. SystemMessage — static identity (cached, never changes)
+      2. HumanMessage/AIMessage — conversation history (cached prefix)
+      3. HumanMessage — user's actual message (new, at end)
+
+    History loaded as separate messages (not embedded in SystemMessage)
+    to preserve prompt caching across turns.
+    """
+    config = state["config"]
+    ctx = get_ctx()
+
+    imperator_cfg = config.get("imperator", {})
+    prompt_name = imperator_cfg.get("system_prompt", "imperator_identity")
+    try:
+        system_content = await ctx.async_load_prompt(prompt_name)
+    except RuntimeError as exc:
+        _log.error("Failed to load system prompt '%s': %s", prompt_name, exc)
+        return {
+            "messages": [AIMessage(content="I encountered a configuration error.")],
+            "response_text": "I encountered a configuration error.",
+            "error": f"Prompt loading failed: {exc}",
+        }
+
+    # Static system message — identity only (cached by LLM providers)
+    system_msg = SystemMessage(content=system_content)
+
+    messages = list(state["messages"])
+
+    # Extract user's query for RAG-driven retrieval
+    user_query = None
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            user_query = msg.content
+            break
+
+    # Domain RAG: search local domain knowledge for the user's query
+    domain_context = None
+    if user_query:
+        try:
+            pool = ctx.get_pool()
+            emb_model = ctx.get_embeddings_model(config)
+            query_vec = await emb_model.aembed_query(user_query[:500])
+            vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
+
+            rows = await pool.fetch(
+                """
+                SELECT content, 1 - (embedding <=> $1::vector) AS similarity
+                FROM domain_information
+                WHERE embedding IS NOT NULL
+                ORDER BY embedding <=> $1::vector
+                LIMIT 3
+                """,
+                vec_str,
+            )
+            if rows:
+                relevant = [r["content"] for r in rows if float(r["similarity"]) > 0.3]
+                if relevant:
+                    domain_context = "\n".join(f"- {r}" for r in relevant)
+        except (RuntimeError, OSError, ValueError) as exc:
+            _log.debug("Domain RAG lookup skipped: %s", exc)
+
+    # D-07: Load context via get_context with V2 parameters
+    history_messages = []
+    context_messages = []
+    conversation_id = state.get("context_window_id")
+    if conversation_id:
+        try:
+            build_type = imperator_cfg.get("build_type", "tiered-summary")
+            budget = imperator_cfg.get("max_context_tokens", 8192)
+            if not isinstance(budget, int):
+                budget = 8192
+
+            # V2: Pass query, model config, and domain context
+            get_context_args = {
+                "build_type": build_type,
+                "budget": budget,
+                "conversation_id": str(conversation_id),
+            }
+            if user_query:
+                get_context_args["user_prompt"] = user_query
+            if domain_context:
+                get_context_args["domain_context"] = domain_context
+            # Pass the Imperator's own model config for distillation cache
+            get_context_args["model"] = {
+                "base_url": imperator_cfg.get("base_url", ""),
+                "model": imperator_cfg.get("model", ""),
+                "api_key_env": imperator_cfg.get("api_key_env", ""),
+            }
+
+            ctx_result = await ctx.dispatch_tool(
+                "get_context",
+                get_context_args,
+                config,
+                None,
+            )
+            context_messages = ctx_result.get("context", [])
+
+            # V2: Load history as separate messages for prompt caching
+            for msg in context_messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                
+                # ARCH-03: Correctly handle ToolMessage and AIMessage with tool_calls
+                if role == "assistant":
+                    history_messages.append(
+                        AIMessage(content=content, tool_calls=msg.get("tool_calls", []))
+                    )
+                elif role == "tool":
+                    history_messages.append(
+                        ToolMessage(content=content, tool_call_id=msg.get("tool_call_id", "unknown"))
+                    )
+                elif role == "system":
+                    # Skip the identity system prompt (already in system_msg).
+                    # Keep other system-role messages (domain context, tool instructions).
+                    if content and content.strip() == system_msg.content.strip():
+                        continue
+                    history_messages.append(SystemMessage(content=content))
+                else:
+                    history_messages.append(HumanMessage(content=content))
+        except (ValueError, RuntimeError, OSError) as exc:
+            _log.warning("Failed to load context via get_context: %s", exc)
+
+    # CEA: Optional CEAc enrichment (REQ-CEA-C01).
+    # If cea.ceac.enabled is true, run the CEAc enrichment subgraph to
+    # search knowledge and inject enriched context into the prompt.
+    cea_config = config.get("cea", {}).get("ceac", {})
+    if cea_config.get("enabled") and context_messages and user_query:
+        try:
+            from context_broker_te.cea_enrichment_flow import build_ceac_enrichment_flow
+
+            # Build tool callables that route through the AE dispatch
+            async def _search_fn(query, user_id=None, limit=10, **kwargs):
+                return await ctx.dispatch_tool(
+                    "knowledge_search",
+                    {"query": query, "user_id": user_id, "limit": limit},
+                    config,
+                    None,
+                )
+
+            async def _feedback_fn(target_type, target_id, event_type, agent_id, context=None, **kwargs):
+                result = await ctx.dispatch_tool(
+                    "knowledge_feedback",
+                    {
+                        "target_type": target_type,
+                        "target_id": target_id,
+                        "event_type": event_type,
+                        "agent_id": agent_id,
+                        "context": context,
+                    },
+                    config,
+                    None,
+                )
+                return result.get("status") == "recorded"
+
+            # Build LLM callable for CEAc query refinement using AE's get_chat_model
+            async def _llm_fn(prompt, **kwargs):
+                from app.config import get_chat_model
+                llm = get_chat_model(config, "imperator")
+                response = await llm.ainvoke([{"role": "user", "content": prompt}])
+                return response.content
+
+            ceac_flow = build_ceac_enrichment_flow()
+            ceac_result = await ceac_flow.ainvoke({
+                "tiers": context_messages,
+                "query": user_query,
+                "user_id": imperator_cfg.get("user_id"),
+                "search_fn": _search_fn,
+                "feedback_fn": _feedback_fn,
+                "llm_fn": _llm_fn,
+                "search_results": [],
+                "search_queries": [],
+                "ranked_results": [],
+                "enriched_context": "",
+                "feedback_events": [],
+                "iteration_count": 0,
+                "config": config,
+            })
+
+            enriched = ceac_result.get("enriched_context", "")
+            if enriched and enriched.strip():
+                history_messages.append(SystemMessage(content=enriched))
+                _log.info("CEAc enrichment injected (%d chars)", len(enriched))
+        except (ImportError, RuntimeError, ValueError, OSError) as exc:
+            _log.warning("CEAc enrichment failed (continuing without): %s", exc)
+
+    result = {}
+
+    # V2: Flag that user message was stored by get_context
+    if user_query and state.get("context_window_id"):
+        result["_user_message_stored"] = True
+
+    # Deduplicate: if get_context returned history that ends with the same
+    # user message we're about to send, remove it from history to avoid
+    # the message appearing twice in the prompt. Compare by content match
+    # on the trailing HumanMessage.
+    if history_messages and messages:
+        last_hist = history_messages[-1]
+        last_msg = messages[-1]
+        if (isinstance(last_hist, HumanMessage)
+                and isinstance(last_msg, HumanMessage)
+                and last_hist.content == last_msg.content):
+            history_messages = history_messages[:-1]
+
+    # Assemble: system (static, cached) + history (cached prefix) + current messages
+    assembled = [system_msg] + history_messages + messages
+
+    result["messages"] = assembled
+    return result
+
+
+async def llm_call_node(state: ImperatorState) -> dict:
+    """Call the LLM with bound tools and return the response.
+
+    CR-A03: Split from agent_node. Runs every ReAct iteration.
+    ARCH-05: This node contains NO loop. Flow control (tool-call vs
+    final answer) is handled by the conditional edge after this node.
+    """
+    config = state["config"]
+    ctx = get_ctx()
+
+    # R7-m14: Use the pre-bound LLM from graph compilation.
+    # Falls back to runtime binding if _prebound_llm is not available (e.g., tests).
+    # When _streaming is set, use a streaming-enabled LLM for astream_events
+    # to produce on_chat_model_stream events. Non-streaming (default) avoids
+    # "No generations found in stream" errors from providers on tool-call-only turns.
+    if state.get("_streaming"):
+        imperator_config = config.get("imperator", {})
+        active_tools = _collect_tools(imperator_config)
+        llm = ctx.get_chat_model(config, role="imperator", streaming=True)
+        llm_with_tools = llm.bind_tools(active_tools)
+    elif _prebound_llm is not None:
+        llm_with_tools = _prebound_llm
+    else:
+        imperator_config = config.get("imperator", {})
+        active_tools = _collect_tools(imperator_config)
+        llm = ctx.get_chat_model(config, role="imperator")
+        llm_with_tools = llm.bind_tools(active_tools)
+
+    messages = list(state["messages"])
+
+    # CB-R3-06: Truncate older messages if the list exceeds the limit.
+    max_react_messages = ctx.get_tuning(config, "imperator_max_react_messages", 40)
+    if len(messages) > max_react_messages:
+        from langchain_core.messages import ToolMessage
+
+        cut_index = len(messages) - (max_react_messages - 1)
+        while cut_index < len(messages) and isinstance(
+            messages[cut_index], ToolMessage
+        ):
+            cut_index += 1
+        messages = [messages[0]] + messages[cut_index:]
+
+    # Retry on empty response — Gemini occasionally returns valid but empty
+    # completions (content="" with no tool_calls). This is never a valid
+    # agent response, so retry up to 2 times before accepting it.
+    max_retries = 2
+    response = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = await llm_with_tools.ainvoke(messages)
+        except (openai.APIError, httpx.HTTPError, ValueError, RuntimeError) as exc:
+            _log.error("Imperator LLM call failed: %s", exc, exc_info=True)
+            return {
+                "messages": [
+                    AIMessage(
+                        content="I encountered an error processing your request."
+                    )
+                ],
+                "response_text": "I encountered an error processing your request.",
+                "error": str(exc),
+            }
+
+        # Valid response: has text content or tool calls
+        if (response.content and response.content.strip()) or response.tool_calls:
+            break
+
+        if attempt < max_retries:
+            _log.warning(
+                "Imperator LLM returned empty response (attempt %d/%d) — retrying",
+                attempt + 1,
+                max_retries + 1,
+            )
+        else:
+            _log.error(
+                "Imperator LLM returned empty response after %d attempts",
+                max_retries + 1,
+            )
+
+    return {
+        "messages": [response],
+        "iteration_count": state.get("iteration_count", 0) + 1,
+    }
+
+
+def needs_init(state: ImperatorState) -> str:
+    """Conditional edge at entry: route to init_context_node if no Imperator identity prompt.
+
+    CR-A03: First call goes through init_context_node for setup,
+    subsequent ReAct iterations skip directly to llm_call_node.
+
+    Checks for the Imperator's specific identity marker, not just any
+    SystemMessage. OpenAI-compatible clients may send their own system
+    messages which should NOT prevent identity initialization.
+    """
+    # The identity prompt contains "Imperator" — check for that marker
+    # rather than any SystemMessage, so client-supplied system messages
+    # don't skip initialization.
+    IDENTITY_MARKER = "Imperator"
+    for m in state.get("messages", []):
+        if isinstance(m, SystemMessage) and IDENTITY_MARKER in (m.content or ""):
+            return "llm_call_node"
+    return "init_context_node"
+
+
+def should_continue(state: ImperatorState) -> str:
+    """Conditional edge: route to tool_node if tool calls, else store nodes.
+
+    ARCH-05: Flow control is graph edges, not loops in nodes.
+    Enforces imperator_max_iterations to prevent unbounded ReAct loops.
+    """
+    if state.get("error"):
+        return "store_user_message"
+
+    messages = state["messages"]
+    if not messages:
+        return "store_user_message"
+
+    last_message = messages[-1]
+    if isinstance(last_message, AIMessage) and last_message.tool_calls:
+        max_iterations = get_ctx().get_tuning(
+            state.get("config", {}), "imperator_max_iterations", 5
+        )
+        if state.get("iteration_count", 0) >= max_iterations:
+            _log.warning(
+                "Imperator hit max iterations (%d) — forcing end",
+                max_iterations,
+            )
+            return "max_iterations_fallback"
+        return "tool_node"
+
+    return "store_user_message"
+
+
+async def max_iterations_fallback(state: ImperatorState) -> dict:
+    """Inject a fallback text response when max iterations is reached.
+
+    Without this, the last message is an AIMessage with tool_calls but no
+    text content, causing the chat endpoint to return an empty response.
+    """
+    return {
+        "messages": [
+            AIMessage(
+                content=(
+                    "I was unable to complete that request within the allowed "
+                    "number of steps. Please try again, or break the request "
+                    "into smaller parts."
+                )
+            )
+        ]
+    }
+
+
+async def store_user_message(state: ImperatorState) -> dict:
+    """Persist the user's message via the store_message core tool.
+
+    D-01: Split into separate node for MemorySaver compatibility.
+    D-07: Uses dispatch_tool("store_message") — self-consumption.
+    Uses hostname as recipient, user field from config as sender.
+
+    V2: Skips storage if the user message was already stored by get_context
+    (when query parameter was passed). Prevents duplicate messages.
+    """
+    conversation_id = state.get("context_window_id")
+    if not conversation_id:
+        return {}
+
+    # V2: If get_context was called with query, the user message
+    # was already stored inside retrieve_context_node. Skip.
+    if state.get("_user_message_stored"):
+        return {}
+
+    user_content = None
+    for msg in state["messages"]:
+        if isinstance(msg, HumanMessage):
+            user_content = msg.content
+
+    if not user_content:
+        return {}
+
+    # Sender is whoever sent the message to the Imperator
+    user_identity = (
+        state.get("config", {}).get("imperator", {}).get("_request_user", "unknown")
+    )
+
+    try:
+        ctx = get_ctx()
+        await ctx.dispatch_tool(
+            "store_message",
+            {
+                "conversation_id": str(conversation_id),
+                "role": "user",
+                "sender": user_identity,
+                "recipient": _MAD_HOSTNAME,
+                "content": user_content,
+            },
+            state.get("config", {}),
+            None,
+        )
+    except (ValueError, RuntimeError, OSError) as exc:
+        _log.warning("Failed to store Imperator user message: %s", exc)
+
+    return {}
+
+
+async def store_assistant_message(state: ImperatorState) -> dict:
+    """Persist the assistant's response via the store_message core tool.
+
+    D-01: Second persistence node.
+    D-07: Uses dispatch_tool("store_message") — self-consumption.
+    Uses hostname as sender, user field from config as recipient.
+    """
+    last_ai = None
+    for msg in reversed(state["messages"]):
+        if isinstance(msg, AIMessage) and not msg.tool_calls:
+            last_ai = msg
+            break
+
+    response_text = last_ai.content if last_ai else ""
+
+    # Guard against empty responses — LLM provider errors, rate limits, or
+    # tool-call-only final turns can produce AIMessages with empty content.
+    if not response_text.strip():
+        # Log the full message list to diagnose WHY it's empty
+        msg_summary = []
+        for i, msg in enumerate(state["messages"]):
+            msg_type = type(msg).__name__
+            has_tool_calls = bool(getattr(msg, "tool_calls", None))
+            content_len = len(msg.content) if msg.content else 0
+            content_preview = (msg.content[:80] if msg.content else "None")
+            msg_summary.append(
+                f"  [{i}] {msg_type}: content_len={content_len}, "
+                f"tool_calls={has_tool_calls}, preview={content_preview!r}"
+            )
+        _log.warning(
+            "Imperator produced empty response. Message chain (%d messages):\n%s",
+            len(state["messages"]),
+            "\n".join(msg_summary),
+        )
+        response_text = (
+            "I was unable to generate a response. This may be due to a "
+            "temporary provider issue. Please try again."
+        )
+
+    conversation_id = state.get("context_window_id")
+    user_identity = (
+        state.get("config", {}).get("imperator", {}).get("_request_user", "unknown")
+    )
+
+    # Do not persist fallback error messages — they poison the conversation
+    # history and cause a cascade where every subsequent call also fails
+    # because the LLM sees a history full of error responses.
+    is_fallback = response_text.startswith("I was unable to generate")
+
+    if conversation_id and response_text and not is_fallback:
+        try:
+            ctx = get_ctx()
+            await ctx.dispatch_tool(
+                "store_message",
+                {
+                    "conversation_id": str(conversation_id),
+                    "role": "assistant",
+                    "sender": _MAD_HOSTNAME,
+                    "recipient": user_identity,
+                    "content": response_text,
+                },
+                state.get("config", {}),
+                None,
+            )
+        except (ValueError, RuntimeError, OSError) as exc:
+            _log.warning("Failed to store Imperator assistant message: %s", exc)
+
+    return {"response_text": response_text}
+
+
+# ── Build the graph ──────────────────────────────────────────────────────
+
+
+def build_imperator_flow(config: dict | None = None) -> StateGraph:
+    """Build and compile the Imperator StateGraph.
+
+    ARCH-05: Proper graph structure with agent_node <-> tool_node loop
+             via conditional edges.  No while loops inside nodes.
+    D-01:    MemorySaver checkpointer for graph execution state.
+    F-22:    Results stored via conv_store_message in store_and_end.
+
+    Tools are discovered from tools/ modules via get_tools().
+    """
+    # R6-M14: Build the ToolNode with only the tools that match the config.
+    ctx = get_ctx()
+    if config is None:
+        config = ctx.load_merged_config()
+    imperator_config = config.get("imperator", {})
+    active_tools = _collect_tools(imperator_config)
+    tool_node_instance = ToolNode(active_tools)
+
+    # R7-m14: Pre-bind tools to the LLM at graph compilation time
+    global _prebound_llm
+    llm = ctx.get_chat_model(config, role="imperator")
+    _prebound_llm = llm.bind_tools(active_tools)
+
+    workflow = StateGraph(ImperatorState)
+
+    workflow.add_node("init_context_node", init_context_node)
+    workflow.add_node("llm_call_node", llm_call_node)
+    workflow.add_node("tool_node", tool_node_instance)
+    workflow.add_node("max_iterations_fallback", max_iterations_fallback)
+    workflow.add_node("store_user_message", store_user_message)
+    workflow.add_node("store_assistant_message", store_assistant_message)
+
+    # CR-A03: Entry → conditional (has SystemMessage? → llm_call_node, else → init_context_node)
+    workflow.set_conditional_entry_point(
+        needs_init,
+        {
+            "init_context_node": "init_context_node",
+            "llm_call_node": "llm_call_node",
+        },
+    )
+
+    workflow.add_edge("init_context_node", "llm_call_node")
+
+    workflow.add_conditional_edges(
+        "llm_call_node",
+        should_continue,
+        {
+            "tool_node": "tool_node",
+            "max_iterations_fallback": "max_iterations_fallback",
+            "store_user_message": "store_user_message",
+        },
+    )
+
+    workflow.add_edge("tool_node", "llm_call_node")
+    workflow.add_edge("max_iterations_fallback", "store_user_message")
+    workflow.add_edge("store_user_message", "store_assistant_message")
+    workflow.add_edge("store_assistant_message", END)
+
+    from langgraph.checkpoint.memory import MemorySaver
+
+    return workflow.compile(checkpointer=MemorySaver())
+
+
+# Metrics wrappers (invoke_with_metrics, astream_events_with_metrics) live
+# in the kernel at app/flows/imperator_wrapper.py — they are AE-side
+# instrumentation concerns, not TE logic.

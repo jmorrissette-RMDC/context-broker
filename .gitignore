@@ -1,0 +1,18 @@
+# Credentials (loaded via env_file in docker-compose)
+config/credentials/.env
+config/credentials/.env.local-backup
+config/credentials/postgres_password.txt
+.env
+
+# Persistent data volumes (managed by Docker)
+data/
+
+# Python bytecode
+*.pyc
+__pycache__/
+
+# Package build artifacts
+*.egg-info/
+build/
+dist/
+*.whl
