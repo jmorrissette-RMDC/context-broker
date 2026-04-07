@@ -81,6 +81,19 @@ else
 fi
 
 
+# ── Install StateGraph packages (AE + TE) from pre-built wheels ──────────────
+# Wheels were built at image build time (pip wheel --no-deps) and stored in
+# /app/stategraph-wheels/. Installing with --no-deps ensures no transitive
+# dependency upgrades occur — only the AE/TE code itself is installed.
+# Use install_stategraph to update AE/TE in a running container.
+echo "Installing StateGraph packages from pre-built wheels (--no-deps)"
+for wheel in /app/stategraph-wheels/*.whl; do
+    if [ -f "$wheel" ]; then
+        echo "Installing wheel: $wheel"
+        pip install --user --no-deps --no-cache-dir "$wheel"
+    fi
+done
+
 # Ensure /data subdirectories exist.
 # /data is a bind mount. With UID matching the host user (UID 1000),
 # the container user can create subdirectories directly.
