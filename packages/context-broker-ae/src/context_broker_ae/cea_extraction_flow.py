@@ -157,22 +157,25 @@ async def run_extraction_llm(state: CEAsExtractionState) -> dict:
         current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # The prompt template contains literal { } in JSON examples which
-        # str.format() would try to interpret as format placeholders (EXT-02
-        # pattern). Use format_map with SafeDict so unknown keys are left
-        # unchanged instead of raising KeyError.
+        # str.format() / format_map() cannot handle safely (EXT-02 pattern).
+        # Use simple str.replace() for each known variable — no format engine.
         from context_broker_ae.memory_extraction import clean_for_compaction
 
-        class _SafeDict(dict):
-            def __missing__(self, key):
-                return "{" + key + "}"
-
-        prompt = vector_prompt_template.format_map(_SafeDict(
-            current_date=current_date,
-            existing_facts=existing_facts_text,
-            content=clean_for_compaction(state["content"]) or "(no extractable content)",
-            tier2_context=clean_for_compaction(state.get("tier2_context", "") or "") or "(none)",
-            tier3_context=clean_for_compaction(state.get("tier3_context", "") or "") or "(none)",
-        ))
+        prompt = vector_prompt_template
+        prompt = prompt.replace("{current_date}", current_date)
+        prompt = prompt.replace("{existing_facts}", existing_facts_text)
+        prompt = prompt.replace(
+            "{content}",
+            clean_for_compaction(state["content"]) or "(no extractable content)",
+        )
+        prompt = prompt.replace(
+            "{tier2_context}",
+            clean_for_compaction(state.get("tier2_context", "") or "") or "(none)",
+        )
+        prompt = prompt.replace(
+            "{tier3_context}",
+            clean_for_compaction(state.get("tier3_context", "") or "") or "(none)",
+        )
 
         llm = get_chat_model(config, role="extraction")
         response = await llm.ainvoke(
