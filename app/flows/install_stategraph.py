@@ -32,7 +32,10 @@ async def install_stategraph(
 
     # Build pip install command
     pkg_spec = f"{package_name}=={version}" if version else package_name
-    cmd = ["pip", "install", "--user", "--no-cache-dir"]
+    # --no-deps: only install the package itself, never touch transitive dependencies.
+    # All dependencies are pinned in the system site-packages at image build time.
+    # Installing deps here would pull latest versions from PyPI and overwrite pins.
+    cmd = ["pip", "install", "--user", "--no-cache-dir", "--no-deps"]
 
     if source == "devpi":
         devpi_url = packages_config.get("devpi_url")
