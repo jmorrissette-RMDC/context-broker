@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mem0ai"
+version = "1.0.8.post1"
+description = "Mem0 fork — quality gate, metadata passthrough, expiration cleanup (Joshua26 #429)"
+requires-python = ">=3.10"
+# No dependencies declared here — the host application (requirements.txt)
+# manages all pinned versions. Declaring deps here would conflict with
+# the host's pins (e.g., qdrant-client pulls in newer langchain-core
+# which breaks langchain-neo4j). The fork is a drop-in replacement for
+# mem0ai and relies on the same environment the host already provides.
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["mem0*"]
