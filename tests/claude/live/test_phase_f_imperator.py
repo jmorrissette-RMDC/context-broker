@@ -321,3 +321,48 @@ class TestImperatorCoherence:
             f"imperator_chat not found in tools/list. "
             f"Available tools: {tool_names[:20]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# CEAc integration
+# ---------------------------------------------------------------------------
+
+class TestCEAcIntegration:
+    """F-new: Verify CEAc (client-side enrichment) integration with Imperator."""
+
+    def test_ceac_knowledge_search_available(self, http_client):
+        """knowledge_search must be registered for CEAc enrichment to work."""
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 100,
+            "method": "tools/list",
+            "params": {},
+        }
+        resp = http_client.post("/mcp", json=payload, timeout=30)
+        assert resp.status_code == 200, f"tools/list failed: {resp.text}"
+        body = resp.json()
+        tools = body.get("result", {}).get("tools", [])
+        tool_names = [t.get("name", "") for t in tools]
+        assert "knowledge_search" in tool_names, (
+            f"knowledge_search not found in tools/list — CEAc enrichment will not work. "
+            f"Available tools: {tool_names[:20]}"
+        )
+
+    def test_ceac_imperator_responds_with_knowledge_query(self, http_client):
+        """Imperator should handle a knowledge-oriented query without error.
+
+        CEAc is additive — when enabled it enriches context before the
+        Imperator generates a response. A substantive response confirms
+        the flow completed without crashing.
+        """
+        result = chat_call(
+            http_client,
+            "What do you know about the MAD architecture or context broker system?",
+            timeout=180,
+        )
+        assert not result.get("error"), f"Imperator returned error: {result}"
+        content = result["choices"][0]["message"]["content"]
+        assert len(content) > 20, (
+            f"Imperator response too short after CEAc enrichment attempt "
+            f"({len(content)} chars)"
+        )

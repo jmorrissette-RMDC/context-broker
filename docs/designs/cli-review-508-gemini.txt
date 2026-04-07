@@ -1,0 +1,44 @@
+YOLO mode is enabled. All tool calls will be automatically approved.
+YOLO mode is enabled. All tool calls will be automatically approved.
+Registering notification handlers for server 'hymie'. Capabilities: {
+  experimental: {},
+  logging: {},
+  prompts: { listChanged: true },
+  resources: { subscribe: false, listChanged: true },
+  tools: { listChanged: true }
+}
+Server 'hymie' supports tool updates. Listening for changes...
+Server 'hymie' supports resource updates. Listening for changes...
+Server 'hymie' supports prompt updates. Listening for changes...
+Scheduling MCP context refresh...
+Executing MCP context refresh...
+MCP context refresh complete.
+I will begin by listing the files in the `tests/claude/live/` directory to confirm their existence and exact paths.
+I'll start by reading `tests/claude/live/test_phase_a_infrastructure.py` to check for any references to removed tools or incorrect response keys in the infrastructure tests.
+I've reviewed `test_phase_a_infrastructure.py` and noted that `TestKnowledgeToolsPresent` correctly reflects the addition of `knowledge_feedback` and the removal of `knowledge_delete`. However, `TestBuildTypesInSchema` still references a `get_context` tool, which may be the removed `knowledge_get_context`. I'll now read `tests/claude/live/test_phase_b_core_tools.py` to clarify this and continue the review.
+In `test_phase_b_core_tools.py`, `TestSearchKnowledge` correctly verifies the presence of `vector_facts` and `graph_relations`, and `get_context` appears to be the primary tool for conversation context, distinct from the removed `knowledge_get_context`. While `test_build_type_works` is broad in its content key checks, I'll examine `test_phase_e_build_types.py` later for more granular "enriched" build type validation. I'll now proceed to read `tests/claude/live/test_phase_c_management.py`.
+`test_phase_c_management.py` correctly implements the updated `knowledge_add`, `knowledge_search`, and `knowledge_list` tools, and includes a thorough new suite for `knowledge_feedback`, confirming its parameters and DB persistence. The removal of `knowledge_get_context` and `knowledge_delete` is also correctly handled. I'll now proceed to review `tests/claude/live/test_phase_d_workers.py`.
+`test_phase_d_workers.py` correctly includes CEA extraction and metrics checks, but I've identified a discrepancy in `test_cea_quality_metadata_populated`: its docstring suggests it won't hard-fail if the table is empty, yet the code uses `pytest.fail`, unlike `test_cea_metadata_has_required_columns` which correctly skips. I'll now examine `tests/claude/live/test_phase_e_build_types.py`.
+`test_phase_e_build_types.py` correctly validates that the "enriched" build type returns standard tiers without server-side RAG injection, matching the new CEA requirements. I'll now proceed to review `tests/claude/live/test_phase_f_imperator.py`.
+`test_phase_f_imperator.py` correctly integrates CEAc checks, ensuring `knowledge_search` is available and the Imperator handles knowledge-oriented queries post-enrichment. I'll now move on to review `tests/claude/live/test_phase_k_real_tool_effects.py`.
+`test_phase_k_real_tool_effects.py` accurately reflects the CEA updates, particularly in `TestKnowledgeAddCreatesSearchableMemory` and `TestSearchKnowledgeReturnsFacts`, which now correctly use the `vector_facts` key for `knowledge_search` results. I'll now proceed to review `tests/claude/live/test_phase_l_quality_eval.py`.
+I have completed the code review of the 8 requested files. Overall, the updates accurately reflect the CEA implementation requirements, including the API changes for `knowledge_search`, `knowledge_add`, and `knowledge_feedback`, as well as the removal of `knowledge_delete` and `knowledge_get_context`.
+
+### Summary of Findings
+
+| File | Test Name | Description |
+| :--- | :--- | :--- |
+| `test_phase_d_workers.py` | `test_cea_quality_metadata_populated` | **Logic Error / Contradiction:** The docstring states the test logs a warning but "does not hard-fail" if the table is empty, yet the implementation uses `pytest.fail`. This is inconsistent with `test_cea_metadata_has_required_columns` in the same file, which correctly uses `pytest.skip`. |
+| `test_phase_b_core_tools.py` | N/A (Docstring) | **Minor Inconsistency:** The file docstring lists `search_knowledge` as one of the four core tools, but the actual tool name used in the tests (and registered in the system) is `knowledge_search`. |
+| `test_phase_a_infrastructure.py` | `TestBuildTypesInSchema` | **Verification Needed:** This test checks the `get_context` tool. While `get_context` is the primary core tool for context retrieval, I confirmed that it is distinct from the removed `knowledge_get_context` tool, so its presence is correct. |
+| `test_phase_e_build_types.py` | `test_knowledge_enriched_returns_tiers_only` | **Logic Correctness:** Correctly verifies that the `enriched` build type no longer contains `semantic_messages` or `knowledge_graph_facts`, matching the requirement that enrichment is now client-side (CEAc). |
+| `test_phase_c_management.py` | `TestKnowledgeFeedback` | **Logic Correctness:** Correctly implements tests for the new `knowledge_feedback` tool, covering all required parameters (`target_type`, `target_id`, `event_type`, `agent_id`, `context`) and verifying DB persistence in `cea_feedback_events`. |
+| `test_phase_c_management.py` | `TestMemAdd` / `TestMemSearch` | **Response Key Accuracy:** Correctly updated to expect `vector_facts` from `knowledge_search` and the simplified `{"status": "added", "memory_id": ...}` format from `knowledge_add`. |
+| `test_phase_l_quality_eval.py` | `TestMetadataQuality` | **New Coverage:** Added an important evaluation test for the new `cea_quality_metadata` table, judging the calibration of `durability` and `confidence` scores. |
+
+### Detailed Observations
+
+1.  **Skip vs Fail Correctness:** In `test_phase_d_workers.py`, `test_cea_quality_metadata_populated` should likely be changed to `pytest.skip` if the table is empty to match its docstring and the behavior of the adjacent test, unless the test environment guarantees that compaction (and thus CEA extraction) has already occurred.
+2.  **Removed Tools:** The removal of `knowledge_delete` and `knowledge_get_context` is properly handled by deleting their corresponding tests in Phase C and adding an explicit absence check for `knowledge_delete` in Phase A (`TestKnowledgeToolsPresent`).
+3.  **Key Names:** The transition from `memories` to `vector_facts` and `graph_relations` in `knowledge_search` is consistently applied across all test phases (B, C, K, L).
+4.  **Enriched Build Type:** The requirement that `enriched` returns tiers only is strictly verified in `test_phase_e_build_types.py`, ensuring no server-side RAG injection occurs.

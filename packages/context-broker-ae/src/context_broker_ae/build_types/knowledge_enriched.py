@@ -26,19 +26,14 @@ import time
 import uuid
 from typing import Annotated, Optional
 
-import asyncpg
-import httpx
-import openai
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 from app.config import (
     get_build_type_config,
-    get_embeddings_model,
     get_tuning,
     verbose_log,
 )
-from context_broker_ae.memory_scoring import filter_and_rank_memories
 from app.database import get_pg_pool
 from app.utils import stable_lock_id
 
@@ -75,8 +70,6 @@ class KnowledgeEnrichedRetrievalState(TypedDict):
     tier3_summary: Optional[str]
     tier2_summaries: list[str]
     recent_messages: list[dict]
-    semantic_messages: list[dict]
-    knowledge_graph_facts: list[str]
     assembly_status: str
 
     # Output
@@ -328,46 +321,9 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
         cumulative_tokens += _estimate_tokens(content)
         messages.append({"role": "system", "content": content})
 
-    # Semantic retrieval — budget-aware (M-07)
-    # R7-M10: Track which semantic messages survive truncation for context_tiers
-    truncated_semantic_messages: list[dict] = []
-    if state.get("semantic_messages"):
-        remaining = (
-            max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
-        )
-        semantic_lines = []
-        semantic_tokens = 0
-        for m in state["semantic_messages"]:
-            line = f"[{m['role']}] {m['sender']}: {m.get('content') or ''}"
-            line_tokens = _estimate_tokens(line)
-            if semantic_tokens + line_tokens > remaining:
-                break
-            semantic_lines.append(line)
-            truncated_semantic_messages.append(m)
-            semantic_tokens += line_tokens
-        if semantic_lines:
-            content = "[Semantically relevant context]\n" + "\n".join(semantic_lines)
-            cumulative_tokens += _estimate_tokens(content)
-            messages.append({"role": "system", "content": content})
-
-    # Knowledge graph facts — budget-aware (M-07)
-    if state.get("knowledge_graph_facts"):
-        remaining = (
-            max(0, max_budget - cumulative_tokens) if max_budget else float("inf")
-        )
-        fact_lines = []
-        fact_tokens = 0
-        for f in state["knowledge_graph_facts"]:
-            line = f"- {f}"
-            line_tokens = _estimate_tokens(line)
-            if fact_tokens + line_tokens > remaining:
-                break
-            fact_lines.append(line)
-            fact_tokens += line_tokens
-        if fact_lines:
-            content = "[Knowledge graph]\n" + "\n".join(fact_lines)
-            cumulative_tokens += _estimate_tokens(content)
-            messages.append({"role": "system", "content": content})
+    # CEA: semantic_messages and knowledge_graph_facts injection removed.
+    # Server-side enrichment is handled client-side by CEAc. These nodes
+    # are no longer part of the retrieval graph.
 
     # V2: Domain context from caller (external MAD support)
     if state.get("domain_context"):
@@ -405,22 +361,11 @@ async def ke_assemble_context(state: KnowledgeEnrichedRetrievalState) -> dict:
             messages.append(msg)
             cumulative_tokens += _estimate_tokens(m.get("content", ""))
 
-    # R7-M10: Build context_tiers using truncated lists — semantic_messages should
-    # only include the messages that actually made it into the context output.
+    # CEA: context_tiers no longer includes semantic_messages or knowledge_graph_facts.
+    # Server-side enrichment keys removed per REQ-CEA-I01.
     context_tiers = {
         "archival_summary": state.get("tier3_summary"),
         "chunk_summaries": state.get("tier2_summaries", []),
-        "semantic_messages": [
-            {
-                "id": str(m["id"]),
-                "role": m["role"],
-                "sender": m["sender"],
-                "content": m["content"],
-                "sequence_number": m["sequence_number"],
-            }
-            for m in truncated_semantic_messages
-        ],
-        "knowledge_graph_facts": state.get("knowledge_graph_facts", []),
         "domain_context": state.get("domain_context", ""),
         "recent_messages": [
             {
@@ -536,15 +481,6 @@ def ke_route_after_load_window(state: KnowledgeEnrichedRetrievalState) -> str:
 
 def ke_route_after_wait(state: KnowledgeEnrichedRetrievalState) -> str:
     return "ke_load_summaries"
-
-
-def ke_route_after_semantic(state: KnowledgeEnrichedRetrievalState) -> str:
-    # CEA: Dead code — retained only if someone re-enables server-side injection.
-    build_type_config = state.get("build_type_config", {})
-    needs_kg = False  # CEA: deprecated, server-side KG injection removed
-    if needs_kg:
-        return "ke_inject_knowledge_graph"
-    return "ke_assemble_context"
 
 
 def build_knowledge_enriched_retrieval():

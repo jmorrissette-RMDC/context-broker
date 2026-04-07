@@ -205,12 +205,12 @@ class TestKnowledgeEnriched:
             f"Knowledge-enriched returned no content: {list(result.keys())}"
         )
 
-    def test_knowledge_enriched_tiers_include_semantic_or_kg(self, http_client):
-        """Knowledge-enriched tiers should include semantic_messages
-        and/or knowledge_graph_facts.
+    def test_knowledge_enriched_returns_tiers_only(self, http_client):
+        """Knowledge-enriched get_context returns tiers only — no server-side RAG injection.
 
-        Auto-creates a fresh conversation to avoid context window state
-        issues with loaded conversations.
+        CEA: enriched build type no longer injects semantic_messages or
+        knowledge_graph_facts server-side. Enrichment is handled client-side
+        by CEAc. The response should contain standard tiers without enrichment keys.
         """
         resp = mcp_call(
             http_client,
@@ -224,22 +224,19 @@ class TestKnowledgeEnriched:
             f"get_context returned error: {result}"
         )
         tiers = result.get("tiers", {})
-        enrichment_keys = {"semantic_messages", "knowledge_graph_facts"}
-        found = set(tiers.keys()) & enrichment_keys
+        # CEA: server-side enrichment keys should NOT be present
+        server_enrichment_keys = {"semantic_messages", "knowledge_graph_facts"}
+        found = set(tiers.keys()) & server_enrichment_keys
         if not found:
-            # Also check top-level keys
-            found = set(result.keys()) & enrichment_keys
-        if not found:
-            log_issue(
-                "test_knowledge_enriched_tiers_include_semantic_or_kg",
-                "warning",
-                "assembly",
-                "Knowledge-enriched context missing semantic_messages and knowledge_graph_facts",
-                "At least one enrichment key",
-                str(list(tiers.keys())),
-            )
-        # At minimum the result should have some structure
-        assert result.get("tiers") or result.get("messages") or result.get("context")
+            found = set(result.keys()) & server_enrichment_keys
+        assert not found, (
+            f"knowledge-enriched should not inject server-side RAG keys after CEA. "
+            f"Found: {found}. Tiers: {list(tiers.keys())}"
+        )
+        # Result should still have standard tier content
+        assert result.get("tiers") or result.get("messages") or result.get("context"), (
+            f"knowledge-enriched returned no content at all: {list(result.keys())}"
+        )
 
 
 # ---------------------------------------------------------------------------

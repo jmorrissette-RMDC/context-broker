@@ -43,7 +43,9 @@ try:
         "Total facts extracted by CEAs",
         ["relationship"],
     )
-except ImportError:
+except (ImportError, ValueError):
+    # ImportError: prometheus_client not installed
+    # ValueError: duplicate registration on install_stategraph re-import
     CEA_EXTRACTION_EVENTS = None
     CEA_EXTRACTION_DURATION = None
     CEA_FACTS_EXTRACTED = None
@@ -154,12 +156,25 @@ async def run_extraction_llm(state: CEAsExtractionState) -> dict:
 
         current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-        prompt = vector_prompt_template.format(
-            current_date=current_date,
-            existing_facts=existing_facts_text,
-            content=state["content"],
-            tier2_context=state.get("tier2_context", "(none)"),
-            tier3_context=state.get("tier3_context", "(none)"),
+        # The prompt template contains literal { } in JSON examples which
+        # str.format() / format_map() cannot handle safely (EXT-02 pattern).
+        # Use simple str.replace() for each known variable — no format engine.
+        from context_broker_ae.memory_extraction import clean_for_compaction
+
+        prompt = vector_prompt_template
+        prompt = prompt.replace("{current_date}", current_date)
+        prompt = prompt.replace("{existing_facts}", existing_facts_text)
+        prompt = prompt.replace(
+            "{content}",
+            clean_for_compaction(state["content"]) or "(no extractable content)",
+        )
+        prompt = prompt.replace(
+            "{tier2_context}",
+            clean_for_compaction(state.get("tier2_context", "") or "") or "(none)",
+        )
+        prompt = prompt.replace(
+            "{tier3_context}",
+            clean_for_compaction(state.get("tier3_context", "") or "") or "(none)",
         )
 
         llm = get_chat_model(config, role="extraction")

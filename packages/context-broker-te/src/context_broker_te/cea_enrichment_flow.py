@@ -42,7 +42,9 @@ try:
         "Total CEAc feedback events recorded",
         ["event_type"],
     )
-except ImportError:
+except (ImportError, ValueError):
+    # ImportError: prometheus_client not installed
+    # ValueError: duplicate registration on install_stategraph re-import
     CEAC_ENRICHMENT_DURATION = None
     CEAC_SEARCH_COUNT = None
     CEAC_FEEDBACK_EVENTS = None

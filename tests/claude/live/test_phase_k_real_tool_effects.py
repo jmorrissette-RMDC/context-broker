@@ -414,9 +414,12 @@ class TestKnowledgeAddCreatesSearchableMemory:
         )
         assert add_resp.status_code == 200
         add_result = extract_mcp_result(add_resp)
-        assert isinstance(add_result, dict), f"knowledge_add returned unexpected type: {add_result}"
+        assert add_result.get("status") == "added", (
+            f"knowledge_add should return status='added' (CEA format), got: {add_result}"
+        )
 
         # Search for the memory with retries
+        # CEA: knowledge_search returns vector_facts (not memories)
         found = False
         for attempt in range(4):
             time.sleep(3)
@@ -427,11 +430,11 @@ class TestKnowledgeAddCreatesSearchableMemory:
             )
             assert search_resp.status_code == 200
             search_result = extract_mcp_result(search_resp)
-            memories = search_result.get("memories", [])
-            if memories:
-                # Check that at least one memory relates to our fact
+            vector_facts = search_result.get("vector_facts", [])
+            if vector_facts:
+                # Check that at least one fact relates to our content
                 all_text = " ".join(
-                    str(m.get("memory", m.get("content", ""))) for m in memories
+                    str(f.get("memory", f.get("content", ""))) for f in vector_facts
                 ).lower()
                 if "cockroachdb" in all_text or tag in all_text:
                     found = True
@@ -482,47 +485,57 @@ class TestSearchMessagesReturnsRelevant:
 # ===========================================================================
 
 class TestSearchKnowledgeReturnsFacts:
-    """K-15: search_knowledge returns extracted facts or relations."""
+    """K-15: knowledge_search returns extracted facts or relations."""
 
     def test_search_knowledge_returns_facts(self, http_client):
-        """Search knowledge for a broad topic, verify facts or memories returned."""
+        """Search knowledge for a broad topic, verify vector_facts or graph_relations returned.
+
+        CEA: knowledge_search returns vector_facts and graph_relations (not memories).
+        """
         resp = mcp_call(
             http_client,
-            "search_knowledge",
+            "knowledge_search",
             {"query": "software architecture patterns", "user_id": "default"},
         )
         assert resp.status_code == 200
         result = extract_mcp_result(resp)
-        memories = result.get("memories", [])
+        # CEA: response uses vector_facts key
+        assert "vector_facts" in result, (
+            f"knowledge_search missing 'vector_facts' key: {list(result.keys())}"
+        )
+        vector_facts = result.get("vector_facts", [])
+        graph_relations = result.get("graph_relations", [])
 
-        if not memories:
+        if not vector_facts and not graph_relations:
             # Try a different query
             resp2 = mcp_call(
                 http_client,
-                "search_knowledge",
+                "knowledge_search",
                 {"query": "context engineering memory", "user_id": "default"},
             )
             assert resp2.status_code == 200
             result2 = extract_mcp_result(resp2)
-            memories = result2.get("memories", [])
+            vector_facts = result2.get("vector_facts", [])
+            graph_relations = result2.get("graph_relations", [])
 
-        if not memories:
+        if not vector_facts and not graph_relations:
             log_issue(
                 "test_search_knowledge_returns_facts",
                 "warning",
                 "knowledge",
-                "search_knowledge returned no facts for broad queries; "
-                "knowledge extraction may not have completed",
-                "At least 1 memory/fact",
+                "knowledge_search returned no facts for broad queries; "
+                "CEA extraction may not have completed (compaction not yet triggered)",
+                "At least 1 vector_fact or graph_relation",
                 "0 results",
             )
-            assert False, "search_knowledge returned no facts — extraction not working"
+            assert False, "knowledge_search returned no facts — CEA extraction not working"
 
-        # Verify structure: each memory should have content or memory text
-        for mem in memories[:5]:
+        # Verify structure: each fact should have content or memory text
+        for fact in (vector_facts + graph_relations)[:5]:
             has_text = (
-                mem.get("memory") or mem.get("content") or mem.get("text")
+                fact.get("memory") or fact.get("content") or fact.get("text")
+                or fact.get("source") or fact.get("relationship")
             )
             assert has_text, (
-                f"Knowledge memory entry has no text content: {mem}"
+                f"Knowledge fact entry has no text content: {fact}"
             )
