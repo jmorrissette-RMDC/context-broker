@@ -156,12 +156,19 @@ async def run_extraction_llm(state: CEAsExtractionState) -> dict:
 
         current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+        # Clean content before formatting — strips code blocks, JSON, markdown,
+        # and curly braces that would break str.format() (re-fix of EXT-02 pattern).
+        from context_broker_ae.memory_extraction import clean_for_compaction
+        cleaned_content = clean_for_compaction(state["content"])
+        cleaned_tier2 = clean_for_compaction(state.get("tier2_context", "") or "")
+        cleaned_tier3 = clean_for_compaction(state.get("tier3_context", "") or "")
+
         prompt = vector_prompt_template.format(
             current_date=current_date,
             existing_facts=existing_facts_text,
-            content=state["content"],
-            tier2_context=state.get("tier2_context", "(none)"),
-            tier3_context=state.get("tier3_context", "(none)"),
+            content=cleaned_content or "(no extractable content)",
+            tier2_context=cleaned_tier2 or "(none)",
+            tier3_context=cleaned_tier3 or "(none)",
         )
 
         llm = get_chat_model(config, role="extraction")
