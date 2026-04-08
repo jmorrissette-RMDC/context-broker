@@ -10,7 +10,8 @@ set -e
 # ERQ-005 §2.4: umask 000 for world-writable file creation
 umask 000
 
-# Ensure /data/downloads exists (bind mount may not have it)
+# Defense-in-depth: data dirs should exist from git clone (.gitkeep),
+# but guard against edge cases where bind mount has wrong permissions.
 mkdir -p /data/downloads 2>/dev/null || true
 
 CONFIG_FILE="${CONFIG_PATH:-/config/config.yml}"
@@ -93,10 +94,6 @@ for wheel in /app/stategraph-wheels/*.whl; do
         pip install --user --no-deps --no-cache-dir "$wheel"
     fi
 done
-
-# Ensure /data subdirectories exist.
-# /data is a bind mount — may lack write permission depending on host setup.
-mkdir -p /data/downloads 2>/dev/null || true
 
 # Start the application
 exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
