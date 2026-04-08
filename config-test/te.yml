@@ -13,3 +13,11 @@ imperator:
   admin_tools: true
   max_iterations: 15
   temperature: 0.3
+
+# CEAc: client-side enrichment (REQ-CEAC-R06)
+cea:
+  ceac:
+    enabled: true
+    max_iterations: 3
+    max_memories: 50
+    max_token_budget: 8000
