@@ -454,6 +454,10 @@ async def init_context_node(state: ImperatorState) -> dict:
                 _log.info("CEAc enrichment injected (%d chars)", len(enriched))
         except (ImportError, RuntimeError, ValueError, OSError) as exc:
             _log.warning("CEAc enrichment failed (continuing without): %s", exc)
+        except Exception as exc:
+            # Catch LangGraph MultipleSubgraphsError and other unexpected errors.
+            # CEAc is additive — failure should degrade, not crash.
+            _log.warning("CEAc enrichment failed (unexpected, continuing without): %s", exc)
 
     result = {}
 
