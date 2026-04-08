@@ -479,5 +479,9 @@ def build_ceac_enrichment_flow():
     workflow.add_edge("assemble_context", "record_feedback")
     workflow.add_edge("record_feedback", END)
 
-    _compiled_ceac_flow = workflow.compile()
+    # checkpointer=False: CEAc state contains function callables (search_fn,
+    # feedback_fn, etc.) that are not serializable. Disable checkpointing
+    # to prevent msgpack serialization errors when invoked as a subgraph
+    # inside the Imperator flow (which has MemorySaver). (#556)
+    _compiled_ceac_flow = workflow.compile(checkpointer=False)
     return _compiled_ceac_flow
