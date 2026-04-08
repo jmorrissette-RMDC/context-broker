@@ -461,17 +461,32 @@ async def init_context_node(state: ImperatorState) -> dict:
     if user_query and state.get("context_window_id"):
         result["_user_message_stored"] = True
 
-    # Deduplicate: if get_context returned history that ends with the same
-    # user message we're about to send, remove it from history to avoid
-    # the message appearing twice in the prompt. Compare by content match
-    # on the trailing HumanMessage.
+    # Reconcile two history sources: DB history (from get_context) and HTTP
+    # messages (from the client). When DB history is available, it is the
+    # source of truth for prior turns. The HTTP messages may contain the
+    # full client-side conversation (all prior turns + current), which would
+    # duplicate the DB history. Extract only the latest user message from
+    # the HTTP array and let DB history provide the rest.  (#549)
     if history_messages and messages:
-        last_hist = history_messages[-1]
-        last_msg = messages[-1]
-        if (isinstance(last_hist, HumanMessage)
-                and isinstance(last_msg, HumanMessage)
-                and last_hist.content == last_msg.content):
-            history_messages = history_messages[:-1]
+        # Find the last HumanMessage in the HTTP array — that's the current turn.
+        current_user_msg = None
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                current_user_msg = msg
+                break
+        if current_user_msg is not None:
+            messages = [current_user_msg]
+
+        # If get_context already stored the current user message (V2 flow),
+        # it may appear at the end of history_messages. Remove to avoid
+        # the message appearing twice.
+        if messages:
+            last_hist = history_messages[-1] if history_messages else None
+            last_msg = messages[-1]
+            if (isinstance(last_hist, HumanMessage)
+                    and isinstance(last_msg, HumanMessage)
+                    and last_hist.content == last_msg.content):
+                history_messages = history_messages[:-1]
 
     # Assemble: system (static, cached) + history (cached prefix) + current messages
     assembled = [system_msg] + history_messages + messages
@@ -600,7 +615,7 @@ def should_continue(state: ImperatorState) -> str:
     last_message = messages[-1]
     if isinstance(last_message, AIMessage) and last_message.tool_calls:
         max_iterations = get_ctx().get_tuning(
-            state.get("config", {}), "imperator_max_iterations", 5
+            state.get("config", {}), "imperator_max_iterations", 10
         )
         if state.get("iteration_count", 0) >= max_iterations:
             _log.warning(
