@@ -540,6 +540,11 @@ async def llm_call_node(state: ImperatorState) -> dict:
     # Retry on empty response — Gemini occasionally returns valid but empty
     # completions (content="" with no tool_calls). This is never a valid
     # agent response, so retry up to 2 times before accepting it.
+    _log.info(
+        "Imperator LLM call: %d messages, types=%s",
+        len(messages),
+        [type(m).__name__ for m in messages[-5:]],
+    )
     max_retries = 2
     response = None
     for attempt in range(max_retries + 1):
