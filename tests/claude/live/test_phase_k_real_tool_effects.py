@@ -219,6 +219,16 @@ class TestStoreDomainInfoPersists:
 class TestConfigWriteTakesEffect:
     """K-08: config_write changes a setting that config_read can verify."""
 
+    @pytest.fixture(autouse=True)
+    def _restore_config(self):
+        """Restore config after test to prevent corruption."""
+        from tests.claude.live.helpers import _run_on_docker_host, REMOTE_PROJECT_DIR
+        yield
+        _run_on_docker_host(
+            f"cd {REMOTE_PROJECT_DIR} && git checkout HEAD -- config-test/config.yml",
+            timeout=10,
+        )
+
     @pytest.mark.live
     def test_config_write_takes_effect(self, http_client, context_window_id):
         """Set verbose_logging to true, verify via config_read, then restore."""
@@ -262,6 +272,16 @@ class TestConfigWriteTakesEffect:
 
 class TestVerboseToggleChangesConfig:
     """K-09: verbose_toggle flips the verbose_logging config value."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_config(self):
+        """Save config before test, restore after to prevent corruption."""
+        from tests.claude.live.helpers import _run_on_docker_host, REMOTE_PROJECT_DIR
+        yield
+        _run_on_docker_host(
+            f"cd {REMOTE_PROJECT_DIR} && git checkout HEAD -- config-test/config.yml",
+            timeout=10,
+        )
 
     def test_verbose_toggle_changes_config(self, http_client, context_window_id):
         """Toggle verbose logging on and off, verify change via config_read."""
@@ -488,53 +508,50 @@ class TestSearchKnowledgeReturnsFacts:
     """K-15: knowledge_search returns extracted facts or relations."""
 
     def test_search_knowledge_returns_facts(self, http_client):
-        """Search knowledge for a broad topic, verify vector_facts or graph_relations returned.
+        """Search knowledge for a seeded fact, verify vector_facts structure.
 
         CEA: knowledge_search returns vector_facts and graph_relations (not memories).
+        Seeds its own data to avoid dependency on compaction.
         """
-        resp = mcp_call(
-            http_client,
-            "knowledge_search",
-            {"query": "software architecture patterns", "user_id": "default"},
-        )
-        assert resp.status_code == 200
-        result = extract_mcp_result(resp)
-        # CEA: response uses vector_facts key
-        assert "vector_facts" in result, (
-            f"knowledge_search missing 'vector_facts' key: {list(result.keys())}"
-        )
-        vector_facts = result.get("vector_facts", [])
-        graph_relations = result.get("graph_relations", [])
+        tag = uuid.uuid4().hex[:8]
+        user_id = f"k15-test-{tag}"
+        fact_content = f"The preferred deployment target is Kubernetes ({tag})"
 
-        if not vector_facts and not graph_relations:
-            # Try a different query
-            resp2 = mcp_call(
+        # Seed a fact so there's something to search for
+        add_resp = mcp_call(
+            http_client,
+            "knowledge_add",
+            {"content": fact_content, "user_id": user_id},
+        )
+        assert add_resp.status_code == 200
+
+        # Search for the seeded fact
+        found = False
+        for attempt in range(4):
+            time.sleep(3)
+            resp = mcp_call(
                 http_client,
                 "knowledge_search",
-                {"query": "context engineering memory", "user_id": "default"},
+                {"query": "preferred deployment target", "user_id": user_id},
             )
-            assert resp2.status_code == 200
-            result2 = extract_mcp_result(resp2)
-            vector_facts = result2.get("vector_facts", [])
-            graph_relations = result2.get("graph_relations", [])
+            assert resp.status_code == 200
+            result = extract_mcp_result(resp)
+            assert "vector_facts" in result, (
+                f"knowledge_search missing 'vector_facts' key: {list(result.keys())}"
+            )
+            vector_facts = result.get("vector_facts", [])
+            if vector_facts:
+                found = True
+                break
 
-        if not vector_facts and not graph_relations:
-            log_issue(
-                "test_search_knowledge_returns_facts",
-                "warning",
-                "knowledge",
-                "knowledge_search returned no facts for broad queries; "
-                "CEA extraction may not have completed (compaction not yet triggered)",
-                "At least 1 vector_fact or graph_relation",
-                "0 results",
-            )
-            assert False, "knowledge_search returned no facts — CEA extraction not working"
+        assert found, (
+            "knowledge_search returned no vector_facts for seeded data"
+        )
 
         # Verify structure: each fact should have content or memory text
-        for fact in (vector_facts + graph_relations)[:5]:
+        for fact in vector_facts[:5]:
             has_text = (
                 fact.get("memory") or fact.get("content") or fact.get("text")
-                or fact.get("source") or fact.get("relationship")
             )
             assert has_text, (
                 f"Knowledge fact entry has no text content: {fact}"

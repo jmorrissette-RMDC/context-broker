@@ -268,6 +268,32 @@ class TestImperatorKeywords:
 class TestImperatorCoherence:
     """High-level coherence checks on the imperator conversation."""
 
+    @pytest.fixture(autouse=True, scope="class")
+    def _ensure_turns_ran(
+        self, http_client, imperator_turns, conversation_history, turn_responses
+    ):
+        """Ensure turns have been executed before coherence checks."""
+        if not turn_responses:
+            for i, turn in enumerate(imperator_turns):
+                prompt = turn["prompt"]
+                try:
+                    result = chat_call(
+                        http_client, prompt, history=list(conversation_history),
+                        timeout=180,
+                    )
+                    content = result["choices"][0]["message"]["content"]
+                    turn_responses[i] = {
+                        "content": content,
+                        "full_response": result,
+                        "error": None,
+                    }
+                    conversation_history.append({"role": "user", "content": prompt})
+                    conversation_history.append({"role": "assistant", "content": content})
+                except Exception as exc:
+                    turn_responses[i] = {
+                        "content": "", "full_response": None, "error": str(exc),
+                    }
+
     def test_imperator_responds_coherently(
         self, http_client, imperator_turns, conversation_history, turn_responses
     ):

@@ -32,7 +32,10 @@ PHASE3_DIR = TEST_DATA_DIR / "phase3-synthetic"
 # commands are run remotely via SSH. Otherwise they run locally.
 SSH_TARGET = os.environ.get("CLAUDE_TEST_SSH", "aristotle9@192.168.1.110")
 DOCKER_HOST = os.environ.get("CLAUDE_TEST_HOST", "192.168.1.110")
-REMOTE_PROJECT_DIR = "/mnt/storage/projects/Joshua26/state_4_development/context_broker_pmad"
+REMOTE_PROJECT_DIR = os.environ.get(
+    "CLAUDE_TEST_PROJECT_DIR",
+    "/mnt/storage/projects/context-broker",
+)
 
 BASE_PORT = int(os.environ.get("CLAUDE_TEST_PORT", "8081"))
 BASE_URL = f"http://{DOCKER_HOST}:{BASE_PORT}"
