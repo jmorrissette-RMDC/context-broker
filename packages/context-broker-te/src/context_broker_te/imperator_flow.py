@@ -68,6 +68,7 @@ class ImperatorState(TypedDict):
     iteration_count: int
     _user_message_stored: Optional[bool]  # V2: set by agent_node when get_context stores the user msg
     _streaming: Optional[bool]  # Set by streaming route to use streaming-enabled LLM
+    _ceac_context_messages: Optional[list]  # Raw context dicts from get_context, for CEAc enrichment node
 
 
 # ── Core search tools (depend on AE flow singletons) ──────────────────
@@ -392,74 +393,7 @@ async def init_context_node(state: ImperatorState) -> dict:
         except (ValueError, RuntimeError, OSError) as exc:
             _log.warning("Failed to load context via get_context: %s", exc)
 
-    # CEA: Optional CEAc enrichment (REQ-CEA-C01).
-    # If cea.ceac.enabled is true, run the CEAc enrichment subgraph to
-    # search knowledge and inject enriched context into the prompt.
-    cea_config = config.get("cea", {}).get("ceac", {})
-    if cea_config.get("enabled") and context_messages and user_query:
-        try:
-            from context_broker_te.cea_enrichment_flow import build_ceac_enrichment_flow
-
-            # Build tool callables that route through the AE dispatch
-            async def _search_fn(query, user_id=None, limit=10, **kwargs):
-                return await ctx.dispatch_tool(
-                    "knowledge_search",
-                    {"query": query, "user_id": user_id, "limit": limit},
-                    config,
-                    None,
-                )
-
-            async def _feedback_fn(target_type, target_id, event_type, agent_id, context=None, **kwargs):
-                result = await ctx.dispatch_tool(
-                    "knowledge_feedback",
-                    {
-                        "target_type": target_type,
-                        "target_id": target_id,
-                        "event_type": event_type,
-                        "agent_id": agent_id,
-                        "context": context,
-                    },
-                    config,
-                    None,
-                )
-                return result.get("status") == "recorded"
-
-            # Build LLM callable for CEAc query refinement (ERQ-002 §12.3: use ctx, not AE import)
-            async def _llm_fn(prompt, **kwargs):
-                llm = ctx.get_chat_model(config, "imperator")
-                response = await llm.ainvoke([{"role": "user", "content": prompt}])
-                return response.content
-
-            ceac_flow = build_ceac_enrichment_flow()
-            ceac_result = await ceac_flow.ainvoke({
-                "tiers": context_messages,
-                "query": user_query,
-                "user_id": imperator_cfg.get("user_id"),
-                "search_fn": _search_fn,
-                "feedback_fn": _feedback_fn,
-                "llm_fn": _llm_fn,
-                "template_fn": ctx.async_load_prompt,
-                "search_results": [],
-                "search_queries": [],
-                "ranked_results": [],
-                "enriched_context": "",
-                "feedback_events": [],
-                "iteration_count": 0,
-                "config": config,
-            })
-
-            enriched = ceac_result.get("enriched_context", "")
-            if enriched and enriched.strip():
-                history_messages.append(SystemMessage(content=enriched))
-                _log.info("CEAc enrichment injected (%d chars)", len(enriched))
-        except (ImportError, RuntimeError, ValueError, OSError) as exc:
-            _log.warning("CEAc enrichment failed (continuing without): %s", exc)
-        except Exception as exc:
-            # Catch LangGraph MultipleSubgraphsError and other unexpected errors.
-            # CEAc is additive — failure should degrade, not crash.
-            _log.warning("CEAc enrichment failed (unexpected, continuing without): %s", exc)
-
-    result = {}
+    result = {"_ceac_context_messages": context_messages}
 
     # V2: Flag that user message was stored by get_context
     if user_query and state.get("context_window_id"):
@@ -497,6 +431,93 @@ async def init_context_node(state: ImperatorState) -> dict:
 
     result["messages"] = assembled
     return result
+
+
+async def ceac_enrichment_node(state: ImperatorState) -> dict:
+    """CEAc enrichment — separate node to avoid MultipleSubgraphsError (#556).
+
+    Runs the CEAc enrichment subgraph if enabled. Injects enriched context
+    as a SystemMessage before the LLM call. No-op if CEAc is disabled,
+    context is empty, or no user query.
+
+    REQ-CEA-C01: client-side enrichment.
+    ERQ-001 §6.1: failure degrades gracefully, never crashes.
+    """
+    config = state.get("config", {})
+    cea_config = config.get("cea", {}).get("ceac", {})
+    context_messages = state.get("_ceac_context_messages") or []
+
+    # Extract user query from messages (last HumanMessage)
+    user_query = ""
+    for msg in reversed(state.get("messages", [])):
+        if isinstance(msg, HumanMessage):
+            user_query = msg.content
+            break
+
+    if not cea_config.get("enabled") or not context_messages or not user_query:
+        return {}
+
+    ctx = get_ctx()
+    imperator_cfg = config.get("imperator", {})
+
+    try:
+        from context_broker_te.cea_enrichment_flow import build_ceac_enrichment_flow
+
+        async def _search_fn(query, user_id=None, limit=10, **kwargs):
+            return await ctx.dispatch_tool(
+                "knowledge_search",
+                {"query": query, "user_id": user_id, "limit": limit},
+                config,
+                None,
+            )
+
+        async def _feedback_fn(target_type, target_id, event_type, agent_id, context=None, **kwargs):
+            result = await ctx.dispatch_tool(
+                "knowledge_feedback",
+                {
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "event_type": event_type,
+                    "agent_id": agent_id,
+                    "context": context,
+                },
+                config,
+                None,
+            )
+            return result.get("status") == "recorded"
+
+        async def _llm_fn(prompt, **kwargs):
+            llm = ctx.get_chat_model(config, "imperator")
+            response = await llm.ainvoke([{"role": "user", "content": prompt}])
+            return response.content
+
+        ceac_flow = build_ceac_enrichment_flow()
+        ceac_result = await ceac_flow.ainvoke({
+            "tiers": context_messages,
+            "query": user_query,
+            "user_id": imperator_cfg.get("user_id"),
+            "search_fn": _search_fn,
+            "feedback_fn": _feedback_fn,
+            "llm_fn": _llm_fn,
+            "template_fn": ctx.async_load_prompt,
+            "search_results": [],
+            "search_queries": [],
+            "ranked_results": [],
+            "enriched_context": "",
+            "feedback_events": [],
+            "iteration_count": 0,
+            "config": config,
+        })
+
+        enriched = ceac_result.get("enriched_context", "")
+        if enriched and enriched.strip():
+            _log.info("CEAc enrichment injected (%d chars)", len(enriched))
+            # Insert enriched context as SystemMessage before the last HumanMessage
+            return {"messages": [SystemMessage(content=enriched)]}
+    except Exception as exc:
+        _log.warning("CEAc enrichment failed (continuing without): %s", exc)
+
+    return {}
 
 
 async def llm_call_node(state: ImperatorState) -> dict:
@@ -839,6 +860,7 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
     workflow = StateGraph(ImperatorState)
 
     workflow.add_node("init_context_node", init_context_node)
+    workflow.add_node("ceac_enrichment_node", ceac_enrichment_node)
     workflow.add_node("llm_call_node", llm_call_node)
     workflow.add_node("tool_node", tool_node_instance)
     workflow.add_node("max_iterations_fallback", max_iterations_fallback)
@@ -854,7 +876,9 @@ def build_imperator_flow(config: dict | None = None) -> StateGraph:
         },
     )
 
-    workflow.add_edge("init_context_node", "llm_call_node")
+    # #556: CEAc is a separate node to avoid MultipleSubgraphsError
+    workflow.add_edge("init_context_node", "ceac_enrichment_node")
+    workflow.add_edge("ceac_enrichment_node", "llm_call_node")
 
     workflow.add_conditional_edges(
         "llm_call_node",
