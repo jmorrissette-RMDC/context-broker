@@ -54,15 +54,19 @@ RUN chmod +x ./entrypoint.sh
 # REQ-001 §10: Copy and pre-build StateGraph packages as wheels.
 # Built to /app/stategraph-wheels/ (not /app/packages/ which may be volume-mounted).
 # entrypoint.sh installs them at startup via pip install --user --no-deps.
-# mem0-fork is included here because the stock mem0ai lacks the _skip_graph param.
 COPY --chown=${USER_NAME}:${USER_NAME} packages/context-broker-ae/ ./sg-src/context-broker-ae/
 COPY --chown=${USER_NAME}:${USER_NAME} packages/context-broker-te/ ./sg-src/context-broker-te/
-COPY --chown=${USER_NAME}:${USER_NAME} packages/mem0-fork/ ./sg-src/mem0-fork/
 RUN mkdir -p ./stategraph-wheels && \
     pip wheel --no-deps -w ./stategraph-wheels/ ./sg-src/context-broker-ae/ && \
     pip wheel --no-deps -w ./stategraph-wheels/ ./sg-src/context-broker-te/ && \
-    pip wheel --no-deps -w ./stategraph-wheels/ ./sg-src/mem0-fork/ && \
     rm -rf ./sg-src
+
+# Mem0 fork: overlay modified files on top of stock mem0ai (installed via requirements.txt).
+# The fork only modifies mem0/memory/main.py and mem0/memory/graph_memory.py.
+# It cannot be a separate wheel because pip would uninstall stock mem0ai first,
+# losing all other submodules (configs, embeddings, llms, graphs, etc.).
+COPY --chown=${USER_NAME}:${USER_NAME} packages/mem0-fork/mem0/memory/main.py /usr/local/lib/python3.12/site-packages/mem0/memory/main.py
+COPY --chown=${USER_NAME}:${USER_NAME} packages/mem0-fork/mem0/memory/graph_memory.py /usr/local/lib/python3.12/site-packages/mem0/memory/graph_memory.py
 
 EXPOSE 8000
 
