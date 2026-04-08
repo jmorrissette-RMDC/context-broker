@@ -54,6 +54,7 @@ except (ImportError, ValueError):
 SearchFn = Callable[..., Coroutine[Any, Any, dict]]
 FeedbackFn = Callable[..., Coroutine[Any, Any, bool]]
 LlmFn = Callable[..., Coroutine[Any, Any, str]]  # async (prompt) -> response text
+TemplateFn = Callable[[str], Coroutine[Any, Any, str]]  # async (template_name) -> template_string
 
 
 class CEAcEnrichmentState(TypedDict):
@@ -63,6 +64,7 @@ class CEAcEnrichmentState(TypedDict):
     search_fn: SearchFn  # injected: async (query, user_id, limit) -> dict
     feedback_fn: FeedbackFn  # injected: async (target_type, target_id, event_type, agent_id, context) -> bool
     llm_fn: Optional[LlmFn]  # injected: async (prompt) -> response text. For query refinement.
+    template_fn: Optional[TemplateFn]  # injected: async (name) -> template string. For output formatting.
     search_results: list[dict]  # accumulated raw results from all iterations
     search_queries: list[str]  # queries tried so far (for agentic loop)
     ranked_results: list[dict]  # after ranking
@@ -278,18 +280,19 @@ async def execute_search(state: CEAcEnrichmentState) -> dict:
         CEAC_SEARCH_COUNT.inc()
 
     # Accumulate results across iterations (dedup by ID)
-    existing = state.get("search_results", [])
-    existing_ids = {r.get("id") or r.get("relation_id") for r in existing}
+    # ERQ-002 §2.2: copy list — do not mutate state in place
+    accumulated = list(state.get("search_results", []))
+    existing_ids = {r.get("id") or r.get("relation_id") for r in accumulated}
     for r in new_results:
         rid = r.get("id") or r.get("relation_id")
         if rid and rid not in existing_ids:
-            existing.append(r)
+            accumulated.append(r)
             existing_ids.add(rid)
 
     elapsed = time.monotonic() - t0
-    _log.debug("CEAc.execute_search new=%d total=%d (%.2fs)", len(new_results), len(existing), elapsed)
+    _log.debug("CEAc.execute_search new=%d total=%d (%.2fs)", len(new_results), len(accumulated), elapsed)
     return {
-        "search_results": existing,
+        "search_results": accumulated,
         "iteration_count": state.get("iteration_count", 0) + 1,
     }
 
@@ -355,13 +358,18 @@ async def assemble_context(state: CEAcEnrichmentState) -> dict:
     if not rels_text:
         rels_text = "(none)\n"
 
-    # Load template — use fallback if prompt_loader unavailable (TE independence)
-    try:
-        from app.prompt_loader import async_load_prompt
-        template = await async_load_prompt("cea_output")
-        enriched = template.format(vector_facts=facts_text, graph_relations=rels_text)
-    except Exception:
-        enriched = f"## Retrieved Knowledge\n\n### Facts\n{facts_text}\n### Relationships\n{rels_text}"
+    # Load template via injected callable (ERQ-002 §12.3: zero AE imports)
+    _fallback = f"## Retrieved Knowledge\n\n### Facts\n{facts_text}\n### Relationships\n{rels_text}"
+    template_fn = state.get("template_fn")
+    if template_fn:
+        try:
+            template = await template_fn("cea_output")
+            enriched = template.format(vector_facts=facts_text, graph_relations=rels_text)
+        except Exception as exc:
+            _log.warning("CEAc: template_fn failed, using fallback: %s", exc)
+            enriched = _fallback
+    else:
+        enriched = _fallback
 
     # Build feedback events with query context (fix #21)
     query_context = state.get("query", "")
@@ -397,7 +405,9 @@ async def record_feedback(state: CEAcEnrichmentState) -> dict:
         _log.warning("CEAc: no feedback_fn provided — skipping feedback recording")
         return {}
 
-    for event in events:
+    # REQ-CEAC-R01: concurrent dispatch, not sequential loop.
+    # REQ-CEAC-R05: per-event try/except preserves fault isolation.
+    async def _record_one(event):
         try:
             await feedback_fn(
                 target_type=event["target_type"],
@@ -410,6 +420,8 @@ async def record_feedback(state: CEAcEnrichmentState) -> dict:
                 CEAC_FEEDBACK_EVENTS.labels(event_type=event["event_type"]).inc()
         except Exception as exc:
             _log.warning("CEAc: feedback recording failed for %s: %s", event["target_id"], exc)
+
+    await asyncio.gather(*(_record_one(e) for e in events))
 
     _log.debug("CEAc.record_feedback recorded %d events", len(events))
     return {}

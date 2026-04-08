@@ -424,10 +424,9 @@ async def init_context_node(state: ImperatorState) -> dict:
                 )
                 return result.get("status") == "recorded"
 
-            # Build LLM callable for CEAc query refinement using AE's get_chat_model
+            # Build LLM callable for CEAc query refinement (ERQ-002 §12.3: use ctx, not AE import)
             async def _llm_fn(prompt, **kwargs):
-                from app.config import get_chat_model
-                llm = get_chat_model(config, "imperator")
+                llm = ctx.get_chat_model(config, "imperator")
                 response = await llm.ainvoke([{"role": "user", "content": prompt}])
                 return response.content
 
@@ -439,6 +438,7 @@ async def init_context_node(state: ImperatorState) -> dict:
                 "search_fn": _search_fn,
                 "feedback_fn": _feedback_fn,
                 "llm_fn": _llm_fn,
+                "template_fn": ctx.async_load_prompt,
                 "search_results": [],
                 "search_queries": [],
                 "ranked_results": [],
