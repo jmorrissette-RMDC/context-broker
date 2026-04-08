@@ -512,7 +512,10 @@ async def ceac_enrichment_node(state: ImperatorState) -> dict:
         enriched = ceac_result.get("enriched_context", "")
         if enriched and enriched.strip():
             _log.info("CEAc enrichment injected (%d chars)", len(enriched))
-            # Insert enriched context as SystemMessage before the last HumanMessage
+            # Append enriched context as SystemMessage after the user's question.
+            # add_messages reducer appends to end. This places the enrichment
+            # after the user turn — effectively "here is relevant knowledge for
+            # the question just asked." The LLM sees it as context for its reply.
             return {"messages": [SystemMessage(content=enriched)]}
     except Exception as exc:
         _log.warning("CEAc enrichment failed (continuing without): %s", exc)
