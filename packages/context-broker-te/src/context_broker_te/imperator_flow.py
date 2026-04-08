@@ -537,6 +537,38 @@ async def llm_call_node(state: ImperatorState) -> dict:
             cut_index += 1
         messages = [messages[0]] + messages[cut_index:]
 
+    # Sanitize message sequence: remove consecutive HumanMessages (keep last),
+    # consecutive AIMessages (keep last), and SystemMessages after index 0.
+    # Broken sequences cause Gemini to return empty responses. (#549)
+    sanitized = []
+    for i, msg in enumerate(messages):
+        if isinstance(msg, SystemMessage) and i > 0 and sanitized and not isinstance(sanitized[-1], SystemMessage):
+            # Keep system messages that appear in a system block at the start,
+            # but skip ones injected mid-conversation
+            sanitized.append(msg)
+        elif isinstance(msg, SystemMessage) and i == 0:
+            sanitized.append(msg)
+        elif isinstance(msg, HumanMessage):
+            # If last sanitized is also HumanMessage, replace it
+            if sanitized and isinstance(sanitized[-1], HumanMessage):
+                sanitized[-1] = msg
+            else:
+                sanitized.append(msg)
+        elif isinstance(msg, AIMessage):
+            # If last sanitized is also AIMessage, replace it
+            if sanitized and isinstance(sanitized[-1], AIMessage):
+                sanitized[-1] = msg
+            else:
+                sanitized.append(msg)
+        else:
+            sanitized.append(msg)
+    if len(sanitized) != len(messages):
+        _log.info(
+            "Sanitized message sequence: %d → %d messages (removed consecutive duplicates)",
+            len(messages), len(sanitized),
+        )
+    messages = sanitized
+
     # Retry on empty response — Gemini occasionally returns valid but empty
     # completions (content="" with no tool_calls). This is never a valid
     # agent response, so retry up to 2 times before accepting it.
