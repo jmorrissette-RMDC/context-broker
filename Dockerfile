@@ -65,8 +65,8 @@ RUN mkdir -p ./stategraph-wheels && \
 # The fork only modifies mem0/memory/main.py and mem0/memory/graph_memory.py.
 # It cannot be a separate wheel because pip would uninstall stock mem0ai first,
 # losing all other submodules (configs, embeddings, llms, graphs, etc.).
-COPY --chown=${USER_NAME}:${USER_NAME} packages/mem0-fork/mem0/memory/main.py /usr/local/lib/python3.12/site-packages/mem0/memory/main.py
-COPY --chown=${USER_NAME}:${USER_NAME} packages/mem0-fork/mem0/memory/graph_memory.py /usr/local/lib/python3.12/site-packages/mem0/memory/graph_memory.py
+COPY --chown=${USER_NAME}:${USER_NAME} packages/mem0-fork/mem0/memory/main.py /home/${USER_NAME}/.local/lib/python3.12/site-packages/mem0/memory/main.py
+COPY --chown=${USER_NAME}:${USER_NAME} packages/mem0-fork/mem0/memory/graph_memory.py /home/${USER_NAME}/.local/lib/python3.12/site-packages/mem0/memory/graph_memory.py
 
 EXPOSE 8000
 
