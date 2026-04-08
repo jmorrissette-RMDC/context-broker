@@ -7,6 +7,8 @@ assemble_context, record_feedback, _should_iterate, build_ceac_enrichment_flow.
 Discovery audit: cli-discovery-audit-claude.md §3.
 """
 
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -252,3 +254,223 @@ class TestBuildEnrichmentFlow:
 
         flow = build_ceac_enrichment_flow()
         assert flow is not None
+
+
+# ---------------------------------------------------------------------------
+# CEAc refactor tests (#551)
+# ---------------------------------------------------------------------------
+
+
+class TestRecordFeedbackConcurrent:
+    """M1: record_feedback dispatches events concurrently via asyncio.gather."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_dispatch(self):
+        """10 events with 0.1s delay each should complete in ~0.1s, not 1s."""
+        from context_broker_te.cea_enrichment_flow import record_feedback
+
+        call_count = 0
+
+        async def slow_feedback(**kwargs):
+            nonlocal call_count
+            await asyncio.sleep(0.1)
+            call_count += 1
+            return True
+
+        events = [
+            {"target_type": "fact", "target_id": f"id-{i}", "event_type": "used"}
+            for i in range(10)
+        ]
+        state = {"feedback_events": events, "feedback_fn": slow_feedback}
+
+        t0 = time.monotonic()
+        await record_feedback(state)
+        elapsed = time.monotonic() - t0
+
+        assert call_count == 10
+        assert elapsed < 0.5, f"Expected concurrent (~0.1s), got {elapsed:.2f}s (sequential would be ~1s)"
+
+
+class TestRecordFeedbackPartialFailure:
+    """M2: One event failure does not cancel others."""
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_isolates(self):
+        from context_broker_te.cea_enrichment_flow import record_feedback
+
+        call_log = []
+
+        async def failing_feedback(**kwargs):
+            tid = kwargs.get("target_id", "")
+            if tid == "id-2":
+                raise RuntimeError("deliberate failure")
+            call_log.append(tid)
+            return True
+
+        events = [
+            {"target_type": "fact", "target_id": f"id-{i}", "event_type": "used"}
+            for i in range(5)
+        ]
+        state = {"feedback_events": events, "feedback_fn": failing_feedback}
+        await record_feedback(state)
+
+        assert "id-2" not in call_log
+        assert len(call_log) == 4, f"Expected 4 successes, got {call_log}"
+
+
+class TestTemplateFnInjected:
+    """M3: assemble_context uses injected template_fn."""
+
+    @pytest.mark.asyncio
+    async def test_template_fn_called(self):
+        from context_broker_te.cea_enrichment_flow import assemble_context
+
+        template_fn = AsyncMock(return_value="FACTS: {vector_facts}\nRELS: {graph_relations}")
+
+        state = {
+            "ranked_results": [
+                {"memory": "test fact", "_score": 0.9, "id": "f1"},
+            ],
+            "search_results": [
+                {"memory": "test fact", "_score": 0.9, "id": "f1"},
+            ],
+            "query": "test query",
+            "template_fn": template_fn,
+            "config": {"cea": {"ceac": {"max_token_budget": 8000}}},
+        }
+        result = await assemble_context(state)
+
+        template_fn.assert_called_once_with("cea_output")
+        assert "FACTS:" in result["enriched_context"]
+
+
+class TestTemplateFnFallback:
+    """M4: assemble_context uses fallback when template_fn is missing."""
+
+    @pytest.mark.asyncio
+    async def test_no_template_fn_uses_fallback(self):
+        from context_broker_te.cea_enrichment_flow import assemble_context
+
+        state = {
+            "ranked_results": [
+                {"memory": "test fact", "_score": 0.9, "id": "f1"},
+            ],
+            "search_results": [
+                {"memory": "test fact", "_score": 0.9, "id": "f1"},
+            ],
+            "query": "test query",
+            "config": {"cea": {"ceac": {"max_token_budget": 8000}}},
+        }
+        result = await assemble_context(state)
+
+        assert "## Retrieved Knowledge" in result["enriched_context"]
+        assert "Facts" in result["enriched_context"]
+
+    @pytest.mark.asyncio
+    async def test_template_fn_failure_uses_fallback(self):
+        """M4b: template_fn raises — fallback used, no crash."""
+        from context_broker_te.cea_enrichment_flow import assemble_context
+
+        async def broken_template(name):
+            raise IOError("template file missing")
+
+        state = {
+            "ranked_results": [],
+            "search_results": [],
+            "query": "test",
+            "template_fn": broken_template,
+            "config": {"cea": {"ceac": {"max_token_budget": 8000}}},
+        }
+        result = await assemble_context(state)
+        assert "## Retrieved Knowledge" in result["enriched_context"]
+
+
+class TestExecuteSearchDoesNotMutateState:
+    """M5: execute_search returns new list, does not mutate input."""
+
+    @pytest.mark.asyncio
+    async def test_state_list_unchanged(self):
+        from context_broker_te.cea_enrichment_flow import execute_search
+
+        original_results = [{"id": "existing-1", "memory": "old"}]
+        original_copy = list(original_results)
+
+        async def mock_search(query, user_id=None, limit=10, **kw):
+            return {"vector_facts": [{"id": "new-1", "memory": "new"}], "graph_relations": []}
+
+        state = {
+            "query": "test",
+            "user_id": "u1",
+            "search_fn": mock_search,
+            "search_results": original_results,
+            "iteration_count": 0,
+            "config": {"cea": {"ceac": {"max_memories": 50}}},
+        }
+        result = await execute_search(state)
+
+        assert original_results == original_copy, "execute_search mutated the input list"
+        assert len(result["search_results"]) == 2
+
+
+class TestCeacEmptyKnowledgeStore:
+    """M6: CEAc handles zero search results gracefully."""
+
+    @pytest.mark.asyncio
+    async def test_empty_results_no_crash(self):
+        from context_broker_te.cea_enrichment_flow import execute_search, evaluate_and_rank, assemble_context
+
+        async def empty_search(query, user_id=None, limit=10, **kw):
+            return {"vector_facts": [], "graph_relations": []}
+
+        search_state = {
+            "query": "nonexistent topic",
+            "user_id": "u1",
+            "search_fn": empty_search,
+            "search_results": [],
+            "iteration_count": 0,
+            "config": {"cea": {"ceac": {"max_memories": 50}}},
+        }
+        search_result = await execute_search(search_state)
+        assert search_result["search_results"] == []
+
+        rank_state = {
+            "search_results": [],
+            "config": {"cea": {"ceac": {"max_token_budget": 8000}, "ranking": {}}},
+        }
+        rank_result = await evaluate_and_rank(rank_state)
+        assert rank_result["ranked_results"] == []
+
+        assemble_state = {
+            "ranked_results": [],
+            "search_results": [],
+            "query": "test",
+            "config": {"cea": {"ceac": {"max_token_budget": 8000}}},
+        }
+        assemble_result = await assemble_context(assemble_state)
+        assert assemble_result["enriched_context"]  # should have fallback content
+
+
+class TestCeacUserIdPassedToSearch:
+    """M7: search_fn receives user_id from state."""
+
+    @pytest.mark.asyncio
+    async def test_user_id_forwarded(self):
+        from context_broker_te.cea_enrichment_flow import execute_search
+
+        received_user_id = None
+
+        async def capture_search(query, user_id=None, limit=10, **kw):
+            nonlocal received_user_id
+            received_user_id = user_id
+            return {"vector_facts": [], "graph_relations": []}
+
+        state = {
+            "query": "test",
+            "user_id": "specific-user-42",
+            "search_fn": capture_search,
+            "search_results": [],
+            "iteration_count": 0,
+            "config": {"cea": {"ceac": {"max_memories": 50}}},
+        }
+        await execute_search(state)
+        assert received_user_id == "specific-user-42"
