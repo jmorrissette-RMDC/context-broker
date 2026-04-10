@@ -14,8 +14,6 @@ All context-broker development was previously tracked as issues on the `rmdevpro
 | Item | Count |
 |------|-------|
 | Issues migrated | 126 |
-| Closed (history) | 106 |
-| Open (backlog) | 20 |
 | Source repo | `rmdevpro/Joshua26` |
 | Target repo | `jmorrissette-RMDC/context-broker` |
 | New issue range | #1 – #127 |
@@ -54,57 +52,6 @@ The Context Engineering Agent (enrichment variant) is fully functional:
 | `6364e37` | Extract CEAc into separate Imperator graph node |
 | `84758c0` | Fix msgpack serialization (checkpointer=False) |
 | `9b073f1` | Make CEAc live tests robust to conversation state |
-
-***
-
-## Open backlog (27 issues)
-
-### ERQ-002 violations (StateGraph mandate)
-
-| Issue | Summary |
-|-------|---------|
-| #95 | run_full_compaction: two sequential LLM calls in one node |
-| #96 | ret_wait_for_assembly: while polling loop inside a node |
-| #97 | dispatch_extraction_results: for-fact loop with multi-step I/O |
-| #99 | run_extraction_llm: manual JSON parsing instead of with_structured_output |
-| #100 | install_stategraph: entirely procedural, not a StateGraph |
-| #101 | QualityWrapper: substantial logic outside any StateGraph |
-| #104 | cea_extraction_flow.py: cognitive LLM work in AE, belongs in TE |
-
-### ERQ-001 violations (code quality)
-
-| Issue | Summary |
-|-------|---------|
-| #106 | Query refinement prompt hardcoded inline |
-| #107 | Historical header prompt hardcoded inline |
-| #108 | CEA prompts stored in host /config/prompts/ not TE package |
-| #109 | Blanket except Exception in CEA flows |
-| #110 | Blocking shutil calls in async install_stategraph |
-| #111 | install_stategraph accepts package_name without validation |
-| #112 | LLM output parsed with json.loads without Pydantic validation |
-| #113 | compact_tier1 is 215 lines doing 5+ operations |
-| #114 | _summarize_chunk nested function hidden inside compact_tier1 |
-
-### ERQ-003 violations (deployment)
-
-| Issue | Summary |
-|-------|---------|
-| #115 | Dkron autoprompter absent from compose |
-| #116 | Log shipper marked optional but is required |
-| #117 | pgvector:pg16 is unpinned rolling tag |
-| #118 | log-shipper, UI, alerter lack HEALTHCHECK |
-
-### Other open
-
-| Issue | Summary |
-|-------|---------|
-| #1 | README.md missing from repository root |
-| #49 | test_search_knowledge_returns_facts user_id mismatch |
-| #58 | Context Engineering Architecture — implementation (epic) |
-| #59 | Broken backward-compat shim in retrieval_flow.py |
-| #68 | knowledge_feedback schema missing from mcp.py |
-| #81 | Natural-key dedup rejects multiple facts from same utterance |
-| #94 | Missing knowledge_get_context absent check in test |
 
 ***
 
